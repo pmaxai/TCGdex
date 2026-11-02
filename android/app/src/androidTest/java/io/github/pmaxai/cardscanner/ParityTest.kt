@@ -100,6 +100,35 @@ class ParityTest {
     }
 
     @Test
+    fun fastSearchEqualsExhaustiveSearch() {
+        val fast = io.github.pmaxai.cardscanner.vision.Matcher(pack.index, pack.n, pack.dim, pack.entryCard)
+        val full = io.github.pmaxai.cardscanner.vision.Matcher(pack.index, pack.n, pack.dim, pack.entryCard, coarseDim = pack.dim)
+        val rnd = java.util.Random(7)
+        var same = 0
+        val trials = 30
+        var tFast = 0L
+        var tFull = 0L
+        repeat(trials) {
+            // a reference fingerprint plus noise, as four 'readings'
+            val base = rnd.nextInt(pack.n)
+            val readings = List(4) { r ->
+                FloatArray(pack.dim) { d -> pack.index[base * pack.dim + d] + (if (r == 0) 0.6f else 2f) * (rnd.nextGaussian().toFloat() / 22f) }
+                    .let { v -> val norm = kotlin.math.sqrt(v.sumOf { (it * it).toDouble() }).toFloat(); FloatArray(v.size) { v[it] / norm } }
+            }
+            var t0 = System.nanoTime()
+            val a = fast.search(readings)
+            tFast += System.nanoTime() - t0
+            t0 = System.nanoTime()
+            val b = full.search(readings)
+            tFull += System.nanoTime() - t0
+            if (a.map { it.cardId }.take(3) == b.map { it.cardId }.take(3)) same++
+        }
+        Log.i(TAG, "fast search: same top-3 as exhaustive in $same/$trials, %d ms vs %d ms per search"
+            .format(tFast / trials / 1_000_000, tFull / trials / 1_000_000))
+        assertTrue("fast search differs from exhaustive search in ${trials - same}/$trials cases", same >= trials - 1)
+    }
+
+    @Test
     fun realPhotosRecognisedLikePipeline() {
         val items = fixtures.getJSONArray("real")
         val catalog = Catalog(pack.db)
