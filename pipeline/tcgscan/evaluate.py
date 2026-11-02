@@ -220,13 +220,31 @@ def embed_queries(model: Embedder, queries: list[Query]) -> tuple[dict, float]:
     return out, ms
 
 
-def score_view(ref: np.ndarray, qemb: dict, sl, entries: list[Entry], queries: list[Query],
+PCA_DIM = 256      # compressed fingerprint size tested for the phone app
+
+
+def fit_pca(x: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
+    """Mean and projection matrix (D, k) of the top-k principal components."""
+    mu = x.mean(0)
+    _, _, vt = np.linalg.svd(x - mu, full_matrices=False)
+    return mu.astype(np.float32), vt[:k].T.astype(np.float32)
+
+
+def project(x: np.ndarray, pca) -> np.ndarray:
+    if pca is None:
+        return x
+    mu, w = pca
+    y = (x - mu) @ w
+    return y / np.maximum(np.linalg.norm(y, axis=1, keepdims=True), 1e-8)
+
+
+def score_view(ref_t: np.ndarray, qemb: dict, tf, entries: list[Entry], queries: list[Query],
                phash_ref: np.ndarray, names: dict) -> dict:
+    """Score one fingerprint variant. tf turns raw model output into this variant."""
     ids = [e.card_id for e in entries]
-    ref_v = view(ref, sl)
     results: dict[str, list[dict]] = {}
     for mode, (sel, readings) in qemb.items():
-        found = search(ref_v, ids, [view(e, sl) for e in readings]) if sel else []
+        found = search(ref_t, ids, [tf(e) for e in readings]) if sel else []
         by_q = dict(zip(sel, found))
         rows: list[dict] = []
         for i, q in enumerate(queries):
@@ -407,11 +425,18 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, models: list[str], n_queries
             real_readings = [model.embed(x), model.embed(_rot180(x)),
                              model.embed(np.stack([r["art"][0] for r in real])),
                              model.embed(np.stack([r["art"][1] for r in real]))]
+        variants = []
         for vname, sl in model.views.items():
-            label = f"{name}_{vname}" if vname else name
-            res = score_view(ref, qemb, sl, entries, queries, phash_ref, names)
+            base = f"{name}_{vname}" if vname else name
+            variants.append((base, sl, None))
+            if name != "phash" and view(ref[:1], sl).shape[1] > PCA_DIM:
+                variants.append((f"{base}_pca{PCA_DIM}", sl, fit_pca(view(ref, sl), PCA_DIM)))
+        for label, sl, pca in variants:
+            tf = (lambda e, sl=sl, pca=pca: project(view(e, sl), pca))
+            ref_t = tf(ref)
+            res = score_view(ref_t, qemb, tf, entries, queries, phash_ref, names)
             per_query[label] = res
-            s = {"ms_per_img": ms, "dim": int(view(ref[:1], sl).shape[1])}
+            s = {"ms_per_img": ms, "dim": int(ref_t.shape[1])}
             for mode, rows in res.items():
                 s[mode] = {"top1": float(np.mean([r["top1"] for r in rows])),
                            "top5": float(np.mean([r["top5"] for r in rows])),
@@ -423,9 +448,10 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, models: list[str], n_queries
             summary["models"][label] = s
             log.info("[%s] top-1 full pipeline %.1f%%, perfect detection %.1f%%", label,
                      100 * s["detector"]["top1"], 100 * s["oracle"]["top1"])
-            np.save(pack_dir / f"{label}_embeddings.f16.npy", view(ref, sl).astype(np.float16))
+            if pca is None:
+                np.save(pack_dir / f"{label}_embeddings.f16.npy", ref_t.astype(np.float16))
             if real:
-                found = search(view(ref, sl), ids, [view(e, sl) for e in real_readings])
+                found = search(ref_t, ids, [tf(e) for e in real_readings])
                 for r, f in zip(real, found):
                     r["preds"][label] = [{"id": c, "name": entries[j].name, "lang": entries[j].lang,
                                           "score": round(sc, 4), "entry": j, "reading": READINGS[rd]}

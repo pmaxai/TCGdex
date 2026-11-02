@@ -466,7 +466,7 @@ def as_artwork(img_rgb: np.ndarray, quad: np.ndarray, card_size: tuple[int, int]
     out = []
     for src in (land, np.roll(land, 2, axis=0)):
         m = cv2.getPerspectiveTransform(src.astype(np.float32), dst)
-        canvas = cv2.warpPerspective(img_rgb, m, (cw, ch), flags=cv2.INTER_AREA, borderMode=cv2.BORDER_CONSTANT,
+        canvas = cv2.warpPerspective(img_rgb, m, (cw, ch), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
                                      borderValue=(128, 128, 128))
         mask = np.zeros((ch, cw), np.uint8)
         cv2.rectangle(mask, (int(x0 * cw), int(y0 * ch)), (int(x1 * cw) - 1, int(y1 * ch) - 1), 1, -1)

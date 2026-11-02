@@ -37,6 +37,16 @@ def main(argv: list[str] | None = None) -> None:
     d.add_argument("--photos", type=int, default=400)
     d.add_argument("--out", type=Path, default=Path("out/detector-lab.md"))
 
+    x = sub.add_parser("export", help="build the Android app's data pack")
+    x.add_argument("--cache", type=Path, default=Path(".cache/tcgdex"))
+    x.add_argument("--db", type=Path, default=Path("out/catalog.sqlite"))
+    x.add_argument("--emb-cache", type=Path, default=Path(".cache/emb"))
+    x.add_argument("--model", default="mnv3_art")
+    x.add_argument("--pca", type=int, default=256)
+    x.add_argument("--real", type=Path, default=None)
+    x.add_argument("--results", type=Path, default=Path("out/results.json"))
+    x.add_argument("--out", type=Path, default=Path("out/app-pack"))
+
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
 
@@ -47,6 +57,9 @@ def main(argv: list[str] | None = None) -> None:
         fetch_catalog(client, a.db, [x.strip() for x in a.langs.split(",") if x.strip()], a.price_lang,
                       with_details=not a.no_prices, download_images=not a.no_images, max_sets=a.max_sets,
                       exclude_series=tuple(x.strip() for x in a.exclude_series.split(",") if x.strip()))
+    elif a.cmd == "export":
+        from .export import run as export_run
+        export_run(a.db, a.cache, a.emb_cache, a.model, a.out, a.real, a.results, a.pca)
     elif a.cmd == "detector-lab":
         from .lab import run as lab_run
         text = lab_run(a.db, a.cache, a.photos)

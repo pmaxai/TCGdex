@@ -35,7 +35,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write      # publishes the app's data pack as the release 'data-pack'
 
 jobs:
   pipeline:
@@ -59,7 +59,7 @@ jobs:
       - name: Install
         run: |
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install -r pipeline/requirements.txt pytest
+          pip install -r pipeline/requirements.txt pytest onnx onnxruntime
 
       - name: Self-test (offline, invented cards)
         working-directory: pipeline
@@ -107,6 +107,23 @@ jobs:
         with:
           path: .cache/emb
           key: emb-${{ github.run_id }}
+
+      - name: Export the app's data pack
+        working-directory: pipeline
+        run: |
+          python -m tcgscan export --cache ../.cache/tcgdex --db ../out/catalog.sqlite --emb-cache ../.cache/emb \
+            --model mnv3_art --real ../testdata/real --results ../out/results.json --out ../out/app-pack
+
+      # full catalog only; the Android build downloads it from here
+      - name: Publish data pack (release 'data-pack')
+        if: env.MAX_SETS == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view data-pack >/dev/null 2>&1 || gh release create data-pack --latest=false \
+            --title "Data pack for the app" \
+            --notes "Fingerprint model, card index, catalog with Cardmarket prices. Built by the Data pipeline workflow; no card images."
+          gh release upload data-pack out/app-pack/* --clobber
 
       - name: Show report on the run page
         if: always()
