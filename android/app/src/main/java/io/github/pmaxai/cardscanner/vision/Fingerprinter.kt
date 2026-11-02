@@ -32,11 +32,11 @@ class Fingerprinter(modelPath: String, private val size: Int) : Closeable {
             for (b in row) buf.put((b.toInt() and 0xFF).toFloat())
         }
         buf.rewind()
-        OnnxTensor.createTensor(env, buf, longArrayOf(images.size.toLong(), size.toLong(), size.toLong(), 3)).use { t ->
+        val shape = longArrayOf(images.size.toLong(), size.toLong(), size.toLong(), 3)
+        return OnnxTensor.createTensor(env, buf, shape).use { t ->
             session.run(mapOf("image" to t)).use { out ->
                 @Suppress("UNCHECKED_CAST")
-                val v = out[0].value as Array<FloatArray>
-                return v.toList()
+                (out[0].value as Array<FloatArray>).toList()
             }
         }
     }

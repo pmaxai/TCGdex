@@ -80,8 +80,7 @@ class Pack(
             val index = FloatArray(n * dim)
             for (i in index.indices) index[i] = Half.toFloat(halves.get(i))
 
-            @Suppress("UNCHECKED_CAST")
-            return Pack(dir, version, meta, db, index, n, dim, cards as Array<String>, langs as Array<String>)
+            return Pack(dir, version, meta, db, index, n, dim, cards.requireNoNulls(), langs.requireNoNulls())
         }
     }
 }

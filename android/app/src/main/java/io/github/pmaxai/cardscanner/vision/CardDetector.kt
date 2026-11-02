@@ -253,11 +253,7 @@ class CardDetector(
             pts.release(); line.release()
             lines.add(Point(v[2].toDouble(), v[3].toDouble()) to Point((v[2] + v[0]).toDouble(), (v[3] + v[1]).toDouble()))
         }
-        val out = Array(4) { i ->
-            val l1 = lines[(i + 3) % 4]
-            val l2 = lines[i]
-            lineIntersection(l1.first, l1.second, l2.first, l2.second) ?: return q
-        }
+        val out = intersectAll(lines) ?: return q
         for (i in 0 until 4) if (max(abs(out[i].x - q[i].x), abs(out[i].y - q[i].y)) > 0.05 * cardH) return q
         return out
     }
@@ -313,11 +309,7 @@ class CardDetector(
             lines.add(Point(a.x + nx * bestOff, a.y + ny * bestOff) to Point(b.x + nx * bestOff, b.y + ny * bestOff))
         }
         if (found.max() / found.min() > 1.7) return q
-        val out = Array(4) { i ->
-            val l1 = lines[(i + 3) % 4]
-            val l2 = lines[i]
-            lineIntersection(l1.first, l1.second, l2.first, l2.second) ?: return q
-        }
+        val out = intersectAll(lines) ?: return q
         // the band between old and new outline must be one colour (a card border)
         val mask = Mat.zeros(h, w, CvType.CV_8U)
         val po = MatOfPoint(*out.map { Point(it.x.toInt().toDouble(), it.y.toInt().toDouble()) }.toTypedArray())
@@ -439,6 +431,17 @@ class CardDetector(
                 pts.removeAt((bestI + 1) % n)
             }
             return pts.toTypedArray()
+        }
+
+        /** Corners from four side lines: corner i = side i-1 x side i. */
+        fun intersectAll(lines: List<Pair<Point, Point>>): Array<Point>? {
+            val out = ArrayList<Point>(4)
+            for (i in 0 until 4) {
+                val l1 = lines[(i + 3) % 4]
+                val l2 = lines[i]
+                out.add(lineIntersection(l1.first, l1.second, l2.first, l2.second) ?: return null)
+            }
+            return out.toTypedArray()
         }
 
         fun lineIntersection(p1: Point, p2: Point, p3: Point, p4: Point): Point? {
