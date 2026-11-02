@@ -109,6 +109,9 @@ jobs:
 
       - name: PSA 10/9/8 prices (PokemonPriceTracker)
         if: env.PSA == 'true'
+        # optional: never hold up or break the data pack
+        timeout-minutes: 35
+        continue-on-error: true
         working-directory: pipeline
         env:
           POKEMONPRICETRACKER_API_KEY: ${{ secrets.POKEMONPRICETRACKER_API_KEY }}

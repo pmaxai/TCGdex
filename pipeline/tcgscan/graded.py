@@ -159,13 +159,26 @@ class Client:
         self.cache = Path(cache_dir)
         self.cache.mkdir(parents=True, exist_ok=True)
         self.credits_used = 0
+        self.first = True
+        self.started = time.time()
 
     def get(self, path: str, params: dict) -> dict:
         for attempt in range(5):
-            r = self.s.get(f"{API}/{path}", params=params, timeout=120)
+            r = self.s.get(f"{API}/{path}", params=params, timeout=90)
+            if self.first:
+                self.first = False
+                log.info("PokemonPriceTracker rate-limit headers: %s",
+                         {k: v for k, v in r.headers.items() if "limit" in k.lower() or "credit" in k.lower() or "usage" in k.lower()})
             if r.status_code == 429 or r.status_code >= 500:
-                wait = float(r.headers.get("Retry-After", 0) or 0) or 20 * (attempt + 1)
-                log.warning("PokemonPriceTracker %s -> HTTP %d, waiting %.0fs", path, r.status_code, wait)
+                try:
+                    wait = float(r.headers.get("Retry-After", 0) or 0)
+                except ValueError:
+                    wait = 0.0
+                limits = {k: v for k, v in r.headers.items() if "limit" in k.lower() or "credit" in k.lower()}
+                if wait > 120:      # the daily allowance is used up: try again tomorrow
+                    raise RateLimited(f"HTTP {r.status_code}, retry after {wait:.0f}s {limits} {r.text[:150]}")
+                wait = wait or 15 * (attempt + 1)
+                log.warning("PokemonPriceTracker %s -> HTTP %d, waiting %.0fs %s", path, r.status_code, wait, limits)
                 time.sleep(wait)
                 continue
             if r.status_code in (401, 402, 403):
@@ -203,7 +216,8 @@ def fetch(db: Path, cache_dir: Path, budget: int = 18000, max_age_days: float = 
     build_table(db, cache_dir)
 
 
-def _download(db: Path, cache_dir: Path, budget: int, max_age_days: float, key: str, daily_limit: int) -> None:
+def _download(db: Path, cache_dir: Path, budget: int, max_age_days: float, key: str, daily_limit: int,
+              max_minutes: float = 25) -> None:
     spent_today = credits_spent_today(cache_dir)
     budget = min(budget, daily_limit - spent_today)
     if budget <= 0:
@@ -244,6 +258,9 @@ def _download(db: Path, cache_dir: Path, budget: int, max_age_days: float, key: 
         cost = 2 * max(n, 1)
         if spent + cost > budget:
             continue
+        if time.time() - client.started > max_minutes * 60:
+            log.info("PSA prices: %d min time limit reached, the rest follows in the next run", max_minutes)
+            break
         set_param = _first(ps, "name", "setName")
         try:
             resp = client.get("cards", {"set": set_param, "fetchAllInSet": "true", "includeEbay": "true"})
