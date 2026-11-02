@@ -13,7 +13,7 @@ for flea markets.
 2. Open the downloaded file. Android asks once to allow installing from your browser:
    allow it.
 3. Start **Card Scanner** and allow the camera. The first start takes a few seconds
-   while it unpacks the card database (about 50 MB).
+   while it unpacks the card database (about 80 MB).
 
 New builds install over the old one (same signing key), so updating is the same two taps.
 Every data pipeline run with fresh prices also builds a new APK.
@@ -28,26 +28,63 @@ downgrades), or restore the code from the tag.
 
 ## Using it
 
-- **Scan:** hold one card inside the frame. When the same card wins twice in a row
-  with a clear margin, it appears below with:
-  - name, set, number and language
-  - Cardmarket **trend** price, 30-day average and lowest price, plus holo/reverse
-    prices if there are any
-- **Not this card?** The other candidates are listed under it; tap the right one.
+- **Scan:** hold one card inside the frame. A card is shown once it has won a few
+  frames in a row, and the result then stays put: another card only replaces it after
+  it has clearly won several frames. No more flickering between two candidates.
+- **The exact version:** the artwork finds the card; the printed text then decides
+  which one it is:
+  - **language:** the card is shown in the language it is printed in (English, German,
+    French, Spanish, Italian, Portuguese, Japanese). For non-English cards, the English
+    name and set are shown under it.
+  - **set:** the card number (e.g. `059/191`) picks the right set when the same artwork
+    was printed in several sets.
+  - **Other language?** chips let you correct it with one tap.
+- **Printings:** normal, holo, reverse holo and 1st edition each have their own price
+  chip. If a more valuable printing of the card exists, a ⚠ line says so, so you
+  don't miss a reverse holo or 1st edition in a box of commons. Tilting the card
+  slowly helps the experimental foil check (it watches the shine move).
+- **Prices:** Cardmarket trend, 30-day average and lowest price (EUR) for the chosen
+  printing, plus TCGplayer (USD) where Cardmarket has none.
+- **PSA 10 / 9 / 8:** recent eBay sold prices for graded copies (USD), if the data
+  pack has them (see *PSA prices* below). Switch them on or off in ⚙.
+- **Not this card?** The other candidates are listed under it; tap the right one. It
+  then stays pinned (📌) until you tap **Next card**.
 - **Alert:** set a price (e.g. 5 €). The phone vibrates when a card worth at least
-  that appears, so you can sweep through a box and only stop when it buzzes.
-- **Light** turns on the torch.
-- **Photo** recognises a picture from the gallery, handy for testing at home.
-- **Details** shows what the scanner saw: the straightened card, the top 5 matches
-  with scores, and timings.
-- **Offline:** recognition and prices work without a connection. The card thumbnail
-  and the Cardmarket button need the internet.
+  that appears (any printing), so you can sweep through a box and only stop when it
+  buzzes.
+- **YouTube mode** (⚙ → YouTube mode): a clean screen for screen-recorded opening and
+  price-check videos. Portrait or landscape, it follows the phone on the tripod.
+  - big card name and price with a count-up, and a "HIT" burst for cards above your
+    alert price
+  - a session bar with card count, total value and best pull
+  - tap the panel for controls: new pack, remove last card, next card, light, exit
+  - optional title (e.g. your channel name) at the top; no vibration while recording
+- **Light** turns on the torch. **Photo** recognises a picture from the gallery.
+  **Details** (in ⚙) shows what the scanner saw: the straightened card, the top 5
+  matches with scores, the text it read, and timings.
+- **Offline:** recognition, text reading and prices work without a connection. The
+  card thumbnail and the Cardmarket button need the internet.
+
+## PSA prices
+
+PSA prices come from [PokemonPriceTracker](https://www.pokemonpricetracker.com/api)
+(eBay sold listings). The app never calls it; the daily data pipeline downloads the
+prices into the data pack, refreshing each set about once a week.
+
+1. Get an API key there (the $9.99/month plan; the free plan's 100 credits a day are
+   too few).
+2. In this repo: **Settings → Secrets and variables → Actions → New repository
+   secret**, name `POKEMONPRICETRACKER_API_KEY`, value: your key.
+3. Run **Actions → Data pipeline → Run workflow**. The next APK then has PSA prices.
+
+The key stays inside GitHub Actions; it is never printed in logs or put into the app.
+Without the key everything works, just without PSA prices.
 
 ## What the pipeline does
 
 ```
 TCGdex (free card database)                      your photos (testdata/real/)
-  sets, cards (en + de), prices, images                     │
+  sets, cards (7 languages), prices, images                     │
         │                                                   │
         ▼                                                   ▼
   catalog.sqlite ──► fingerprint every card ──► match synthetic + real photos ──► report
