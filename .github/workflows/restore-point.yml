@@ -1,0 +1,48 @@
+name: Restore point
+
+# Freezes the current state as a permanent release: a tag on the code plus copies of
+# the current APK and data pack (those two are overwritten by every new build).
+# Actions -> Restore point -> Run workflow -> give it a name like v0.2.
+
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: "Name, e.g. v0.2 (letters, digits, dots, dashes)"
+        required: true
+      notes:
+        description: "What this version is (optional)"
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  freeze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Freeze code, APK and data pack
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ inputs.name }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          if ! [[ "$NAME" =~ ^[A-Za-z0-9._-]+$ ]]; then echo "invalid name: $NAME"; exit 1; fi
+          if gh release view "$NAME" >/dev/null 2>&1; then echo "restore point $NAME already exists"; exit 1; fi
+          mkdir freeze
+          gh release download app-latest -D freeze -p CardScanner.apk
+          gh release download data-pack -D freeze
+          PACK_VERSION=$(python3 -c "import json; print(json.load(open('freeze/pack.json'))['version'])")
+          {
+            echo "${NOTES:-Restore point.}"
+            echo
+            echo "- Code: commit ${GITHUB_SHA::7} (the 'Source code' downloads below, or this tag)"
+            echo "- App: CardScanner.apk as it was on 'app-latest' at this point"
+            echo "- Data pack: $PACK_VERSION (model.onnx, index.f16, catalog.sqlite, pack.json, parity.zip)"
+            echo
+            echo "To reinstall this APK over a newer one, uninstall the app first (Android blocks downgrades)."
+          } > notes.md
+          gh release create "$NAME" freeze/* --target "$GITHUB_SHA" --title "$NAME" --notes-file notes.md --latest=false
+          gh release view "$NAME"

@@ -18,6 +18,14 @@ for flea markets.
 New builds install over the old one (same signing key), so updating is the same two taps.
 Every data pipeline run with fresh prices also builds a new APK.
 
+## Restore points
+
+Go to **Actions → Restore point → Run workflow** and give it a name like `v0.2`. That
+freezes the code (a git tag), the current APK and the current data pack as a release
+that later builds never touch. They're listed under **Releases**. To go back, either
+install the APK from that release (uninstall the app first, since Android blocks
+downgrades), or restore the code from the tag.
+
 ## Using it
 
 - **Scan:** hold one card inside the frame. When the same card wins twice in a row
