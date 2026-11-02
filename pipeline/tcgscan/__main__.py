@@ -13,7 +13,8 @@ def main(argv: list[str] | None = None) -> None:
     f = sub.add_parser("fetch", help="download the TCGdex catalog, prices and images")
     f.add_argument("--cache", type=Path, default=Path(".cache/tcgdex"))
     f.add_argument("--db", type=Path, default=Path("out/catalog.sqlite"))
-    f.add_argument("--langs", default="en,de", help="comma separated TCGdex language codes")
+    f.add_argument("--langs", default="en,de,fr,es,it,pt,ja", help="comma separated TCGdex language codes")
+    f.add_argument("--image-langs", default="en,de,ja", help="languages whose card images are downloaded")
     f.add_argument("--price-lang", default="en")
     f.add_argument("--no-prices", action="store_true", help="skip per-card details (prices, rarity)")
     f.add_argument("--no-images", action="store_true")
@@ -47,6 +48,12 @@ def main(argv: list[str] | None = None) -> None:
     x.add_argument("--results", type=Path, default=Path("out/results.json"))
     x.add_argument("--out", type=Path, default=Path("out/app-pack"))
 
+    g = sub.add_parser("graded", help="PSA 10/9/8 prices from PokemonPriceTracker (needs POKEMONPRICETRACKER_API_KEY)")
+    g.add_argument("--db", type=Path, default=Path("out/catalog.sqlite"))
+    g.add_argument("--cache", type=Path, default=Path(".cache/graded"))
+    g.add_argument("--budget", type=int, default=18000, help="max credits to spend in this run")
+    g.add_argument("--max-age-days", type=float, default=7)
+
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
 
@@ -56,7 +63,11 @@ def main(argv: list[str] | None = None) -> None:
         client = TCGdexClient(a.cache, workers=a.workers)
         fetch_catalog(client, a.db, [x.strip() for x in a.langs.split(",") if x.strip()], a.price_lang,
                       with_details=not a.no_prices, download_images=not a.no_images, max_sets=a.max_sets,
-                      exclude_series=tuple(x.strip() for x in a.exclude_series.split(",") if x.strip()))
+                      exclude_series=tuple(x.strip() for x in a.exclude_series.split(",") if x.strip()),
+                      image_langs=[x.strip() for x in a.image_langs.split(",") if x.strip()])
+    elif a.cmd == "graded":
+        from .graded import fetch as graded_fetch
+        graded_fetch(a.db, a.cache, a.budget, a.max_age_days)
     elif a.cmd == "export":
         from .export import run as export_run
         export_run(a.db, a.cache, a.emb_cache, a.model, a.out, a.real, a.results, a.pca)

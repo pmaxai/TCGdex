@@ -81,8 +81,12 @@ def pick_sets(set_ids: list[str], max_sets: int) -> list[str]:
 def fetch_catalog(client: TCGdexClient, out_db: Path, langs: list[str], price_lang: str = "en",
                   with_details: bool = True, download_images: bool = True, max_sets: int = 0,
                   list_max_age_h: float = 24, details_max_age_h: float = 20,
-                  exclude_series: tuple[str, ...] = ("tcgp",)) -> list[FetchStats]:
-    """exclude_series: 'tcgp' = Pokémon TCG Pocket, a phone game without physical cards."""
+                  exclude_series: tuple[str, ...] = ("tcgp",),
+                  image_langs: list[str] | None = None) -> list[FetchStats]:
+    """exclude_series: 'tcgp' = Pokémon TCG Pocket, a phone game without physical cards.
+    image_langs: languages whose card images are downloaded (default: all). Western
+    languages share card ids and artwork, so names alone are enough for most of them;
+    Japanese sets have their own ids and need images to be recognised."""
     t0 = time.time()
     stats: list[FetchStats] = []
     sets_rows: list[tuple] = []
@@ -97,7 +101,9 @@ def fetch_catalog(client: TCGdexClient, out_db: Path, langs: list[str], price_la
             chosen = pick_sets(ids, max_sets)
         if max_sets:
             keep = set(chosen)
-            ids = [i for i in ids if i in keep]
+            same = [i for i in ids if i in keep]
+            # languages with their own set ids (Japanese) get their own spread of sets
+            ids = same if same else pick_sets(ids, max_sets)
         details = client.map(lambda sid: client.get_json(lang, "sets", sid, max_age_h=list_max_age_h),
                              ids, f"[{lang}] set details")
         for sid in ids:
@@ -152,10 +158,15 @@ def fetch_catalog(client: TCGdexClient, out_db: Path, langs: list[str], price_la
                 tp_rows.append((cid, tp.get("updated"), tp.get("unit"), json.dumps(tp)))
         log.info("details for %d cards, cardmarket prices for %d, tcgplayer for %d",
                  len(detail_rows), len(cm_rows), len(tp_rows))
+        sample = next((d for d in got.values() if d and d.get("pricing")), None)
+        if sample:
+            log.info("sample card %s: keys=%s variants=%s variants_detailed=%s pricing=%s", sample.get("id"),
+                     sorted(sample), sample.get("variants"), json.dumps(sample.get("variants_detailed"))[:400],
+                     {k: sorted(v) if isinstance(v, dict) else v for k, v in (sample.get("pricing") or {}).items()})
 
     # ---------------------------------------------------------------- images
     if download_images:
-        todo = [i for i, r in enumerate(cards_rows) if r[5]]
+        todo = [i for i, r in enumerate(cards_rows) if r[5] and (image_langs is None or r[0] in image_langs)]
 
         def dl(i: int) -> bool:
             lang, cid, sid, _, _, img, _ = cards_rows[i]

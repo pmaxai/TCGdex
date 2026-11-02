@@ -48,3 +48,47 @@ def test_catalog_and_app_recognition(tmp_path):
 def test_synthetic_detection_photos():
     ph = synthetic_detection_photos(2)
     assert len(ph) == 2 and ph[0][1].ndim == 3
+
+
+def test_artwork_groups_merge_languages_and_named_reprints():
+    from pathlib import Path
+    from tcgscan.catalog import Entry
+    from tcgscan.export import artwork_groups
+    rng = np.random.default_rng(0)
+    a, b, c = (v / np.linalg.norm(v) for v in rng.normal(size=(3, 64)))
+    def near(v, s=0.05):
+        w = v + rng.normal(scale=s, size=v.shape)
+        return w / np.linalg.norm(w)
+    E = lambda cid, lang, name: Entry(cid, lang, cid.split("-")[0], name, "s", Path("x"))
+    entries = [E("s1-1", "en", "Glumanda"), E("s1-1", "de", "Glumanda"),     # same card, two languages
+               E("s2-5", "en", "Glumanda"),                                   # reprint, same art + name
+               E("s3-9", "en", "Other"),                                      # same art, other name: keep apart
+               E("SV1-3", "ja", "ヒトカゲ"),                                    # Japanese print of the same art
+               E("s4-2", "en", "Different")]                                  # different art
+    emb = np.stack([near(a), near(a), near(a), near(a), near(a), c]).astype(np.float32)
+    groups, stats = artwork_groups(entries, emb)
+    assert groups[0] == groups[1] == groups[2] == groups[4] == "s1-1"
+    assert groups[3] == "s3-9" and groups[5] == "s4-2"
+    assert stats["merged_japanese"] == 1 and stats["merged_reprints"] == 1
+
+
+def test_graded_table_matches_by_number(tmp_path):
+    import json, sqlite3
+    from tcgscan import graded
+    db = tmp_path / "c.sqlite"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE cards(lang TEXT, id TEXT, set_id TEXT, local_id TEXT, name TEXT, image_url TEXT, image_file TEXT)")
+    con.executemany("INSERT INTO cards VALUES (?,?,?,?,?,?,?)", [
+        ("en", "sv06-037", "sv06", "037", "Lampent", None, None),
+        ("en", "sv06-130", "sv06", "130", "Dragapult ex", None, None)])
+    con.commit(); con.close()
+    cache = tmp_path / "graded"; cache.mkdir()
+    (cache / "sv06.json").write_text(json.dumps({"set": "Twilight Masquerade", "fetched": 0, "cards": [
+        {"name": "Dragapult ex", "cardNumber": "130/167", "ebay": {"salesByGrade": {
+            "psa10": {"count": 84, "medianPrice": 186.75, "smartMarketPrice": {"price": 362.5, "confidence": "low"}},
+            "psa9": {"count": 60, "medianPrice": 29.97}}}},
+        {"name": "Lampent", "cardNumber": "37", "ebay": {"salesByGrade": {}}}]}))
+    graded.build_table(db, cache)
+    rows = sqlite3.connect(db).execute("SELECT id, psa10, psa10_n, psa9, psa8 FROM graded").fetchall()
+    assert rows == [("sv06-130", 362.5, 84, 29.97, None)]
+    assert graded.norm_number("037/167") == "37" and graded.norm_number("TG05") == "TG5"

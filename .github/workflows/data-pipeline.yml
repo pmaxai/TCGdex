@@ -9,10 +9,13 @@ on:
     inputs:
       langs:
         description: "Card languages (TCGdex codes, comma separated)"
-        default: "en,de"
+        default: "en,de,fr,es,it,pt,ja"
+      image_langs:
+        description: "Languages whose card images are fingerprinted (others share artwork with English)"
+        default: "en,de,ja"
       models:
         description: "Fingerprint models (phash, phash_art, mnv3, mnv3_art, dinov2s, dinov2s_art)"
-        default: "phash,mnv3_art,dinov2s_art"
+        default: "phash,mnv3_art"
       queries:
         description: "Number of synthetic test photos"
         default: "1500"
@@ -23,6 +26,13 @@ on:
         description: "Fetch prices (one request per card, cached for 20 h)"
         type: boolean
         default: true
+      psa:
+        description: "Fetch PSA 10/9/8 prices (PokemonPriceTracker, needs the POKEMONPRICETRACKER_API_KEY secret)"
+        type: boolean
+        default: true
+  # fresh prices every morning (a new APK follows automatically)
+  schedule:
+    - cron: "17 4 * * *"
   # adding your own photos re-runs the test automatically
   push:
     branches: [main]
@@ -42,11 +52,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     env:
-      LANGS: ${{ inputs.langs || 'en,de' }}
-      MODELS: ${{ inputs.models || 'phash,mnv3_art,dinov2s_art' }}
+      LANGS: ${{ inputs.langs || 'en,de,fr,es,it,pt,ja' }}
+      IMAGE_LANGS: ${{ inputs.image_langs || 'en,de,ja' }}
+      MODELS: ${{ inputs.models || 'phash,mnv3_art' }}
       QUERIES: ${{ inputs.queries || '1500' }}
       MAX_SETS: ${{ inputs.max_sets || '0' }}
-      PRICES: ${{ github.event_name == 'push' || inputs.prices }}
+      PRICES: ${{ github.event_name != 'workflow_dispatch' || inputs.prices }}
+      PSA: ${{ github.event_name != 'workflow_dispatch' || inputs.psa }}
     steps:
       - uses: actions/checkout@v5
 
@@ -78,7 +90,7 @@ jobs:
           PRICE_FLAG=""
           if [ "$PRICES" != "true" ]; then PRICE_FLAG="--no-prices"; fi
           python -m tcgscan fetch --cache ../.cache/tcgdex --db ../out/catalog.sqlite \
-            --langs "$LANGS" --max-sets "$MAX_SETS" $PRICE_FLAG
+            --langs "$LANGS" --image-langs "$IMAGE_LANGS" --max-sets "$MAX_SETS" $PRICE_FLAG
 
       - name: Save TCGdex cache
         if: always()
@@ -86,6 +98,28 @@ jobs:
         with:
           path: .cache/tcgdex
           key: tcgdex-${{ github.run_id }}
+
+      - name: Restore PSA price cache
+        if: env.PSA == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/graded
+          key: graded-${{ github.run_id }}
+          restore-keys: graded-
+
+      - name: PSA 10/9/8 prices (PokemonPriceTracker)
+        if: env.PSA == 'true'
+        working-directory: pipeline
+        env:
+          POKEMONPRICETRACKER_API_KEY: ${{ secrets.POKEMONPRICETRACKER_API_KEY }}
+        run: python -m tcgscan graded --db ../out/catalog.sqlite --cache ../.cache/graded --budget 18000
+
+      - name: Save PSA price cache
+        if: always() && env.PSA == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/graded
+          key: graded-${{ github.run_id }}
 
       - name: Restore fingerprint cache
         uses: actions/cache/restore@v4
