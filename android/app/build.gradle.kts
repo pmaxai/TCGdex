@@ -18,9 +18,15 @@ android {
         versionCode = buildNumber
         versionName = "0.1.$buildNumber"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        ndk {
-            // phones (arm64) + the CI emulator (x86_64)
-            abiFilters += listOf("arm64-v8a", "x86_64")
+    }
+
+    // one APK per processor type: arm64 for phones (the download), x86_64 for the CI emulator
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "x86_64")
+            isUniversalApk = false
         }
     }
 
@@ -51,12 +57,16 @@ android {
         compose = true
     }
     androidResources {
-        // big data files are copied out of the APK once; storing them uncompressed is faster
-        noCompress += listOf("onnx", "f16", "sqlite")
+        // model and index hardly compress and are copied out once: store them as they are
+        noCompress += listOf("onnx", "f16")
     }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+        // compressed native libraries: a much smaller download (unpacked once at install)
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 }

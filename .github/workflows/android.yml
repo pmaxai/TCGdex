@@ -18,7 +18,7 @@ on:
 
 concurrency:
   group: android
-  cancel-in-progress: true
+  cancel-in-progress: false   # let a running emulator test finish; the newest push waits
 
 permissions:
   contents: write
@@ -60,7 +60,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp android/app/build/outputs/apk/debug/app-debug.apk CardScanner.apk
+          ls -la android/app/build/outputs/apk/debug/
+          cp android/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk CardScanner.apk
           ls -la CardScanner.apk
           gh release view app-latest >/dev/null 2>&1 || gh release create app-latest --latest \
             --title "Card Scanner app" \
