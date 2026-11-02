@@ -80,7 +80,7 @@ class VersionResolver : AutoCloseable {
         val t = recognise(latin, InputImage.fromBitmap(big, 0), "number strip") ?: return null
         for (line in t.textBlocks.flatMap { it.lines }) {
             val m = NUMBER.find(line.text.replace(" ", "")) ?: continue
-            return m.groupValues[1] to m.groupValues[2]
+            return cleanNumber(m.groupValues[1], m.groupValues[2]) to m.groupValues[2]
         }
         return null
     }
@@ -95,7 +95,7 @@ class VersionResolver : AutoCloseable {
         for (l in lines) {
             val y = l.boundingBox?.centerY() ?: continue
             val m = NUMBER.find(l.text.replace(" ", "")) ?: continue
-            if (y > bestY) { bestY = y; number = m.groupValues[1]; total = m.groupValues[2] }
+            if (y > bestY) { bestY = y; number = cleanNumber(m.groupValues[1], m.groupValues[2]); total = m.groupValues[2] }
         }
         if (number == null) PROMO.find(all.replace(" ", ""))?.let { number = it.value }
         // name bar: the upper 16% of the card
@@ -171,6 +171,16 @@ class VersionResolver : AutoCloseable {
             val m = Regex("""^([A-Za-z]*)0*(\d+)([a-zA-Z]?)$""").find(s?.trim() ?: return "") ?: return s.trim().uppercase()
             return m.groupValues[1].uppercase() + m.groupValues[2] + m.groupValues[3].lowercase()
         }
+
+        /**
+         * The set code is printed right before the number ("TWM 034/167") and runs into it
+         * once spaces are dropped. With a plain-digit total, the number is plain digits too
+         * (letters stay for subsets like TG05/TG30).
+         */
+        fun cleanNumber(number: String, total: String): String =
+            if (total.all { it.isDigit() } && number.any { it.isLetter() }) {
+                Regex("""\d+[a-z]?$""").find(number)?.value ?: number
+            } else number
 
         /** digit pairs text recognition mixes up on small print */
         private val CONFUSABLE = setOf("68", "69", "89", "08", "38", "56", "17", "09", "06", "35", "13", "47", "58")
