@@ -146,7 +146,7 @@ def fetch_catalog(client: TCGdexClient, out_db: Path, langs: list[str], price_la
             hp = d.get("hp")
             detail_rows.append((cid, d.get("rarity"), d.get("category"), d.get("illustrator"),
                                 int(hp) if isinstance(hp, (int, float)) else None, d.get("regulationMark"),
-                                json.dumps(d.get("variants_detailed") or d.get("variants"), ensure_ascii=False),
+                                json.dumps(d.get("variants") or {}, ensure_ascii=False),
                                 d.get("updated")))
             pricing = d.get("pricing") or {}
             cm = pricing.get("cardmarket")

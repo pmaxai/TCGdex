@@ -101,8 +101,8 @@ class ParityTest {
 
     @Test
     fun fastSearchEqualsExhaustiveSearch() {
-        val fast = io.github.pmaxai.cardscanner.vision.Matcher(pack.index, pack.n, pack.dim, pack.entryCard)
-        val full = io.github.pmaxai.cardscanner.vision.Matcher(pack.index, pack.n, pack.dim, pack.entryCard, coarseDim = pack.dim)
+        val fast = io.github.pmaxai.cardscanner.vision.Matcher(pack.index, pack.n, pack.dim, pack.entryGroup)
+        val full = io.github.pmaxai.cardscanner.vision.Matcher(pack.index, pack.n, pack.dim, pack.entryGroup, coarseDim = pack.dim)
         val rnd = java.util.Random(7)
         var same = 0
         val trials = 30
@@ -121,11 +121,48 @@ class ParityTest {
             t0 = System.nanoTime()
             val b = full.search(readings)
             tFull += System.nanoTime() - t0
-            if (a.map { it.cardId }.take(3) == b.map { it.cardId }.take(3)) same++
+            if (a.map { it.group }.take(3) == b.map { it.group }.take(3)) same++
         }
         Log.i(TAG, "fast search: same top-3 as exhaustive in $same/$trials, %d ms vs %d ms per search"
             .format(tFast / trials / 1_000_000, tFull / trials / 1_000_000))
         assertTrue("fast search differs from exhaustive search in ${trials - same}/$trials cases", same >= trials - 1)
+    }
+
+    @Test
+    fun realPhotosLanguageAndNumber() {
+        // what the label of each test photo says; photos added later are only logged
+        val expected = mapOf("Magneton 059-191.jpg" to ("de" to "59"), "Plusle 69-101.jpg" to ("en" to "69"))
+        val items = fixtures.getJSONArray("real")
+        val resolver = io.github.pmaxai.cardscanner.vision.VersionResolver()
+        val lines = ArrayList<String>()
+        var wrong = 0
+        for (i in 0 until items.length()) {
+            val file = items.getJSONObject(i).getString("file")
+            val img = loadAsset("real/$file")
+            val r = recognizer.recognise(img, prior = null)
+            val hit = r.best ?: continue
+            val quad = recognizer.cardQuad(r, hit) ?: continue
+            val card = io.github.pmaxai.cardscanner.vision.Readings.cardForReading(img, quad, upsideDown = false)
+            val rgba = Mat()
+            Imgproc.cvtColor(card, rgba, Imgproc.COLOR_RGB2RGBA)
+            val bmp = Bitmap.createBitmap(card.cols(), card.rows(), Bitmap.Config.ARGB_8888)
+            org.opencv.android.Utils.matToBitmap(rgba, bmp)
+            rgba.release(); card.release(); img.release()
+            val t0 = System.currentTimeMillis()
+            val t = resolver.read(bmp, tryJapanese = true)
+            val ms = System.currentTimeMillis() - t0
+            val num = io.github.pmaxai.cardscanner.vision.VersionResolver.normNumber(t.number)
+            val exp = expected[file]
+            val ok = exp == null || (t.lang == exp.first && num == exp.second)
+            if (!ok) wrong++
+            lines += "$file [${Recognizer.READINGS[hit.reading]}]: number=${t.number}/${t.total} lang=${t.lang} (+%.1f) %dms %s"
+                .format(t.langMargin, ms, if (exp == null) "" else if (ok) "OK" else "EXPECTED ${exp.first} ${exp.second}")
+            lines += "   scores ${t.langScores.entries.sortedByDescending { it.value }.joinToString { "${it.key}=%.1f".format(it.value) }}"
+            lines += "   name bar: ${t.nameText.take(60)} | text: ${t.text.replace("\n", " / ").take(160)}"
+        }
+        resolver.close()
+        lines.forEach { Log.i(TAG, it) }
+        assertTrue("language/number differ:\n" + lines.joinToString("\n"), wrong == 0)
     }
 
     @Test
@@ -142,10 +179,10 @@ class ParityTest {
             img.release()
             val py = it.getJSONArray("top").getJSONObject(0)
             val app = r.best
-            val match = app != null && app.cardId == py.getString("id")
+            val match = app != null && app.group == py.getString("id")
             if (match) same++
-            val name = app?.let { h -> catalog.card(h.cardId, "en")?.name } ?: "-"
-            lines += "${it.getString("file")}: python=${py.getString("id")} %.3f app=${app?.cardId} %s %.3f [%s] %s %s".format(
+            val name = app?.let { h -> catalog.card(h.group, "en")?.name } ?: "-"
+            lines += "${it.getString("file")}: python=${py.getString("id")} %.3f app=${app?.group} %s %.3f [%s] %s %s".format(
                 py.getDouble("score"), name, app?.score ?: 0f, app?.let { h -> Recognizer.READINGS[h.reading] } ?: "-",
                 r.timings.entries.joinToString(" ") { e -> "${e.key}=${e.value}ms" }, if (match) "OK" else "DIFF")
         }

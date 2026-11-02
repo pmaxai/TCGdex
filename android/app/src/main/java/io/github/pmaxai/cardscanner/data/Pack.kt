@@ -24,6 +24,8 @@ class Pack(
     val dim: Int,
     val entryCard: Array<String>,
     val entryLang: Array<String>,
+    /** artwork group of each entry: same picture across languages and reprints */
+    val entryGroup: Array<String>,
 ) {
     val modelPath: String get() = File(dir, "model.onnx").absolutePath
 
@@ -66,11 +68,19 @@ class Pack(
 
             val cards = arrayOfNulls<String>(n)
             val langs = arrayOfNulls<String>(n)
-            db.rawQuery("SELECT idx, card_id, lang FROM entries", null).use { c ->
+            val groups = arrayOfNulls<String>(n)
+            val hasGroups = db.rawQuery("PRAGMA table_info(entries)", null).use { c ->
+                var found = false
+                while (c.moveToNext()) if (c.getString(1) == "grp") found = true
+                found
+            }
+            val sql = if (hasGroups) "SELECT idx, card_id, lang, grp FROM entries" else "SELECT idx, card_id, lang, card_id FROM entries"
+            db.rawQuery(sql, null).use { c ->
                 while (c.moveToNext()) {
                     val i = c.getInt(0)
                     cards[i] = c.getString(1)
                     langs[i] = c.getString(2)
+                    groups[i] = c.getString(3)
                 }
             }
 
@@ -80,7 +90,8 @@ class Pack(
             val index = FloatArray(n * dim)
             for (i in index.indices) index[i] = Half.toFloat(halves.get(i))
 
-            return Pack(dir, version, meta, db, index, n, dim, cards.requireNoNulls(), langs.requireNoNulls())
+            return Pack(dir, version, meta, db, index, n, dim, cards.requireNoNulls(), langs.requireNoNulls(),
+                groups.requireNoNulls())
         }
     }
 }

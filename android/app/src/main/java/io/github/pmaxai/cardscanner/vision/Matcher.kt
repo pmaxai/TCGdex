@@ -5,19 +5,22 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 
-/** One candidate card: best reference image (entry) and which reading of the photo matched it. */
-data class Hit(val cardId: String, val score: Float, val entry: Int, val reading: Int)
+/**
+ * One candidate artwork: its group, the best reference image (entry) and which reading of
+ * the photo matched it. Which exact version (set, language) it is gets decided afterwards.
+ */
+data class Hit(val group: String, val score: Float, val entry: Int, val reading: Int)
 
 /**
  * Nearest neighbours over every reference fingerprint (evaluate.search): the score of a
  * reference is its best cosine over all readings of the photo, and each card counts once
- * (its best reference image, e.g. English or German).
+ * per artwork group (same picture in every language and reprint).
  *
  * Two passes for speed: a rough score from the first [coarseDim] dimensions (PCA orders
  * them by importance) for every reference, then exact scores for the best [shortlist].
  */
 class Matcher(private val index: FloatArray, private val n: Int, private val dim: Int,
-              private val cardOf: Array<String>,
+              private val groupOf: Array<String>,
               private val coarseDim: Int = 128, private val shortlist: Int = 300) {
 
     private val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
@@ -67,9 +70,9 @@ class Matcher(private val index: FloatArray, private val n: Int, private val dim
         val seen = HashSet<String>()
         val out = ArrayList<Hit>()
         for (i in top) {
-            val cid = cardOf[i]
-            if (!seen.add(cid)) continue
-            out.add(Hit(cid, best[i], i, which[i]))
+            val g = groupOf[i]
+            if (!seen.add(g)) continue
+            out.add(Hit(g, best[i], i, which[i]))
             if (out.size > k) break
         }
         return out

@@ -33,7 +33,7 @@ class Recognizer(pack: Pack) : AutoCloseable {
     )
     private val detector = CardDetector()
     private val fingerprinter = Fingerprinter(pack.modelPath, geometry.input)
-    private val matcher = Matcher(pack.index, pack.n, pack.dim, pack.entryCard)
+    private val matcher = Matcher(pack.index, pack.n, pack.dim, pack.entryGroup)
 
     /**
      * @param rgb photo as RGB CV_8UC3
@@ -77,6 +77,17 @@ class Recognizer(pack: Pack) : AutoCloseable {
 
     override fun close() {
         fingerprinter.close()
+    }
+
+    /** The card's corners in its own order (rectify -> upright card), whichever reading won. */
+    fun cardQuad(r: Recognition, hit: Hit): Array<Point>? {
+        val q = r.quad ?: return null
+        return when (hit.reading) {
+            0 -> q
+            1 -> arrayOf(q[2], q[3], q[0], q[1])
+            2 -> Readings.cardQuadFromArtwork(q, false, geometry)
+            else -> Readings.cardQuadFromArtwork(q, true, geometry)
+        }
     }
 
     companion object {

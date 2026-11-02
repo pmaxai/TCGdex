@@ -34,6 +34,7 @@ from .catalog import load_entries
 from .detect import RECT_H, RECT_W, as_artwork, detect_cards, rectify
 from .embedders import CARD_H, CARD_W, INPUT, PREP_VERSION, REGIONS, crop_region, get_embedder, to_card
 from .evaluate import IMG_EXT, READINGS, _labels, _rot180, fit_pca, load_photo, project, ref_embeddings, search
+from .groups import artwork_groups
 from .labels import LabelResolver
 
 log = logging.getLogger(__name__)
@@ -99,16 +100,15 @@ def write_catalog(src_db: Path, dst_db: Path, entries, meta: dict, groups: list[
     con.executescript("""
         CREATE TABLE entries(idx INTEGER PRIMARY KEY, card_id TEXT NOT NULL, lang TEXT NOT NULL, grp TEXT NOT NULL);
         CREATE TABLE cards(id TEXT, lang TEXT, set_id TEXT, local_id TEXT, name TEXT, image_url TEXT,
-                           rarity TEXT, variants TEXT, PRIMARY KEY(id, lang));
+                           PRIMARY KEY(id, lang));
+        CREATE TABLE card_info(id TEXT PRIMARY KEY, rarity TEXT, variants TEXT);
         CREATE TABLE sets(id TEXT, lang TEXT, name TEXT, serie_id TEXT, serie_name TEXT, official INTEGER,
                           total INTEGER, release_date TEXT, PRIMARY KEY(id, lang));
         CREATE TABLE prices(id TEXT PRIMARY KEY, updated TEXT, trend REAL, avg REAL, low REAL, avg1 REAL,
                             avg7 REAL, avg30 REAL, trend_holo REAL, avg_holo REAL, low_holo REAL, avg30_holo REAL);
         CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
-        INSERT INTO cards SELECT c.id, c.lang, c.set_id, c.local_id, c.name, c.image_url, d.rarity, d.variants
-            FROM src.cards c LEFT JOIN src.card_details d ON d.id = c.id;
+        INSERT INTO cards SELECT c.id, c.lang, c.set_id, c.local_id, c.name, c.image_url FROM src.cards c;
         CREATE TABLE tcgplayer(id TEXT PRIMARY KEY, updated TEXT, data TEXT);
-        INSERT INTO tcgplayer SELECT id, updated, data FROM src.prices_tcgplayer;
         CREATE TABLE graded(id TEXT PRIMARY KEY, currency TEXT, updated TEXT, psa10 REAL, psa10_n INTEGER,
                             psa9 REAL, psa9_n INTEGER, psa8 REAL, psa8_n INTEGER, source TEXT);
         INSERT INTO sets(id, lang, name, serie_id, serie_name, official, total, release_date)
@@ -117,6 +117,30 @@ def write_catalog(src_db: Path, dst_db: Path, entries, meta: dict, groups: list[
             avg30_holo FROM src.prices_cardmarket;
         CREATE INDEX cards_id ON cards(id);
     """)
+    # printings as compact flags; TCGplayer reduced to the market price per printing
+    info_rows = []
+    for cid, rarity, variants in con.execute("SELECT id, rarity, variants FROM src.card_details").fetchall():
+        v = json.loads(variants) if variants else {}
+        if isinstance(v, list):    # older catalogs stored the detailed list
+            kinds = {x.get("type") for x in v if isinstance(x, dict)}
+            v = {"normal": "normal" in kinds, "holo": "holo" in kinds, "reverse": "reverse" in kinds,
+                 "firstEdition": any("1st" in str(x.get("subtype", "")) or "first" in str(x.get("subtype", "")).lower()
+                                     for x in v if isinstance(x, dict))}
+        flags = {k: True for k in ("normal", "holo", "reverse", "firstEdition") if v.get(k)}
+        info_rows.append((cid, rarity, json.dumps(flags, separators=(",", ":"))))
+    con.executemany("INSERT OR REPLACE INTO card_info VALUES (?,?,?)", info_rows)
+    tp_rows = []
+    for cid, updated, data in con.execute("SELECT id, updated, data FROM src.prices_tcgplayer").fetchall():
+        d = json.loads(data) if data else {}
+        m = {}
+        for k, v in d.items():
+            if isinstance(v, dict):
+                price = next((v[f] for f in ("marketPrice", "midPrice", "lowPrice") if isinstance(v.get(f), (int, float)) and v[f] > 0), None)
+                if price is not None:
+                    m[k] = round(float(price), 2)
+        if m:
+            tp_rows.append((cid, updated, json.dumps(m, separators=(",", ":"))))
+    con.executemany("INSERT OR REPLACE INTO tcgplayer VALUES (?,?,?)", tp_rows)
     if con.execute("SELECT 1 FROM src.sqlite_master WHERE name = 'graded'").fetchone():
         con.execute("INSERT INTO graded SELECT * FROM src.graded")
     groups = groups or [e.card_id for e in entries]
@@ -128,105 +152,6 @@ def write_catalog(src_db: Path, dst_db: Path, entries, meta: dict, groups: list[
     con.execute("DETACH DATABASE src")
     con.execute("VACUUM")
     con.close()
-
-
-# ---------------------------------------------------------------- artwork groups
-def _norm_name(s: str) -> str:
-    import re
-    import unicodedata
-    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode().lower()
-    return re.sub(r"[^a-z0-9]+", "", s)
-
-
-def artwork_groups(entries, emb: np.ndarray, chunk: int = 1024) -> tuple[list[str], dict]:
-    """One group per artwork: every language and reprint of the same picture.
-
-    The threshold comes from the data: English and German images of the same card
-    have identical artwork, so the 5th percentile of their similarity is what
-    'same picture' looks like. Same-script reprints must also share the name;
-    Japanese <-> other languages are matched by picture alone (names differ).
-    """
-    n = len(entries)
-    parent = list(range(n))
-
-    def find(i):
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-
-    def union(a, b):
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[max(ra, rb)] = min(ra, rb)
-
-    first: dict[str, int] = {}
-    for i, e in enumerate(entries):
-        if e.card_id in first:
-            union(i, first[e.card_id])
-        else:
-            first[e.card_id] = i
-    # calibrate on same card, different language
-    by_id: dict[str, list[int]] = {}
-    for i, e in enumerate(entries):
-        by_id.setdefault(e.card_id, []).append(i)
-    pair_sims = [float(emb[a] @ emb[b]) for ids in by_id.values() if len(ids) > 1 for a, b in [(ids[0], ids[1])]]
-    thr = float(np.percentile(pair_sims, 5)) if pair_sims else 0.92
-    thr = min(max(thr, 0.85), 0.97)
-    names = [_norm_name(e.name) for e in entries]
-    is_ja = np.array([e.lang == "ja" for e in entries])
-    merged_same = merged_cross = 0
-    examples = []
-    latin = np.nonzero(~is_ja)[0]
-    best_latin = np.full(n, -1)
-    best_sim = np.full(n, -1.0, np.float32)
-
-    def note(a, b, v):
-        if len(examples) < 12:
-            examples.append(f"{entries[a].card_id}/{entries[a].lang} {entries[a].name} = "
-                            f"{entries[b].card_id}/{entries[b].lang} {entries[b].name} ({v:.3f})")
-
-    for s in range(0, n, chunk):
-        sim = emb[s:s + chunk] @ emb.T
-        # Japanese prints: remember the single best other-language match (merged below,
-        # one link each, so a Japanese card can never bridge two different cards)
-        for r in np.nonzero(is_ja[s:s + chunk])[0]:
-            if len(latin):
-                j = latin[int(np.argmax(sim[r, latin]))]
-                best_latin[s + r], best_sim[s + r] = j, sim[r, j]
-        ii, jj = np.nonzero(sim >= thr)
-        for a, b in zip(ii + s, jj):
-            if b <= a or entries[a].card_id == entries[b].card_id:
-                continue
-            if is_ja[a] != is_ja[b] or names[a] != names[b]:     # reprints: same script and same name
-                continue
-            if find(a) != find(b):
-                union(a, b)
-                merged_same += 1
-                note(a, b, sim[a - s, b])
-    for a in np.nonzero(is_ja)[0]:
-        b = int(best_latin[a])
-        if b >= 0 and best_sim[a] >= thr and find(a) != find(b):
-            union(a, b)
-            merged_cross += 1
-            note(a, b, best_sim[a])
-    # group name: an English card id if the group has one (the 'English version'), else the smallest id
-    members: dict[int, list[int]] = {}
-    for i in range(n):
-        members.setdefault(find(i), []).append(i)
-    name_of = {}
-    for root, idx in members.items():
-        en = sorted(entries[i].card_id for i in idx if entries[i].lang == "en")
-        name_of[root] = en[0] if en else sorted(entries[i].card_id for i in idx)[0]
-    groups = [name_of[find(i)] for i in range(n)]
-    sizes = np.bincount(np.unique(groups, return_inverse=True)[1])
-    stats = {"threshold": round(thr, 4), "same_card_pairs": len(pair_sims),
-             "merged_reprints": merged_same, "merged_japanese": merged_cross,
-             "groups": int(len(sizes)), "largest_group": int(sizes.max()) if len(sizes) else 0}
-    log.info("artwork groups: %s", stats)
-    for ex in examples:
-        log.info("  same artwork: %s", ex)
-    return groups, stats
 
 
 # ---------------------------------------------------------------- parity fixtures

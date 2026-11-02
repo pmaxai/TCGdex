@@ -30,6 +30,8 @@ def test_catalog_and_app_recognition(tmp_path):
     con = sqlite3.connect(tmp_path / "app.sqlite")
     assert con.execute("SELECT COUNT(*) FROM entries").fetchone()[0] == len(entries)
     assert con.execute("SELECT COUNT(*) FROM prices WHERE trend = 0.4").fetchone()[0] == 60
+    assert con.execute("SELECT variants FROM card_info LIMIT 1").fetchone()[0] == '{"normal":true,"reverse":true}'
+    assert con.execute("SELECT data FROM tcgplayer LIMIT 1").fetchone()[0] == '{"normal":0.3}'
     sid, lang = con.execute("SELECT id, lang FROM sets LIMIT 1").fetchone()
     assert sid.startswith("fs") and lang in ("en", "de")
     row = con.execute("""SELECT c.name, s.name, p.trend FROM entries e JOIN cards c ON c.id = e.card_id AND c.lang = e.lang

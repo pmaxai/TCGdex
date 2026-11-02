@@ -16,7 +16,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = buildNumber
-        versionName = "0.1.$buildNumber"
+        versionName = "0.2.$buildNumber"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -94,6 +94,9 @@ dependencies {
     implementation("org.opencv:opencv:4.10.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
+    // on-device text recognition (offline): card number and language
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
 
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

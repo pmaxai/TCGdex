@@ -80,6 +80,43 @@ object Readings {
         return out[0] to out[1]
     }
 
+    /**
+     * The whole card's corners when [quad] is its artwork box (the inverse of [asArtwork]).
+     * Returned in the card's own order (tl, tr, br, bl of the upright card), so
+     * [rectify] gives an upright card. Used to read the card's text.
+     */
+    fun cardQuadFromArtwork(quad: Array<Point>, upsideDown: Boolean, g: Geometry): Array<Point> {
+        val q = CardDetector.orderQuad(quad)
+        val land = arrayOf(q[3], q[0], q[1], q[2])
+        val src = if (upsideDown) arrayOf(land[2], land[3], land[0], land[1]) else land
+        val cw = g.cardW.toDouble()
+        val ch = g.cardH.toDouble()
+        val (x0, y0, x1, y1) = g.artBox.toList()
+        val dst = MatOfPoint2f(
+            Point(x0 * cw, y0 * ch), Point(x1 * cw - 1, y0 * ch), Point(x1 * cw - 1, y1 * ch - 1), Point(x0 * cw, y1 * ch - 1)
+        )
+        val s = MatOfPoint2f(*src)
+        val h = Imgproc.getPerspectiveTransform(dst, s)            // card coordinates -> photo
+        // a little margin: the artwork box position varies between card eras
+        val m = 0.03
+        val corners = MatOfPoint2f(Point(-m * cw, -m * ch), Point((1 + m) * cw, -m * ch),
+            Point((1 + m) * cw, (1 + m) * ch), Point(-m * cw, (1 + m) * ch))
+        val out = MatOfPoint2f()
+        Core.perspectiveTransform(corners, out, h)
+        val r = out.toArray()
+        listOf(dst, s, h, corners, out).forEach { it.release() }
+        return r
+    }
+
+    /** Upright card at a size good for reading its small print (set number). */
+    fun cardForReading(rgb: Mat, quad: Array<Point>, upsideDown: Boolean): Mat {
+        val r = rectify(rgb, quad, 720, 1006)
+        if (!upsideDown) return r
+        val u = rot180(r)
+        r.release()
+        return u
+    }
+
     /** The model's input: the artwork rectangle of a card image, resized (embedders.crop_region). */
     fun artInput(card: Mat, g: Geometry): Mat {
         val sub = card.submat(Rect(g.artX, g.artY, g.artW, g.artH))

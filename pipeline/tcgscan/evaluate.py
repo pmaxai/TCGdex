@@ -186,13 +186,13 @@ def make_queries(entries: list[Entry], n: int, seed: int, debug_dir: Path | None
 
 # =================================================================== scoring
 def _classify(truth: Entry, pred_entry: Entry, top_ids: list[str], phash_ref: np.ndarray, ti: int, pj: int,
-              names: dict[tuple[str, str], str]) -> str:
+              names: dict[tuple[str, str], str], want: str | None = None) -> str:
     if float(phash_ref[ti] @ phash_ref[pj]) >= 0.8:
         return "near_identical_reprint"
     truth_name = names.get((truth.card_id, pred_entry.lang), truth.name)
     if pred_entry.name.strip().lower() == truth_name.strip().lower():
         return "same_name_other_art"
-    return "in_top5" if truth.card_id in top_ids else "different_card"
+    return "in_top5" if (want or truth.card_id) in top_ids else "different_card"
 
 
 def embed_queries(model: Embedder, queries: list[Query]) -> tuple[dict, float]:
@@ -239,9 +239,10 @@ def project(x: np.ndarray, pca) -> np.ndarray:
 
 
 def score_view(ref_t: np.ndarray, qemb: dict, tf, entries: list[Entry], queries: list[Query],
-               phash_ref: np.ndarray, names: dict) -> dict:
-    """Score one fingerprint variant. tf turns raw model output into this variant."""
-    ids = [e.card_id for e in entries]
+               phash_ref: np.ndarray, names: dict, ids: list[str] | None = None) -> dict:
+    """Score one fingerprint variant. tf turns raw model output into this variant.
+    ids: what counts as 'the same card' per reference (artwork groups, like the app)."""
+    ids = ids or [e.card_id for e in entries]
     results: dict[str, list[dict]] = {}
     for mode, (sel, readings) in qemb.items():
         found = search(ref_t, ids, [tf(e) for e in readings]) if sel else []
@@ -249,7 +250,8 @@ def score_view(ref_t: np.ndarray, qemb: dict, tf, entries: list[Entry], queries:
         rows: list[dict] = []
         for i, q in enumerate(queries):
             truth = entries[q.entry]
-            row = {"q": i, "truth": truth.card_id, "lang": truth.lang, "serie": truth.serie_id, "tags": q.tags}
+            want = ids[q.entry]
+            row = {"q": i, "truth": want, "lang": truth.lang, "serie": truth.serie_id, "tags": q.tags}
             res = by_q.get(i)
             if not res:
                 row.update(pred=None, score=0.0, margin=0.0, top1=False, top5=False, err="no_detection")
@@ -257,11 +259,11 @@ def score_view(ref_t: np.ndarray, qemb: dict, tf, entries: list[Entry], queries:
                 top_ids = [c for c, _, _, _ in res[:5]]
                 pred, score, pj, reading = res[0]
                 margin = score - (res[1][1] if len(res) > 1 else 0.0)
-                ok = pred == truth.card_id
+                ok = pred == want
                 row.update(pred=pred, pred_entry=pj, reading=READINGS[reading], score=round(score, 4),
                            margin=round(margin, 4), top1=ok,
-                           top5=truth.card_id in top_ids,
-                           err=None if ok else _classify(truth, entries[pj], top_ids, phash_ref, q.entry, pj, names))
+                           top5=want in top_ids,
+                           err=None if ok else _classify(truth, entries[pj], top_ids, phash_ref, q.entry, pj, names, want))
             rows.append(row)
         results[mode] = rows
     return results
@@ -383,6 +385,15 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, models: list[str], n_queries
     phash = get_embedder("phash")
     phash_ref = ref_embeddings(phash, entries, emb_cache)
 
+    groups = list(ids)
+    primary = next((m for m in models if m != "phash"), None)
+    if primary:
+        from .groups import artwork_groups
+        pm = get_embedder(primary)
+        groups, gstats = artwork_groups(entries, ref_embeddings(pm, entries, emb_cache))
+        del pm
+    summary_groups = {"model": primary, "groups": len(set(groups))}
+
     queries = make_queries(entries, n_queries, seed, debug_dir)
 
     real = []
@@ -401,12 +412,14 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, models: list[str], n_queries
             lab = resolver.resolve(text)
             if text and lab.problem:
                 log.warning("label of %s (%r): %s", fname, text, lab.problem)
-            real.append({"file": fname, "label": text, "truth": lab.ids or None, "label_problem": lab.problem if text else None,
+            truth_groups = sorted({g for g, e in zip(groups, entries) if lab.ids and e.card_id in lab.ids}) or None
+            real.append({"file": fname, "label": text, "truth": truth_groups, "label_problem": lab.problem if text else None,
                          "detected": bool(dets), "img": img, "quad": quad,
                          "crop": crop, "input": to_card(crop), "art": art, "preds": {}})
         log.info("%d real photos", len(real))
 
     summary = {"models": {}, "n_queries": len(queries), "n_refs": len(entries), "n_cards": len(set(ids)),
+               "artwork_groups": summary_groups,
                "refs_by_lang": dict(by_lang),
                "detection": detection_stats(queries)}
     per_query: dict[str, dict] = {}
@@ -435,7 +448,7 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, models: list[str], n_queries
         for label, sl, pca in variants:
             tf = (lambda e, sl=sl, pca=pca: project(view(e, sl), pca))
             ref_t = tf(ref)
-            res = score_view(ref_t, qemb, tf, entries, queries, phash_ref, names)
+            res = score_view(ref_t, qemb, tf, entries, queries, phash_ref, names, groups)
             per_query[label] = res
             s = {"ms_per_img": ms, "dim": int(ref_t.shape[1])}
             for mode, rows in res.items():
@@ -452,7 +465,7 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, models: list[str], n_queries
             if pca is None:
                 np.save(pack_dir / f"{label}_embeddings.f16.npy", ref_t.astype(np.float16))
             if real:
-                found = search(ref_t, ids, [tf(e) for e in real_readings])
+                found = search(ref_t, groups, [tf(e) for e in real_readings])
                 for r, f in zip(real, found):
                     r["preds"][label] = [{"id": c, "name": entries[j].name, "lang": entries[j].lang,
                                           "score": round(sc, 4), "entry": j, "reading": READINGS[rd]}

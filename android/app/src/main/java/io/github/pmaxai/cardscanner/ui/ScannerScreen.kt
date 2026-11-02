@@ -1,7 +1,9 @@
 package io.github.pmaxai.cardscanner.ui
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.util.Size
@@ -17,9 +19,9 @@ import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -32,7 +34,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -44,7 +45,9 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -59,14 +62,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size as GSize
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.ClipOp
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
-import androidx.compose.foundation.Canvas
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -75,6 +78,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -82,17 +88,21 @@ import coil.compose.AsyncImage
 import io.github.pmaxai.cardscanner.camera.FrameAnalyzer
 import io.github.pmaxai.cardscanner.camera.loadPhoto
 import io.github.pmaxai.cardscanner.data.CardInfo
+import io.github.pmaxai.cardscanner.data.Graded
+import io.github.pmaxai.cardscanner.data.Printing
+import io.github.pmaxai.cardscanner.vision.FoilEstimate
 import io.github.pmaxai.cardscanner.vision.Readings
 import java.net.URLEncoder
 import java.util.Locale
 import java.util.concurrent.Executors
 
-private val Gold = Color(0xFFF2C14E)
-private val Sure = Color(0xFF4CD07D)
-private val Likely = Color(0xFFF2C14E)
-private val Ink = Color(0xFF101114)
-private val Panel = Color(0xFF1A1C21)
-private val Muted = Color(0xFF9AA0AA)
+val Gold = Color(0xFFF2C14E)
+val Sure = Color(0xFF4CD07D)
+val Likely = Color(0xFFF2C14E)
+val Ink = Color(0xFF101114)
+val Panel = Color(0xFF1A1C21)
+val Muted = Color(0xFF9AA0AA)
+val Warn = Color(0xFFFF8A3D)
 
 @Composable
 fun CardScannerTheme(content: @Composable () -> Unit) {
@@ -103,6 +113,10 @@ fun CardScannerTheme(content: @Composable () -> Unit) {
 }
 
 fun eur(v: Double?): String = v?.let { String.format(Locale.getDefault(), "%.2f €", it) } ?: "–"
+fun usd(v: Double?): String = v?.let { if (it >= 100) String.format(Locale.US, "$%.0f", it) else String.format(Locale.US, "$%.2f", it) } ?: "–"
+
+val LANG_NAMES = mapOf("en" to "English", "de" to "Deutsch", "fr" to "Français", "es" to "Español",
+    "it" to "Italiano", "pt" to "Português", "ja" to "日本語")
 
 @Composable
 fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
@@ -114,12 +128,28 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
     LaunchedEffect(Unit) { if (!granted) ask.launch(Manifest.permission.CAMERA) }
     val state by vm.state.collectAsStateWithLifecycle()
 
+    // YouTube mode: follow the phone's orientation (tripod), hide the system bars
+    val activity = ctx as? Activity
+    LaunchedEffect(state.settings.youtube) {
+        activity ?: return@LaunchedEffect
+        activity.requestedOrientation = if (state.settings.youtube) ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+                                        else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        val c = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+        if (state.settings.youtube) {
+            c.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            c.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            c.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
     Surface(Modifier.fillMaxSize(), color = Ink) {
         when {
             !openCvReady -> Message("OpenCV could not be loaded on this phone.")
             state.error != null -> Message("Could not start: ${state.error}")
             state.loading -> Loading(state.loadingText)
             !granted -> Message("The scanner needs the camera.") { Button({ ask.launch(Manifest.permission.CAMERA) }) { Text("Allow camera") } }
+            state.settings.youtube -> YouTubeScreen(state, vm)
             else -> Scanner(state, vm)
         }
     }
@@ -131,7 +161,7 @@ private fun Loading(text: String) = Box(Modifier.fillMaxSize(), contentAlignment
         CircularProgressIndicator(color = Gold)
         Spacer(Modifier.height(16.dp))
         Text(text, color = Muted)
-        Text("(first start only: unpacking ~50 MB)", color = Muted, fontSize = 12.sp)
+        Text("(first start only: unpacking the card database)", color = Muted, fontSize = 12.sp)
     }
 }
 
@@ -149,138 +179,188 @@ private fun Message(text: String, action: @Composable () -> Unit = {}) =
 private fun Scanner(state: UiState, vm: ScannerViewModel) {
     val ctx = LocalContext.current
     var torch by remember { mutableStateOf(false) }
-    var editThreshold by remember { mutableStateOf(false) }
+    var settings by remember { mutableStateOf(false) }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri: Uri? ->
         if (uri != null) loadPhoto(ctx.contentResolver, uri)?.let { vm.onPhoto(it) }
     }
 
     Column(Modifier.fillMaxSize()) {
-        // ---------------------------------------------------------------- top bar
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Card Scanner", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp,
                 modifier = Modifier.padding(start = 8.dp).weight(1f))
-            AssistChip(onClick = { editThreshold = true }, label = {
-                Text(if (state.threshold > 0) "Alert ≥ ${state.threshold.toInt()} €" else "Alert off")
+            AssistChip(onClick = { settings = true }, label = {
+                Text(if (state.settings.threshold > 0) "Alert ≥ ${state.settings.threshold.toInt()} €" else "Alert off")
             })
-            TextButton({ torch = !torch }) { Text(if (torch) "Light on" else "Light", color = if (torch) Gold else Color.White) }
+            TextButton({ torch = !torch }) { Text("Light", color = if (torch) Gold else Color.White) }
             TextButton({ pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
                 Text("Photo", color = Color.White)
             }
+            TextButton({ settings = true }) { Text("⚙", color = Color.White, fontSize = 20.sp) }
         }
 
-        // ---------------------------------------------------------------- camera + guide
         Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f).background(Color.Black)) {
             CameraPreview(onFrame = vm::onFrame, torch = torch, modifier = Modifier.fillMaxSize())
-            GuideOverlay(state, Modifier.fillMaxSize())
+            GuideOverlay(state, Modifier.fillMaxSize(), dim = true)
             if (state.paused) {
                 Box(Modifier.fillMaxSize().background(Color(0xAA000000)).clickable { vm.resume() },
                     contentAlignment = Alignment.Center) {
                     Text("Tap to scan again", color = Color.White, fontSize = 18.sp)
                 }
             } else {
-                Text(
-                    when (state.liveConfidence) {
-                        Confidence.SURE -> "Got it"
-                        Confidence.LIKELY -> "Probably…"
-                        else -> "Fit the card into the frame"
-                    },
-                    color = Color.White, fontSize = 14.sp,
+                val hint = when {
+                    state.shown?.locked == true -> "Kept – tap “Next card” for the next one"
+                    state.liveConfidence == Confidence.SURE -> "Got it"
+                    state.liveConfidence == Confidence.LIKELY -> "Probably…"
+                    else -> "Fit the card into the frame"
+                }
+                Text(hint, color = Color.White, fontSize = 14.sp,
                     modifier = Modifier.align(Alignment.BottomCenter).padding(10.dp)
-                        .background(Color(0x88000000), RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 4.dp),
-                )
+                        .background(Color(0x88000000), RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 4.dp))
             }
         }
 
-        // ---------------------------------------------------------------- result
         Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(12.dp)) {
-            val r = state.result
-            if (r?.best == null) {
+            val s = state.shown
+            if (s == null) {
                 Text("Hold a card inside the frame. Its name and Cardmarket price appear here; " +
-                        "the phone vibrates when a card is worth at least your alert price.", color = Muted)
+                        "the phone vibrates when any printing of it is worth at least your alert price.", color = Muted)
             } else {
-                ResultCard(r, onPick = vm::choose)
+                ResultCard(s, state.settings, vm)
             }
-            if (state.showDebug || r?.fromPhoto == true) state.debug?.let { DebugPanel(it) }
+            if (state.settings.showDebug || s?.fromPhoto == true) state.debug?.let { DebugPanel(it) }
             Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(state.packInfo, color = Muted, fontSize = 11.sp, modifier = Modifier.weight(1f))
-                TextButton(vm::toggleDebug) { Text(if (state.showDebug) "Hide details" else "Details", fontSize = 12.sp) }
-            }
+            Text(state.packInfo, color = Muted, fontSize = 11.sp)
         }
     }
-
-    if (editThreshold) ThresholdDialog(state.threshold, onDone = { v -> v?.let(vm::setThreshold); editThreshold = false })
+    if (settings) SettingsDialog(state, vm) { settings = false }
 }
 
 @Composable
-private fun ResultCard(r: ScanResult, onPick: (Candidate) -> Unit) {
+private fun ResultCard(s: Shown, settings: Settings, vm: ScannerViewModel) {
     val ctx = LocalContext.current
-    val c = r.best!!.info
+    val c = s.version
     Row {
-        AsyncImage(
-            model = c.thumbnailUrl, contentDescription = c.name,
-            modifier = Modifier.width(86.dp).aspectRatio(63f / 88f).background(Panel, RoundedCornerShape(6.dp)),
-        )
+        AsyncImage(model = c.thumbnailUrl ?: s.priceCard.thumbnailUrl, contentDescription = c.name,
+            modifier = Modifier.width(86.dp).aspectRatio(63f / 88f).background(Panel, RoundedCornerShape(6.dp)))
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(c.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 2,
-                overflow = TextOverflow.Ellipsis)
+            Text(c.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text("${c.setName} · ${c.numberText} · ${c.lang.uppercase()}", color = Muted, fontSize = 13.sp)
+            s.english?.let { e -> Text("English: ${e.name} · ${e.setName} ${e.numberText}", color = Color.White, fontSize = 13.sp) }
             c.rarity?.let { Text(it, color = Muted, fontSize = 12.sp) }
-            Spacer(Modifier.height(6.dp))
-            val color = when (r.confidence) { Confidence.SURE -> Sure; Confidence.LIKELY -> Likely; else -> Muted }
-            Text(
-                when (r.confidence) {
-                    Confidence.SURE -> "✓ sure match"
-                    Confidence.LIKELY -> "likely – check the alternatives"
-                    else -> "unsure – check the alternatives"
-                }, color = color, fontSize = 12.sp,
-            )
+            Spacer(Modifier.height(4.dp))
+            val (txt, col) = when {
+                s.locked -> "📌 kept" to Gold
+                s.confidence == Confidence.SURE -> "✓ sure match" to Sure
+                s.confidence == Confidence.LIKELY -> "likely – check the alternatives" to Likely
+                else -> "unsure – check the alternatives" to Muted
+            }
+            Text(txt, color = col, fontSize = 12.sp)
         }
     }
-    Spacer(Modifier.height(10.dp))
-    PriceBlock(c)
-    Spacer(Modifier.height(8.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton({
-            val q = URLEncoder.encode(c.name, "UTF-8")
-            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=$q")))
-        }) { Text("Cardmarket") }
-    }
-    if (r.candidates.size > 1) {
+
+    // printings: which ones exist and what each is worth
+    if (s.priceCard.printings.size > 1) {
         Spacer(Modifier.height(10.dp))
-        Text("Not this card? Other candidates:", color = Muted, fontSize = 12.sp)
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            r.candidates.drop(1).forEach { alt ->
-                FilterChip(selected = false, onClick = { onPick(alt) }, label = {
-                    Text("${alt.info.name} ${alt.info.numberText} · ${eur(alt.info.prices?.best)}", fontSize = 12.sp)
+            s.priceCard.printings.forEach { p ->
+                FilterChip(selected = p.kind == s.selected?.kind, onClick = { vm.choosePrinting(p.kind) },
+                    label = { Text("${p.kind.label} ${printingPrice(p)}", fontSize = 12.sp) })
+            }
+        }
+        FoilLine(s)
+    }
+    s.richerPrinting?.let { r ->
+        Text("⚠ The ${r.kind.label.lowercase()} of this card is worth ${printingPrice(r)} – check the finish!",
+            color = Warn, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
+    }
+
+    Spacer(Modifier.height(8.dp))
+    PriceBlock(s)
+    if (settings.showPsa) s.priceCard.graded?.let { PsaLine(it) }
+
+    if (s.languages.isNotEmpty()) {
+        Spacer(Modifier.height(8.dp))
+        Text("Other language?", color = Muted, fontSize = 12.sp)
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            s.languages.forEach { l ->
+                FilterChip(selected = false, onClick = { vm.chooseLanguage(l) },
+                    label = { Text("${LANG_NAMES[l.lang] ?: l.lang}: ${l.name}", fontSize = 12.sp) })
+            }
+        }
+    }
+    if (s.alternatives.isNotEmpty()) {
+        Spacer(Modifier.height(8.dp))
+        Text("Not this card?", color = Muted, fontSize = 12.sp)
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            s.alternatives.forEach { alt ->
+                FilterChip(selected = false, onClick = { vm.choose(alt) }, label = {
+                    Text("${alt.info.name} ${alt.info.numberText} · ${eur(alt.info.bestValue)}", fontSize = 12.sp)
                 })
             }
         }
     }
+    Spacer(Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = { vm.next() }) { Text("Next card") }
+        OutlinedButton({
+            val q = URLEncoder.encode(s.priceCard.name, "UTF-8")
+            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=$q")))
+        }) { Text("Cardmarket") }
+    }
 }
 
 @Composable
-private fun PriceBlock(c: CardInfo) {
-    val p = c.prices
-    if (p == null) {
-        Text("No Cardmarket price for this card.", color = Muted)
+fun FoilLine(s: Shown) {
+    val f = s.foil
+    val kinds = s.priceCard.printings.map { it.kind }
+    val text = when {
+        s.printingByUser -> null
+        f == null -> if (Printing.Kind.REVERSE in kinds || Printing.Kind.HOLO in kinds) "Tilt the card a little to check holo / reverse" else null
+        f.kind == FoilEstimate.Kind.REVERSE -> "Shimmer outside the artwork → looks like a reverse holo"
+        f.kind == FoilEstimate.Kind.HOLO -> "Shimmering artwork → looks like a holo"
+        f.kind == FoilEstimate.Kind.NORMAL -> "No foil shimmer seen → looks like the normal printing"
+        else -> "Holo check unsure – keep tilting, or tap the printing"
+    }
+    if (text != null) Text(text, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+}
+
+@Composable
+private fun PriceBlock(s: Shown) {
+    val p = s.selected
+    if (p == null || (p.eur == null && p.usd == null)) {
+        Text("No price for this card.", color = Muted)
         return
     }
     Row(verticalAlignment = Alignment.Bottom) {
-        Text(eur(p.headline), color = Gold, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+        Text(if (p.eur != null) eur(p.eur) else usd(p.usd), color = Gold, fontSize = 30.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.width(8.dp))
-        Text("trend", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 6.dp))
+        Text(if (p.eur != null) "Cardmarket trend · ${p.kind.label}" else "TCGplayer · ${p.kind.label}", color = Muted,
+            fontSize = 12.sp, modifier = Modifier.padding(bottom = 6.dp))
     }
-    Text("30-day avg ${eur(p.avg30)} · from ${eur(p.low)} · avg ${eur(p.avg)}", color = Color.White, fontSize = 13.sp)
-    if (p.headlineHolo != null) {
-        Text("Holo/reverse: trend ${eur(p.trendHolo)} · 30-day ${eur(p.avg30Holo)} · from ${eur(p.lowHolo)}",
-            color = Color.White, fontSize = 13.sp)
+    val parts = buildList {
+        if (p.eur30 != null) add("30-day avg ${eur(p.eur30)}")
+        if (p.eurLow != null) add("from ${eur(p.eurLow)}")
+        if (p.usd != null && p.eur != null) add("TCGplayer ${usd(p.usd)}")
     }
-    p.updated?.let { Text("Cardmarket price guide, ${it.take(10)}", color = Muted, fontSize = 11.sp) }
+    if (parts.isNotEmpty()) Text(parts.joinToString(" · "), color = Color.White, fontSize = 13.sp)
+    if (s.pricedFromEnglish) Text("Price of the English version (no price for this language)", color = Muted, fontSize = 11.sp)
+    s.priceCard.prices?.updated?.let { Text("Prices from ${it.take(10)}", color = Muted, fontSize = 11.sp) }
+}
+
+@Composable
+fun PsaLine(g: Graded, big: Boolean = false) {
+    if (g.psa10 == null && g.psa9 == null && g.psa8 == null) return
+    val size = if (big) 18.sp else 14.sp
+    Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        listOf("PSA 10" to g.psa10, "PSA 9" to g.psa9, "PSA 8" to g.psa8).forEach { (label, v) ->
+            Column {
+                Text(label, color = Muted, fontSize = 11.sp)
+                Text(usd(v), color = Color.White, fontSize = size, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+    if (!big) Text("eBay sold averages (PokemonPriceTracker)${g.updated?.let { ", $it" } ?: ""}", color = Muted, fontSize = 11.sp)
 }
 
 @Composable
@@ -291,50 +371,80 @@ private fun DebugPanel(d: DebugInfo) {
             Image(it.asImageBitmap(), "what the scanner saw", Modifier.width(80.dp).aspectRatio(63f / 88f))
             Spacer(Modifier.width(8.dp))
         }
-        Column {
-            d.lines.forEach { Text(it, color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace) }
-        }
+        Column { d.lines.forEach { Text(it, color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace) } }
     }
 }
 
 @Composable
-private fun ThresholdDialog(current: Double, onDone: (Double?) -> Unit) {
-    val options = listOf(0.0, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0)
+fun SettingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) {
+    val s = state.settings
+    var title by remember { mutableStateOf(s.title) }
     AlertDialog(
-        onDismissRequest = { onDone(null) },
-        title = { Text("Vibrate for cards worth at least") },
+        onDismissRequest = { vm.updateSettings { it.copy(title = title) }; onClose() },
+        title = { Text("Settings") },
         text = {
-            Column {
-                options.chunked(4).forEach { row ->
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Alert / HIT for cards worth at least", color = Muted, fontSize = 13.sp)
+                listOf(0.0, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0).chunked(4).forEach { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         row.forEach { v ->
-                            FilterChip(selected = v == current, onClick = { onDone(v) },
+                            FilterChip(selected = v == s.threshold, onClick = { vm.updateSettings { it.copy(threshold = v) } },
                                 label = { Text(if (v == 0.0) "off" else "${v.toInt()} €") })
                         }
                     }
                 }
+                SettingSwitch("PSA 10 / 9 / 8 prices", if (state.hasPsaData) "eBay sold averages, USD" else "not in this data pack yet",
+                    s.showPsa) { v -> vm.updateSettings { it.copy(showPsa = v) } }
+                SettingSwitch("YouTube mode", "full screen, price reveal, pack value; follows the phone's orientation",
+                    s.youtube) { v -> vm.updateSettings { it.copy(youtube = v, title = title) } }
+                OutlinedTextField(value = title, onValueChange = { title = it }, singleLine = true,
+                    label = { Text("YouTube title line (optional)") }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+                SettingSwitch("Details", "what the scanner saw, scores, text it read, holo check", s.showDebug) { v ->
+                    vm.updateSettings { it.copy(showDebug = v) }
+                }
             }
         },
-        confirmButton = { TextButton({ onDone(null) }) { Text("Close") } },
+        confirmButton = { TextButton({ vm.updateSettings { it.copy(title = title) }; onClose() }) { Text("Done") } },
     )
 }
 
 @Composable
-private fun GuideOverlay(state: UiState, modifier: Modifier) {
+private fun SettingSwitch(label: String, sub: String, value: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(label, color = Color.White)
+            Text(sub, color = Muted, fontSize = 12.sp)
+        }
+        Switch(checked = value, onCheckedChange = onChange)
+    }
+}
+
+@Composable
+fun GuideOverlay(state: UiState, modifier: Modifier, dim: Boolean) {
     Canvas(modifier) {
         val prior = Readings.guidePrior(size.width.toInt().coerceAtLeast(1), size.height.toInt().coerceAtLeast(1))
         val gh = (prior.h * size.height).toFloat()
         val gw = gh * 63f / 88f
         val tl = Offset((size.width - gw) / 2, (size.height - gh) / 2)
-        val guide = Path().apply {
-            addRoundRect(androidx.compose.ui.geometry.RoundRect(tl.x, tl.y, tl.x + gw, tl.y + gh, CornerRadius(18f, 18f)))
-        }
-        clipPath(guide, clipOp = ClipOp.Difference) { drawRect(Color(0x66000000)) }
         val col = when (state.liveConfidence) { Confidence.SURE -> Sure; Confidence.LIKELY -> Likely; else -> Color.White }
-        drawPath(guide, col, style = Stroke(width = 4f))
+        if (dim) {
+            val guide = Path().apply { addRoundRect(RoundRect(tl.x, tl.y, tl.x + gw, tl.y + gh, CornerRadius(18f, 18f))) }
+            clipPath(guide, clipOp = ClipOp.Difference) { drawRect(Color(0x66000000)) }
+            drawPath(guide, col, style = Stroke(width = 4f))
+        } else {
+            // corner brackets only: a clean picture for videos
+            val l = gw * 0.16f
+            val stroke = 6f
+            fun corner(x: Float, y: Float, dx: Float, dy: Float) {
+                drawLine(col, Offset(x, y), Offset(x + dx * l, y), stroke, StrokeCap.Round)
+                drawLine(col, Offset(x, y), Offset(x, y + dy * l), stroke, StrokeCap.Round)
+            }
+            corner(tl.x, tl.y, 1f, 1f); corner(tl.x + gw, tl.y, -1f, 1f)
+            corner(tl.x, tl.y + gh, 1f, -1f); corner(tl.x + gw, tl.y + gh, -1f, -1f)
+        }
         val q = state.liveQuad
         val f = state.liveFrame
-        if (q != null && f != null && !state.paused) {
+        if (q != null && f != null && !state.paused && dim) {
             val sx = size.width / f.first
             val sy = size.height / f.second
             val path = Path().apply {
@@ -348,7 +458,7 @@ private fun GuideOverlay(state: UiState, modifier: Modifier) {
 }
 
 @Composable
-private fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, modifier: Modifier) {
+fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, modifier: Modifier) {
     val ctx = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val previewView = remember {
@@ -387,3 +497,9 @@ private fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean
     LaunchedEffect(torch, camera) { camera?.cameraControl?.enableTorch(torch) }
     AndroidView(factory = { previewView }, modifier = modifier)
 }
+
+/** Labels shared by both screens. */
+fun printingPrice(p: Printing): String = if (p.eur != null) eur(p.eur) else usd(p.usd)
+
+@Suppress("unused")
+private fun CardInfo.title(): String = "$name · $setName $numberText"
