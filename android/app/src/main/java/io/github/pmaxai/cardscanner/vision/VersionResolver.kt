@@ -1,6 +1,7 @@
 package io.github.pmaxai.cardscanner.vision
 
 import android.graphics.Bitmap
+import android.util.Log
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.Text
@@ -34,12 +35,24 @@ class VersionResolver : AutoCloseable {
     private val latin = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     private val japanese by lazy { TextRecognition.getClient(JapaneseTextRecognizerOptions.Builder().build()) }
 
+    /** Load both recognition models now (the first use takes a few seconds), off the main thread. */
+    fun warmUp() {
+        val blank = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+        val img = InputImage.fromBitmap(blank, 0)
+        runCatching { Tasks.await(latin.process(img), 30, TimeUnit.SECONDS) }.onFailure { Log.w(TAG, "latin warm-up", it) }
+        runCatching { Tasks.await(japanese.process(img), 30, TimeUnit.SECONDS) }.onFailure { Log.w(TAG, "japanese warm-up", it) }
+    }
+
+    private fun recognise(r: com.google.mlkit.vision.text.TextRecognizer, img: InputImage, what: String): Text? =
+        runCatching { Tasks.await(r.process(img), 20, TimeUnit.SECONDS) }
+            .onFailure { Log.w(TAG, "$what text recognition failed", it) }.getOrNull()
+
     fun read(card: Bitmap, tryJapanese: Boolean): CardText {
         val img = InputImage.fromBitmap(card, 0)
-        var text = runCatching { Tasks.await(latin.process(img), 3, TimeUnit.SECONDS) }.getOrNull()
+        var text = recognise(latin, img, "latin")
         var japaneseChars = 0
         if (tryJapanese && (text == null || cjkCount(text.text) > 0 || latinWords(text.text) < 6)) {
-            val jt = runCatching { Tasks.await(japanese.process(img), 3, TimeUnit.SECONDS) }.getOrNull()
+            val jt = recognise(japanese, img, "japanese")
             if (jt != null) {
                 japaneseChars = cjkCount(jt.text)
                 if (japaneseChars >= 4) text = jt
@@ -90,6 +103,7 @@ class VersionResolver : AutoCloseable {
     }
 
     companion object {
+        private const val TAG = "CardScanner"
         private val NUMBER = Regex("""([A-Z]{0,4}\d{1,3}[a-z]?)/([A-Z]{0,4}\d{1,3})""")
         private val PROMO = Regex("""\b(SWSH|SM|XY|BW|SVP|SV|DP|HGSS)\d{2,3}\b""")
         private val HP = Regex("""(?:\b(hp|kp|pv|ps) ?\d{2,3}\b)|(?:\b\d{2,3} ?(hp|kp|pv|ps)\b)""")

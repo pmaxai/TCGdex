@@ -142,7 +142,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                 recognizer = rec
                 val cat = Catalog(p.db)
                 catalog = cat
-                resolver = VersionResolver()
+                resolver = VersionResolver().also { r -> viewModelScope.launch(Dispatchers.Default) { r.warmUp() } }
                 foil = FoilMeter(rec.geometry)
                 marginSure = p.metaFloat("margin_99", marginSure)
                 marginLikely = p.metaFloat("margin_90", marginLikely)

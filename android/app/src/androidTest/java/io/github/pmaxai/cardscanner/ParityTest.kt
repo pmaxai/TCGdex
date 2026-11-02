@@ -134,6 +134,9 @@ class ParityTest {
         val expected = mapOf("Magneton 059-191.jpg" to ("de" to "59"), "Plusle 69-101.jpg" to ("en" to "69"))
         val items = fixtures.getJSONArray("real")
         val resolver = io.github.pmaxai.cardscanner.vision.VersionResolver()
+        val tw = System.currentTimeMillis()
+        resolver.warmUp()
+        Log.i(TAG, "text recognition warm-up: ${System.currentTimeMillis() - tw} ms")
         val lines = ArrayList<String>()
         var wrong = 0
         for (i in 0 until items.length()) {

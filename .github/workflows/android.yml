@@ -90,7 +90,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           disable-animations: true
           working-directory: android
-          script: ./gradlew --no-daemon connectedDebugAndroidTest; s=$?; adb logcat -d -s ParityTest:I CardScanner:E AndroidRuntime:E; exit $s
+          script: ./gradlew --no-daemon connectedDebugAndroidTest; s=$?; adb logcat -d -s ParityTest:I CardScanner:W AndroidRuntime:E; exit $s
 
       - uses: actions/upload-artifact@v4
         if: always()
