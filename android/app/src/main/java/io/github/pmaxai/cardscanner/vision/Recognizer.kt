@@ -91,11 +91,14 @@ class Recognizer(pack: Pack) : AutoCloseable {
         }
     }
 
-    /** Single-frame reverse holo score of the card in this frame (null: no texture data in the pack). */
-    fun foilScore(rgb: Mat, r: Recognition, hit: Hit, texture: ByteArray?): FoilCheck.Result? {
+    /**
+     * Single-frame reverse holo score of the card in this frame, against the scan of pack
+     * entry [refEntry] (the version shown). Null: no texture data in the pack, or no score.
+     */
+    fun foilScore(rgb: Mat, r: Recognition, hit: Hit, texture: ByteArray?, refEntry: Int): FoilCheck.Result? {
         if (texture == null) return null
         val quad = cardQuad(r, hit, margin = 0.0) ?: return null
-        val ref = FoilCheck.reference(texture, hit.entry)
+        val ref = FoilCheck.reference(texture, refEntry)
         val grids = FoilCheck.photoGrids(rgb, quad, ref, geometry.rectW, geometry.rectH)
         return FoilCheck.scores(grids, ref).takeIf { !it.score.isNaN() }
     }

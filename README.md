@@ -43,11 +43,12 @@ downgrades), or restore the code from the tag.
   chip (in YouTube mode too); tap the one in front of you. If a more valuable printing
   exists, a ⚠ line says so, so you don't miss a reverse holo or 1st edition in a box
   of commons.
-- **Foil check:** the app compares the card with its scan. A reverse holo's foil gives
-  the blank parts of the text area texture the printed card doesn't have; when it
-  sees that, it picks *Reverse holo* and marks it ✨. Tilting the card a little helps.
-  It's new: photos of your own reverse holos and holos (see `testdata/real/`) make
-  it better.
+- **Foil check (experimental):** while you tilt the card a little, the app watches for
+  foil shimmer and may pick *Reverse holo* or *Holo* (marked ✨). A second check that
+  compares a still frame with the card's scan is measured (see **Details**) but does not
+  choose the printing yet: on the first real photos it couldn't tell blurry normal
+  cards from reverse holos. Labelled photos of your own cards (see `testdata/real/`)
+  are what it needs.
 - **Prices:** Cardmarket trend, 30-day average and lowest price (EUR) for the chosen
   printing, plus TCGplayer (USD) where Cardmarket has none.
 - **PSA 10 / 9 / 8:** recent eBay sold prices for graded copies (USD), if the data

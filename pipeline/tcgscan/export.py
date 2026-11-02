@@ -35,7 +35,7 @@ from .detect import RECT_H, RECT_W, as_artwork, detect_cards, quad_iou, rectify
 from .embedders import CARD_H, CARD_W, INPUT, PREP_VERSION, REGIONS, crop_region, get_embedder, to_card
 from .evaluate import IMG_EXT, READINGS, _labels, _rot180, fit_pca, load_photo, project, ref_embeddings, search
 from . import foil
-from .groups import artwork_groups
+from .groups import ASIAN as groups_mod_asian, artwork_groups
 from .labels import LabelResolver
 
 log = logging.getLogger(__name__)
@@ -208,7 +208,8 @@ def foil_lab(entries, tex: np.ndarray, real: list[dict], db: Path, out_md: Path,
     lines = ["## Foil check (single photo)", "",
              "Score = detail in the blank parts of the text area relative to the printed text next to it, "
              "minus the same for the card's scan (foil adds detail where the scan has none). "
-             f"The app calls it a reverse holo from **{thr:.2f}** (above the normal cards here, with room).", ""]
+             f"Normal cards here reach **{thr:.2f}**. The app shows the score under Details but does not pick "
+             "the printing from it yet: that needs labelled photos of reverse holos and normal cards.", ""]
     if real_rev and min(real_rev) < thr:
         lines += [f"⚠️ {sum(1 for v in real_rev if v < thr)} of {len(real_rev)} labelled reverse holos score below that.", ""]
     lines += ["| synthetic normal cards (outline) | photos | median | 90% | 95% | 99% | above reverse threshold |", "|---|---|---|---|---|---|---|"]
@@ -225,7 +226,7 @@ def foil_lab(entries, tex: np.ndarray, real: list[dict], db: Path, out_md: Path,
         if f["score"] is None:
             lines.append(f"| {r['file']} | {f['label'] or '?'} | – | {f['art']:.1f} | {f['body']:.1f} | no blank/text contrast |")
             continue
-        says = "reverse holo" if f["score"] >= thr else "normal"
+        says = "above normal cards" if f["score"] >= thr else "like normal cards"
         lines.append(f"| {r['file']} | {f['label'] or '?'} | {f['score']:.2f} | {f['art']:.1f} | {f['body']:.1f} | {says} |")
     out_md.write_text("\n".join(lines) + "\n")
     for l in lines:
@@ -307,6 +308,12 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, model_name: str, out_dir: Pa
 
     # parity fixtures
     index32 = index.astype(np.float32)
+    western_entry: dict[str, int] = {}          # card id -> its English (else first western) entry
+    for i, e in enumerate(entries):
+        if e.lang in groups_mod_asian:
+            continue
+        if e.card_id not in western_entry or e.lang == "en":
+            western_entry[e.card_id] = i
     fixtures = {"real": [], "synthetic": []}
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -324,9 +331,11 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, model_name: str, out_dir: Pa
                 if rec.get("detected"):
                     t = rec["top"][0]
                     rq = foil.card_quad_for_reading(np.array(rec["quad"], np.float32), READINGS.index(t["reading"]))
-                    g = foil.photo_grids(img, rq, tex[t["entry"]])
-                    sc, art, body = foil.scores(g, tex[t["entry"]])
-                    rec["foil"] = {"entry": t["entry"], "card_quad": rq.round(2).tolist(), "grids": g.tolist(),
+                    # compare with the scan of the version shown (western layout), not an Asian scan
+                    ref_e = western_entry.get(t["id"], t["entry"])
+                    g = foil.photo_grids(img, rq, tex[ref_e])
+                    sc, art, body = foil.scores(g, tex[ref_e])
+                    rec["foil"] = {"entry": ref_e, "card_quad": rq.round(2).tolist(), "grids": g.tolist(),
                                    "score": round(sc, 4) if np.isfinite(sc) else None,
                                    "art": round(art, 4), "body": round(body, 4), "label": foil.printing_label(fname)}
                 fixtures["real"].append(rec)

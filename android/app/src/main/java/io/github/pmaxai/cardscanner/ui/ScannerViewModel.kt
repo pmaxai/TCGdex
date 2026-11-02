@@ -320,36 +320,39 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         foilSum = 0.0
         foilN = 0
         var shown = build(group, version, text, conf, alternatives, locked = false, fromPhoto = fromPhoto, preview = r.preview)
-        if (hit != null) staticFoil(rgb, r, hit)?.let { est ->
-            shown = shown.copy(foil = est, printing = autoPrinting(shown, est.kind, strongOnly = true))
-        }
+        if (hit != null) staticFoil(rgb, r, hit, shown)?.let { est -> shown = shown.copy(foil = est) }
         _state.update { s -> s.copy(shown = shown, session = if (s.settings.youtube && !fromPhoto) addToSession(s, shown) else s.session) }
         maybeAlert(shown)
     }
 
-    /** Adds this frame's single-frame foil score; the verdict uses the mean over the card's frames. */
-    private fun staticFoil(rgb: Mat, r: Recognition, hit: Hit): FoilEstimate? {
-        val res = runCatching { recognizer?.foilScore(rgb, r, hit, pack?.texture) }
+    /** pack entry of each (card id, language), to compare with the scan of the version shown */
+    private val entryOf: Map<String, Int> by lazy {
+        val p = pack ?: return@lazy emptyMap()
+        HashMap<String, Int>(p.n * 2).also { m -> for (i in 0 until p.n) m.putIfAbsent("${p.entryLang[i]}/${p.entryCard[i]}", i) }
+    }
+
+    /**
+     * Adds this frame's single-frame foil score (mean over the card's frames). Measured and
+     * shown under Details only: on real photos it does not yet separate reverse holos from
+     * normal cards reliably, so it never changes the printing.
+     */
+    private fun staticFoil(rgb: Mat, r: Recognition, hit: Hit, s: Shown): FoilEstimate? {
+        val ref = entryOf["${s.version.lang}/${s.version.id}"] ?: entryOf["en/${s.version.id}"]
+            ?: entryOf["de/${s.version.id}"] ?: hit.entry
+        val res = runCatching { recognizer?.foilScore(rgb, r, hit, pack?.texture, ref) }
             .onFailure { Log.w(TAG, "foil check failed", it) }.getOrNull() ?: return null
         foilSum += res.score
         foilN++
-        val mean = foilSum / foilN
-        val kind = when {
-            mean >= foilThreshold * 1.4 || (foilN >= 2 && mean >= foilThreshold) -> FoilEstimate.Kind.REVERSE
-            foilN >= 3 && mean < foilThreshold * 0.6 -> FoilEstimate.Kind.NORMAL
-            else -> FoilEstimate.Kind.UNSURE
-        }
-        return FoilEstimate(kind, res.blank, res.text, 0, mean, foilN)
+        return FoilEstimate(FoilEstimate.Kind.UNSURE, res.blank, res.text, 0, foilSum / foilN, foilN)
     }
 
     /** The printing to select for a foil verdict (unless the user picked one). */
-    private fun autoPrinting(s: Shown, kind: FoilEstimate.Kind, strongOnly: Boolean = false): Printing.Kind? {
+    private fun autoPrinting(s: Shown, kind: FoilEstimate.Kind): Printing.Kind? {
         if (s.printingByUser) return s.printing
         val kinds = s.priceCard.printings.map { it.kind }
         return when (kind) {
             FoilEstimate.Kind.HOLO -> Printing.Kind.HOLO.takeIf { it in kinds } ?: s.printing
-            FoilEstimate.Kind.REVERSE -> if (strongOnly && (s.foil?.staticScore ?: foilSum / maxOf(1, foilN)) < foilThreshold * 1.4)
-                s.printing else Printing.Kind.REVERSE.takeIf { it in kinds } ?: s.printing
+            FoilEstimate.Kind.REVERSE -> Printing.Kind.REVERSE.takeIf { it in kinds } ?: s.printing
             FoilEstimate.Kind.NORMAL -> kinds.firstOrNull { it == Printing.Kind.NORMAL || it == Printing.Kind.HOLO } ?: s.printing
             FoilEstimate.Kind.UNSURE -> s.printing
         }
@@ -357,16 +360,14 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun trackFoil(current: Shown, r: Recognition, rgb: Mat) {
         val hit = r.best ?: return
-        val still = staticFoil(rgb, r, hit)
+        val still = staticFoil(rgb, r, hit, current)
         val quad = cardQuad(r, hit)
         val meter = foil
         val motion = if (quad != null && meter != null) { meter.add(rgb, quad); meter.estimate() } else null
-        // the check against the scan decides when it is sure; the shimmer while tilting otherwise
+        // the shimmer while tilting decides (experimental); the still-frame score is only shown
         val est = when {
-            still != null && still.kind != FoilEstimate.Kind.UNSURE -> still
-            motion != null && motion.kind != FoilEstimate.Kind.UNSURE ->
-                motion.copy(staticScore = still?.staticScore, staticFrames = still?.staticFrames ?: 0)
-            else -> still ?: motion ?: return
+            motion != null -> motion.copy(staticScore = still?.staticScore, staticFrames = still?.staticFrames ?: 0)
+            else -> still ?: return
         }
         val printing = autoPrinting(current, est.kind)
         _state.update { s ->
@@ -395,7 +396,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                 add("name bar: ${t.nameText.take(40)}")
             }
             st.shown?.foil?.let { f ->
-                add("holo check: ${f.kind}" + (f.staticScore?.let { " – foil score %.2f (reverse from %.2f, %d frames)".format(it, foilThreshold, f.staticFrames) } ?: "") +
+                add("holo check: ${f.kind}" + (f.staticScore?.let { " – still-frame foil score %.2f (normal cards reach %.2f, %d frames)".format(it, foilThreshold, f.staticFrames) } ?: "") +
                     if (f.frames > 0) " – shimmer: artwork %.2f, card %.2f, %d frames".format(f.art, f.body, f.frames) else "")
             }
         }) else null
