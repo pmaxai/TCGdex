@@ -15,7 +15,7 @@ CARD_ASPECT = 63 / 88          # width / height of a standard card
 RECT_W, RECT_H = 448, 626      # size of a straightened card crop (63:88)
 SUPPORT_MIN = 0.15             # every side must run along an edge for >= this fraction
 SUPPORT_POW = 2
-PREFER_OUTER = True
+PREFER_OUTER = False           # tested: +-1%, and it can swap a card for card+clutter; the matcher reads artwork boxes instead
 OUTER_MIN_RATIO = 1.6          # prefer an enclosing outline (card vs. its artwork box)...
 OUTER_SUPPORT = 0.0            # ...if its sides are visible at least this well
 OUTER_SCORE_FRAC = 0.25
@@ -23,7 +23,7 @@ REFINE = True                  # snap each side to the edge pixels along it
 EXPAND = True                  # grow an inner-panel outline to the card's outer border
 USE_HULL = True                # also build quads from convex hulls (repairs ragged outlines)
 USE_LINES = False              # also assemble quads from straight edge lines (tested: +1%, 4x slower)
-WORK_SIZES = (400, 600, 800)   # detection runs on the photo scaled to these longest sides
+WORK_SIZES = (300, 450, 600)   # detection runs on the photo scaled to these SHORT sides
 
 
 @dataclass
@@ -340,14 +340,18 @@ def _line_quads(edges: np.ndarray, max_lines: int = 18) -> list[np.ndarray]:
 
 
 def _scale_candidates(img_rgb: np.ndarray, work_size: int, min_area_frac: float, prior, debug, si: int):
-    """Card-shaped candidates at one working resolution, quads in original image coords."""
+    """Card-shaped candidates at one working resolution, quads in original image coords.
+
+    work_size is the short side: phone photos are tall (9:20), and a card fills
+    roughly half the width however tall the photo is."""
     h, w = img_rgb.shape[:2]
-    scale = min(1.0, work_size / max(h, w))
+    scale = min(1.0, work_size / min(h, w))
     small = cv2.resize(img_rgb, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale < 1 else img_rgb
     gray = cv2.GaussianBlur(cv2.cvtColor(small, cv2.COLOR_RGB2GRAY), (5, 5), 0)
     img_area = float(small.shape[0] * small.shape[1])
     maps = list(_edge_maps(small, gray))
-    union = cv2.dilate(np.bitwise_or.reduce(maps), np.ones((3, 3), np.uint8))
+    k = max(3, int(round(0.004 * max(small.shape[:2]))) | 1)   # edge tolerance grows with the image
+    union = cv2.dilate(np.bitwise_or.reduce(maps), np.ones((k, k), np.uint8))
     cands = []
 
     def consider(quad: np.ndarray) -> None:
@@ -400,7 +404,7 @@ def detect_cards(img_rgb: np.ndarray, max_cards: int = 1, min_area_frac: float =
                  debug: list | None = None) -> list[Detection]:
     """Return up to max_cards card quads, best first.
 
-    work_sizes: detection runs on the photo scaled to each of these longest
+    work_sizes: detection runs on the photo scaled to each of these short
     sides; candidates from all scales compete (coarse scales see a card's
     outline as one clean shape, fine scales place the corners more precisely).
     prior: (cx, cy, height) of where the card is expected, as fractions of the
@@ -443,6 +447,32 @@ def detect_cards(img_rgb: np.ndarray, max_cards: int = 1, min_area_frac: float =
                 q = refine_quad(expand_to_border(q, x["union"], x["small"]), raw)
             g[1] = q / sc
     return [Detection(order_quad(g[1]), g[2]) for g in kept]
+
+
+def as_artwork(img_rgb: np.ndarray, quad: np.ndarray, card_size: tuple[int, int],
+               art_box: tuple[float, float, float, float]) -> tuple[np.ndarray, np.ndarray]:
+    """Second reading of a detection: the quad is the card's ARTWORK box, not the card.
+
+    The artwork box is often the crispest rectangle on a card (dark frame line),
+    while the card's own edge may be faint or covered by fingers. Returns two
+    card-sized images (both 180-degree orientations) with the quad's content
+    placed where the artwork sits on a card; the rest is neutral grey."""
+    cw, ch = card_size
+    x0, y0, x1, y1 = art_box
+    q = order_quad(quad)
+    land = np.roll(q, 1, axis=0)      # artwork is landscape: make the long side horizontal (tl,tr,br,bl)
+    dst = np.array([[x0 * cw, y0 * ch], [x1 * cw - 1, y0 * ch], [x1 * cw - 1, y1 * ch - 1], [x0 * cw, y1 * ch - 1]],
+                   np.float32)
+    out = []
+    for src in (land, np.roll(land, 2, axis=0)):
+        m = cv2.getPerspectiveTransform(src.astype(np.float32), dst)
+        canvas = cv2.warpPerspective(img_rgb, m, (cw, ch), flags=cv2.INTER_AREA, borderMode=cv2.BORDER_CONSTANT,
+                                     borderValue=(128, 128, 128))
+        mask = np.zeros((ch, cw), np.uint8)
+        cv2.rectangle(mask, (int(x0 * cw), int(y0 * ch)), (int(x1 * cw) - 1, int(y1 * ch) - 1), 1, -1)
+        canvas[mask == 0] = 128
+        out.append(canvas)
+    return out[0], out[1]
 
 
 def rectify(img_rgb: np.ndarray, quad: np.ndarray, size: tuple[int, int] = (RECT_W, RECT_H)) -> np.ndarray:

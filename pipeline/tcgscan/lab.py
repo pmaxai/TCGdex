@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 
 from . import detect
-from .augment import GUIDE, load_rgba, synth_photo
+from .augment import guide_prior, load_rgba, synth_photo
 from .catalog import load_entries
 from .evaluate import WORKERS
 
@@ -28,7 +28,8 @@ log = logging.getLogger(__name__)
 
 VARIANTS: dict[str, dict] = {
     "current": {},
-    "single scale 800 (old)": {"WORK_SIZES": (800,), "SUPPORT_MIN": 0.25},
+    "short sides 400+600+800": {"WORK_SIZES": (400, 600, 800)},
+    "short sides 300+450+600+900": {"WORK_SIZES": (300, 450, 600, 900)},
     "no edge check": {"SUPPORT_MIN": 0.0, "SUPPORT_POW": 0},
     "no border expansion": {"EXPAND": False},
     "+ line-based quads": {"USE_LINES": True},
@@ -60,7 +61,7 @@ def _iou_stats(ious: np.ndarray) -> dict:
 def _run_variant(photos, prior) -> np.ndarray:
     def one(p):
         photo, quad, _ = p
-        d = detect.detect_cards(photo, prior=prior)
+        d = detect.detect_cards(photo, prior=guide_prior(photo.shape) if prior == "guide" else prior)
         return detect.quad_iou(d[0].quad, quad) if d else -1.0
     with ThreadPoolExecutor(WORKERS) as ex:
         return np.array(list(ex.map(one, photos)))
@@ -139,7 +140,7 @@ def run(db: Path, cache_dir: Path, n: int, seed: int = 99) -> str:
     explain_out = []
     for scenario in ("free", "guided"):
         photos = _photos(entries, n, seed, scenario == "guided")
-        priors = {"": None} if scenario == "free" else {"": None, " + guide prior": GUIDE}
+        priors = {"": None} if scenario == "free" else {"": None, " + guide prior": "guide"}
         for vname, cfg in VARIANTS.items():
             for k, v in DEFAULTS.items():
                 setattr(detect, k, v)

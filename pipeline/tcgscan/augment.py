@@ -107,6 +107,7 @@ class SynthMeta:
     rot180: bool = False
     sideways: bool = False
     sleeve: bool = False
+    fingers: bool = False
     glare: bool = False
     shadow: bool = False
     blur: bool = False
@@ -116,7 +117,42 @@ class SynthMeta:
     tags: list[str] = field(default_factory=list)
 
 
-GUIDE = (0.5, 0.5, 0.7)        # app guide frame: centre x, centre y, card height (fractions)
+GUIDE = (0.5, 0.5, 0.7, 0.8)   # app guide frame: centre x, centre y, max height, max width (fractions)
+
+
+def guide_prior(shape) -> tuple[float, float, float]:
+    """(cx, cy, card height) of the guide frame for an image of this shape, as fractions."""
+    h, w = shape[:2]
+    cx, cy, hmax, wmax = GUIDE
+    return cx, cy, min(hmax, wmax * w / (CARD_ASPECT * h))
+
+
+CANVASES = [((720, 960), 0.4), ((540, 960), 0.3), ((432, 960), 0.3)]   # 3:4, 9:16, 9:20 phone photos
+SKIN = np.array([[232, 190, 160], [205, 150, 115], [170, 115, 80], [120, 80, 55]], np.float32)
+
+
+def _fingers(canvas: np.ndarray, q: np.ndarray, rng) -> None:
+    """Draw 1-2 finger-like capsules covering parts of the card edge (card held in hand)."""
+    card_h = float(np.linalg.norm(q[3] - q[0]))
+    card_w = float(np.linalg.norm(q[1] - q[0]))
+    base = SKIN[rng.integers(len(SKIN))] * rng.uniform(0.85, 1.1)
+    for _ in range(int(rng.integers(1, 3))):
+        side = int(rng.integers(4))
+        a, b = q[side], q[(side + 1) % 4]
+        p = a + (b - a) * rng.uniform(0.15, 0.85)
+        inward = q.mean(0) - p
+        inward /= np.linalg.norm(inward) + 1e-6
+        ang = np.arctan2(inward[1], inward[0]) + rng.normal(0, 0.4)
+        d = np.array([np.cos(ang), np.sin(ang)])
+        length = rng.uniform(0.2, 0.45) * card_h
+        p0 = p - d * length * rng.uniform(0.4, 0.8)
+        p1 = p0 + d * length
+        thick = int(rng.uniform(0.13, 0.2) * card_w)
+        layer = np.zeros(canvas.shape[:2], np.float32)
+        cv2.line(layer, tuple(int(v) for v in p0), tuple(int(v) for v in p1), 1.0, thick, cv2.LINE_AA)
+        layer = cv2.GaussianBlur(layer, (0, 0), max(1.0, thick * 0.08))[..., None]
+        shade = 0.85 + 0.25 * layer
+        canvas[:] = canvas * (1 - layer) + base * shade * layer
 
 
 def synth_photo(card_rgba: np.ndarray, rng: np.random.Generator,
@@ -126,7 +162,8 @@ def synth_photo(card_rgba: np.ndarray, rng: np.random.Generator,
 
     guided=True mimics the app: the user lines the card up with an on-screen
     frame, so it is roughly centred, upright and of the expected size."""
-    H, W = CANVAS_H, CANVAS_W
+    sizes, probs = zip(*CANVASES)
+    W, H = sizes[rng.choice(len(sizes), p=probs)]
     meta = SynthMeta()
     canvas = random_background(rng, H, W)
 
@@ -145,14 +182,14 @@ def synth_photo(card_rgba: np.ndarray, rng: np.random.Generator,
         rot = float(np.clip(rng.normal(0, 4), -12, 12))
         if rng.random() < 0.05:
             rot += 180; meta.rot180 = True
-        ch = GUIDE[2] * rng.uniform(0.8, 1.2) * H
+        ch = guide_prior((H, W))[2] * rng.uniform(0.8, 1.2) * H
     else:
         rot = float(np.clip(rng.normal(0, 8), -25, 25))
         if rng.random() < 0.10:
             rot += 180; meta.rot180 = True
         elif rng.random() < 0.08:
             rot += 90; meta.sideways = True
-        ch = rng.uniform(0.45, 0.85) * H
+        ch = rng.uniform(0.3, 0.85) * H
     q = _card_quad(rng, ch, rot, rng.uniform(0, 0.05))
     # fit inside the canvas with a margin, then place randomly
     span = q.max(0) - q.min(0)
@@ -167,6 +204,9 @@ def synth_photo(card_rgba: np.ndarray, rng: np.random.Generator,
         q += np.array([rng.uniform(lo[0], max(lo[0], hi[0])), rng.uniform(lo[1], max(lo[1], hi[1]))], np.float32)
     meta.card_frac = float(cv2.contourArea(q) / (W * H))
     canvas = _paste(canvas, card, q)
+    if rng.random() < 0.3:
+        _fingers(canvas, q, rng)
+        meta.fingers = True
     card_mask = _quad_mask(q, H, W)
     card_h = float(np.linalg.norm(q[3] - q[0]))
 
@@ -223,7 +263,7 @@ def synth_photo(card_rgba: np.ndarray, rng: np.random.Generator,
         photo = cv2.imdecode(buf, cv2.IMREAD_COLOR)[..., ::-1].copy()
 
     meta.guided = guided
-    meta.tags = [k for k in ("rot180", "sideways", "sleeve", "glare", "shadow", "blur") if getattr(meta, k)]
+    meta.tags = [k for k in ("rot180", "sideways", "sleeve", "fingers", "glare", "shadow", "blur") if getattr(meta, k)]
     if meta.distractors:
         meta.tags.append("other_cards")
     return photo, q, meta

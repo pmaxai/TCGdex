@@ -27,10 +27,10 @@ import cv2
 import numpy as np
 from PIL import Image, ImageOps
 
-from .augment import GUIDE, flatten, load_rgba, oracle_crop, synth_photo
+from .augment import flatten, guide_prior, load_rgba, oracle_crop, synth_photo
 from .catalog import Entry, load_entries
-from .detect import RECT_H, RECT_W, detect_cards, draw_quad, quad_iou, rectify
-from .embedders import CARD_H, CARD_W, PREP_VERSION, Embedder, get_embedder, timed_embed, to_card, view
+from .detect import RECT_H, RECT_W, as_artwork, detect_cards, draw_quad, quad_iou, rectify
+from .embedders import CARD_H, CARD_W, PREP_VERSION, REGIONS, Embedder, get_embedder, timed_embed, to_card, view
 from .labels import LabelResolver
 from .report import has_tag, write_report
 
@@ -81,18 +81,25 @@ def ref_embeddings(model: Embedder, entries: list[Entry], emb_cache: Path) -> np
 
 
 # =================================================================== search
-def search(ref: np.ndarray, card_ids: list[str], q0: np.ndarray, q180: np.ndarray,
-           k: int = 5, pool: int = 40) -> list[list[tuple[str, float, int]]]:
-    """Top-(k+1) distinct cards per query as (card_id, score, entry index).
+READINGS = ("card", "card upside down", "artwork", "artwork upside down")
 
-    Each card can have several reference images (languages); the best one counts.
-    The query is tried upright and rotated 180 degrees; the better one counts.
+
+def search(ref: np.ndarray, card_ids: list[str], qs: list[np.ndarray],
+           k: int = 5, pool: int = 40) -> list[list[tuple[str, float, int, int]]]:
+    """Top-(k+1) distinct cards per query as (card_id, score, entry index, reading).
+
+    qs holds one fingerprint array per reading of the photo (card upright,
+    card upside down, and optionally the two artwork-box readings); for every
+    reference the best reading counts. Each card can have several reference
+    images (languages); the best one counts.
     """
     out = []
     n = ref.shape[0]
     pool = min(pool, n - 1)
-    for s in range(0, len(q0), 256):
-        sim = np.maximum(q0[s:s + 256] @ ref.T, q180[s:s + 256] @ ref.T)
+    for s in range(0, len(qs[0]), 128):
+        stack = np.stack([q[s:s + 128] @ ref.T for q in qs])
+        which = stack.argmax(0)
+        sim = stack.max(0)
         top = np.argpartition(-sim, pool, axis=1)[:, :pool + 1] if pool > 0 else np.zeros((len(sim), 1), int)
         for r in range(len(sim)):
             cand = top[r][np.argsort(-sim[r, top[r]])]
@@ -102,7 +109,7 @@ def search(ref: np.ndarray, card_ids: list[str], q0: np.ndarray, q180: np.ndarra
                 if cid in seen:
                     continue
                 seen.add(cid)
-                res.append((cid, float(sim[r, j]), int(j)))
+                res.append((cid, float(sim[r, j]), int(j), int(which[r, j])))
                 if len(res) > k:
                     break
             out.append(res)
@@ -123,6 +130,7 @@ class Query:
     det_found: bool
     det_iou: float
     det_crop: np.ndarray | None
+    det_art: tuple | None            # artwork-box readings of the same quad
     oracle: np.ndarray
 
 
@@ -138,7 +146,7 @@ def _generate(entries: list[Entry], qi: int, ei: int, seed: int):
                 distract.append(load_rgba(entries[j].path))
     guided = qi % 2 == 1          # half the photos: card lined up with the app's guide frame
     photo, quad, meta = synth_photo(card, r, distract, guided=guided)
-    dets = detect_cards(photo, max_cards=1, prior=GUIDE if guided else None)
+    dets = detect_cards(photo, max_cards=1, prior=guide_prior(photo.shape) if guided else None)
     if guided:
         meta.tags.append("guided")
     return r, photo, quad, meta, dets
@@ -151,19 +159,23 @@ def make_queries(entries: list[Entry], n: int, seed: int, debug_dir: Path | None
     def one(args):
         qi, ei = args
         r, photo, quad, meta, dets = _generate(entries, qi, int(ei), seed)
-        det_crop, iou = None, 0.0
+        det_crop, det_art, iou = None, None, 0.0
+        used = None
         if dets:
             iou = quad_iou(dets[0].quad, quad)
-            det_crop = to_card(rectify(photo, dets[0].quad))
+            used = dets[0].quad
         elif "guided" in meta.tags:   # the app matches what is inside its guide frame
-            det_crop = to_card(rectify(photo, guide_quad(photo)))
+            used = guide_quad(photo)
+        if used is not None:
+            det_crop = to_card(rectify(photo, used))
+            det_art = as_artwork(photo, used, (CARD_W, CARD_H), REGIONS["art"])
         orc = to_card(oracle_crop(photo, quad, r))
         if debug_dir is not None and qi < n_examples:
             vis = draw_quad(photo, quad, (0, 120, 255), 3)
             if dets:
                 vis = draw_quad(vis, dets[0].quad, (0, 255, 0), 3)
             _save(debug_dir / "synthetic_examples" / f"{qi:03d}_{entries[ei].card_id}.jpg", vis)
-        return Query(qi, int(ei), meta.tags, meta.card_frac, bool(dets), iou, det_crop, orc)
+        return Query(qi, int(ei), meta.tags, meta.card_frac, bool(dets), iou, det_crop, det_art, orc)
 
     t0 = time.time()
     with ThreadPoolExecutor(WORKERS) as ex:
@@ -184,7 +196,11 @@ def _classify(truth: Entry, pred_entry: Entry, top_ids: list[str], phash_ref: np
 
 
 def embed_queries(model: Embedder, queries: list[Query]) -> tuple[dict, float]:
-    """Fingerprints of every query, upright and rotated 180 degrees, per mode."""
+    """Fingerprints of every reading of every query, per mode.
+
+    perfect detection: the card upright and upside down
+    full pipeline:     the same, plus the two artwork-box readings of the detected quad
+    """
     out: dict[str, tuple] = {}
     ms = 0.0
     for mode in ("detector", "oracle"):
@@ -194,10 +210,13 @@ def embed_queries(model: Embedder, queries: list[Query]) -> tuple[dict, float]:
             e0, t = timed_embed(model, imgs)
             if mode == "detector":
                 ms = t
-            e180 = model.embed(_rot180(imgs))
+            readings = [e0, model.embed(_rot180(imgs))]
+            if mode == "detector":
+                readings.append(model.embed(np.stack([queries[i].det_art[0] for i in sel])))
+                readings.append(model.embed(np.stack([queries[i].det_art[1] for i in sel])))
         else:
-            e0 = e180 = np.zeros((0, model.dim), np.float32)
-        out[mode] = (sel, e0, e180)
+            readings = [np.zeros((0, model.dim), np.float32)] * 2
+        out[mode] = (sel, readings)
     return out, ms
 
 
@@ -206,8 +225,8 @@ def score_view(ref: np.ndarray, qemb: dict, sl, entries: list[Entry], queries: l
     ids = [e.card_id for e in entries]
     ref_v = view(ref, sl)
     results: dict[str, list[dict]] = {}
-    for mode, (sel, e0, e180) in qemb.items():
-        found = search(ref_v, ids, view(e0, sl), view(e180, sl)) if sel else []
+    for mode, (sel, readings) in qemb.items():
+        found = search(ref_v, ids, [view(e, sl) for e in readings]) if sel else []
         by_q = dict(zip(sel, found))
         rows: list[dict] = []
         for i, q in enumerate(queries):
@@ -217,11 +236,12 @@ def score_view(ref: np.ndarray, qemb: dict, sl, entries: list[Entry], queries: l
             if not res:
                 row.update(pred=None, score=0.0, margin=0.0, top1=False, top5=False, err="no_detection")
             else:
-                top_ids = [c for c, _, _ in res[:5]]
-                pred, score, pj = res[0]
+                top_ids = [c for c, _, _, _ in res[:5]]
+                pred, score, pj, reading = res[0]
                 margin = score - (res[1][1] if len(res) > 1 else 0.0)
                 ok = pred == truth.card_id
-                row.update(pred=pred, pred_entry=pj, score=round(score, 4), margin=round(margin, 4), top1=ok,
+                row.update(pred=pred, pred_entry=pj, reading=READINGS[reading], score=round(score, 4),
+                           margin=round(margin, 4), top1=ok,
                            top5=truth.card_id in top_ids,
                            err=None if ok else _classify(truth, entries[pj], top_ids, phash_ref, q.entry, pj, names))
             rows.append(row)
@@ -237,7 +257,8 @@ def detection_stats(queries: list[Query]) -> dict:
                ("slightly off, e.g. inner panel only (0.8-0.9)", (iou >= 0.8) & (iou < 0.9)),
                ("good (0.9-0.95)", (iou >= 0.9) & (iou < 0.95)), ("precise (>= 0.95)", iou >= 0.95)]
     by_tag = {}
-    for tag in ("guided", "free", "clean", "glare", "blur", "sleeve", "shadow", "rot180", "sideways", "other_cards"):
+    for tag in ("guided", "free", "clean", "glare", "blur", "sleeve", "fingers", "shadow", "rot180", "sideways",
+                "other_cards"):
         sel = np.array([has_tag(q.tags, tag) for q in queries])
         if sel.any():
             by_tag[tag] = {"n": int(sel.sum()), "right": float((iou[sel] >= 0.6).mean()),
@@ -285,10 +306,10 @@ def load_photo(path: Path) -> np.ndarray:
         return np.asarray(ImageOps.exif_transpose(im).convert("RGB"))
 
 
-def guide_quad(img: np.ndarray, guide: tuple[float, float, float] = GUIDE) -> np.ndarray:
+def guide_quad(img: np.ndarray) -> np.ndarray:
     """The app's on-screen guide frame as a quad (used when no card is found)."""
     h, w = img.shape[:2]
-    cx, cy, gh = guide
+    cx, cy, gh = guide_prior(img.shape)
     ch = gh * h
     cw = ch * 63 / 88
     if cw > 0.9 * w:
@@ -358,12 +379,13 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, models: list[str], n_queries
             dets = detect_cards(img, max_cards=1)
             quad = dets[0].quad if dets else guide_quad(img)
             crop = rectify(img, quad)
+            art = as_artwork(img, quad, (CARD_W, CARD_H), REGIONS["art"])
             lab = resolver.resolve(text)
             if text and lab.problem:
                 log.warning("label of %s (%r): %s", fname, text, lab.problem)
             real.append({"file": fname, "label": text, "truth": lab.ids or None, "label_problem": lab.problem if text else None,
                          "detected": bool(dets), "img": img, "quad": quad,
-                         "crop": crop, "input": to_card(crop), "preds": {}})
+                         "crop": crop, "input": to_card(crop), "art": art, "preds": {}})
         log.info("%d real photos", len(real))
 
     summary = {"models": {}, "n_queries": len(queries), "n_refs": len(entries), "n_cards": len(set(ids)),
@@ -382,7 +404,9 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, models: list[str], n_queries
         qemb, ms = embed_queries(model, queries)
         if real:
             x = np.stack([r["input"] for r in real])
-            real_e0, real_e180 = model.embed(x), model.embed(_rot180(x))
+            real_readings = [model.embed(x), model.embed(_rot180(x)),
+                             model.embed(np.stack([r["art"][0] for r in real])),
+                             model.embed(np.stack([r["art"][1] for r in real]))]
         for vname, sl in model.views.items():
             label = f"{name}_{vname}" if vname else name
             res = score_view(ref, qemb, sl, entries, queries, phash_ref, names)
@@ -393,15 +417,19 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, models: list[str], n_queries
                            "top5": float(np.mean([r["top5"] for r in rows])),
                            "errors": _count([r["err"] for r in rows if r["err"]])}
             s["confidence"] = confidence_table(res["detector"])
+            art = [r for r in res["detector"] if r.get("reading", "").startswith("artwork")]
+            s["artwork_reading"] = {"share": len(art) / max(1, len(res["detector"])),
+                                    "right": float(np.mean([r["top1"] for r in art])) if art else None}
             summary["models"][label] = s
             log.info("[%s] top-1 full pipeline %.1f%%, perfect detection %.1f%%", label,
                      100 * s["detector"]["top1"], 100 * s["oracle"]["top1"])
             np.save(pack_dir / f"{label}_embeddings.f16.npy", view(ref, sl).astype(np.float16))
             if real:
-                found = search(view(ref, sl), ids, view(real_e0, sl), view(real_e180, sl))
+                found = search(view(ref, sl), ids, [view(e, sl) for e in real_readings])
                 for r, f in zip(real, found):
                     r["preds"][label] = [{"id": c, "name": entries[j].name, "lang": entries[j].lang,
-                                          "score": round(sc, 4), "entry": j} for c, sc, j in f[:5]]
+                                          "score": round(sc, 4), "entry": j, "reading": READINGS[rd]}
+                                         for c, sc, j, rd in f[:5]]
         del model
 
     # ---------------------------------------------------------- debug images

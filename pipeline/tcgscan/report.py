@@ -15,11 +15,11 @@ TAG_TEXT = {
     "guided": "card lined up with the app's frame",
     "free": "card anywhere in the photo",
     "clean": "no glare/blur/sleeve/shadow", "glare": "glare", "blur": "blur", "sleeve": "in a sleeve",
-    "shadow": "shadow", "rot180": "upside down", "sideways": "sideways", "other_cards": "other cards in view",
+    "fingers": "fingers over the card", "shadow": "shadow", "rot180": "upside down", "sideways": "sideways", "other_cards": "other cards in view",
 }
 
 
-EFFECTS = ("rot180", "sideways", "sleeve", "glare", "shadow", "blur", "other_cards")
+EFFECTS = ("rot180", "sideways", "sleeve", "fingers", "glare", "shadow", "blur", "other_cards")
 
 
 def has_tag(tags: list[str], tag: str) -> bool:
@@ -85,6 +85,10 @@ def write_report(path: Path, s: dict, per_query: dict, entries) -> None:
             w(f"| {TAG_TEXT.get(tag, tag)} | {d['n']} | {_pct(d['right'])} | {_pct(d['good'])} |")
         w("")
 
+    ar = s["models"][best].get("artwork_reading") or {}
+    if ar.get("share"):
+        w(f"**Artwork reading** (the detector outlined the artwork box, not the card): used for {_pct(ar['share'])} "
+          f"of photos, right in {_pct(ar['right'])} of those ({best}).\n")
     w(f"### What goes wrong ({best}, full pipeline)\n")
     errs = s["models"][best]["detector"]["errors"]
     n = s["n_queries"]
