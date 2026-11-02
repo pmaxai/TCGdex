@@ -31,9 +31,10 @@ import numpy as np
 
 from .augment import load_rgba, synth_photo
 from .catalog import load_entries
-from .detect import RECT_H, RECT_W, as_artwork, detect_cards, rectify
+from .detect import RECT_H, RECT_W, as_artwork, detect_cards, quad_iou, rectify
 from .embedders import CARD_H, CARD_W, INPUT, PREP_VERSION, REGIONS, crop_region, get_embedder, to_card
 from .evaluate import IMG_EXT, READINGS, _labels, _rot180, fit_pca, load_photo, project, ref_embeddings, search
+from . import foil
 from .groups import artwork_groups
 from .labels import LabelResolver
 
@@ -167,8 +168,69 @@ def app_recognise(img: np.ndarray, fp: OnnxFingerprints, index: np.ndarray, ids:
     readings = [fp(card[None]), fp(_rot180(card[None])), fp(art_a[None]), fp(art_b[None])]
     res = search(index, ids, readings)[0]
     return {"detected": True, "quad": quad.round(2).tolist(),
-            "top": [{"id": c, "score": round(s, 5), "reading": READINGS[r]} for c, s, _, r in res[:5]],
+            "top": [{"id": c, "score": round(s, 5), "reading": READINGS[r], "entry": j} for c, s, j, r in res[:5]],
             "margin": round(res[0][1] - (res[1][1] if len(res) > 1 else 0.0), 5)}
+
+
+def foil_lab(entries, tex: np.ndarray, real: list[dict], db: Path, out_md: Path, n_synthetic: int = 300) -> float:
+    """How the single-photo foil check scores: synthetic photos of normal cards (made from
+    the scans, so never foil) and your labelled real photos (`Name 12-100__reverse.jpg`).
+    Returns the reverse-holo threshold for the app: above every normal card seen, with room."""
+    rng = np.random.default_rng(77)
+    con = sqlite3.connect(db)
+    rev_ids = {cid for cid, v in con.execute("SELECT id, variants FROM card_details") if v and '"reverse": true' in v}
+    con.close()
+    pool = [i for i, e in enumerate(entries) if e.card_id in rev_ids] or list(range(len(entries)))
+    synth = []
+    for i in rng.choice(pool, size=min(n_synthetic, len(pool)), replace=False):
+        e = entries[int(i)]
+        try:
+            photo, quad, _ = synth_photo(load_rgba(e.path), rng, guided=True)
+        except Exception:
+            continue
+        d = detect_cards(photo, max_cards=1)
+        # the app only checks a card it recognised, with that card's outline; a detection
+        # of something else would not get here
+        found = d[0].quad if d and quad_iou(d[0].quad, quad) >= 0.8 else None
+        for name, q in (("detected", found), ("true outline", quad)):
+            if q is None:
+                continue
+            g = foil.photo_grids(photo, np.asarray(q, np.float32), tex[int(i)])
+            sc = foil.scores(g, tex[int(i)])[0]
+            if np.isfinite(sc):
+                synth.append((name, sc))
+    det = np.array([sc for n, sc in synth if n == "detected"])
+    scored = [r for r in real if r.get("foil") and r["foil"]["score"] is not None]
+    real_normal = [r["foil"]["score"] for r in scored if r["foil"]["label"] == "normal"]
+    real_rev = [r["foil"]["score"] for r in scored if r["foil"]["label"] == "reverse"]
+    thr = max(foil.REVERSE_THRESHOLD, 1.25 * float(np.percentile(det, 99)) if len(det) else 0.0,
+              (max(real_normal) + 0.05) if real_normal else 0.0)
+    lines = ["## Foil check (single photo)", "",
+             "Score = detail in the blank parts of the text area relative to the printed text next to it, "
+             "minus the same for the card's scan (foil adds detail where the scan has none). "
+             f"The app calls it a reverse holo from **{thr:.2f}** (above the normal cards here, with room).", ""]
+    if real_rev and min(real_rev) < thr:
+        lines += [f"⚠️ {sum(1 for v in real_rev if v < thr)} of {len(real_rev)} labelled reverse holos score below that.", ""]
+    lines += ["| synthetic normal cards (outline) | photos | median | 90% | 95% | 99% | above reverse threshold |", "|---|---|---|---|---|---|---|"]
+    for name in ("detected", "true outline"):
+        v = np.array([s for n, s in synth if n == name])
+        if len(v):
+            lines.append(f"| {name} | {len(v)} | {np.median(v):.2f} | {np.percentile(v, 90):.2f} | {np.percentile(v, 95):.2f} | "
+                         f"{np.percentile(v, 99):.2f} | {np.mean(v >= foil.REVERSE_THRESHOLD) * 100:.1f}% |")
+    lines += ["", "| your photo | label | score | detail blank | detail text | says |", "|---|---|---|---|---|---|"]
+    for r in real:
+        f = r.get("foil")
+        if not f:
+            continue
+        if f["score"] is None:
+            lines.append(f"| {r['file']} | {f['label'] or '?'} | – | {f['art']:.1f} | {f['body']:.1f} | no blank/text contrast |")
+            continue
+        says = "reverse holo" if f["score"] >= thr else "normal"
+        lines.append(f"| {r['file']} | {f['label'] or '?'} | {f['score']:.2f} | {f['art']:.1f} | {f['body']:.1f} | {says} |")
+    out_md.write_text("\n".join(lines) + "\n")
+    for l in lines:
+        log.info("foil lab %s", l)
+    return thr
 
 
 def synthetic_detection_photos(n: int, seed: int = 4242) -> list[tuple[str, np.ndarray]]:
@@ -236,8 +298,12 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, model_name: str, out_dir: Pa
         "readings": ",".join(READINGS), **thresholds,
         "langs": ",".join(sorted({r[0] for r in sqlite3.connect(db).execute("SELECT DISTINCT lang FROM cards")})),
         "group_threshold": group_stats["threshold"],
+        "foil_version": foil.VERSION,
     }
     write_catalog(db, out_dir / "catalog.sqlite", entries, meta, groups)
+    tex = foil.reference_grids(entries, Path(emb_cache) / "foil_grids.npz")
+    (out_dir / "texture.u8").write_bytes(tex.tobytes())
+    log.info("foil texture grids: %d x %d", *tex.shape)
 
     # parity fixtures
     index32 = index.astype(np.float32)
@@ -250,12 +316,22 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, model_name: str, out_dir: Pa
                 p = Path(real_dir) / fname
                 if not p.exists() or p.suffix.lower() not in IMG_EXT:
                     continue
-                rec = app_recognise(load_photo(p), fp, index32, groups)
+                img = load_photo(p)
+                rec = app_recognise(img, fp, index32, groups)
                 truth = resolver.resolve(text).ids or None
                 rec.update(file=fname, truth=truth,
                            truth_groups=sorted({groups[i] for i, e in enumerate(entries) if truth and e.card_id in truth}) or None)
+                if rec.get("detected"):
+                    t = rec["top"][0]
+                    rq = foil.card_quad_for_reading(np.array(rec["quad"], np.float32), READINGS.index(t["reading"]))
+                    g = foil.photo_grids(img, rq, tex[t["entry"]])
+                    sc, art, body = foil.scores(g, tex[t["entry"]])
+                    rec["foil"] = {"entry": t["entry"], "card_quad": rq.round(2).tolist(), "grids": g.tolist(),
+                                   "score": round(sc, 4) if np.isfinite(sc) else None,
+                                   "art": round(art, 4), "body": round(body, 4), "label": foil.printing_label(fname)}
                 fixtures["real"].append(rec)
-                log.info("parity %s: %s", fname, rec.get("top", [{}])[0])
+                log.info("parity %s: %s foil %s", fname, rec.get("top", [{}])[0],
+                         {k: v for k, v in rec.get("foil", {}).items() if k in ("score", "art", "body", "label")})
         for name, photo in synthetic_detection_photos(n_synthetic):
             ok, png = cv2.imencode(".png", cv2.cvtColor(photo, cv2.COLOR_RGB2BGR))
             z.writestr(f"photos/{name}", png.tobytes())
@@ -264,6 +340,11 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, model_name: str, out_dir: Pa
                                           "quad": d[0].quad.round(2).tolist() if d else None})
         z.writestr("parity.json", json.dumps(fixtures, indent=1))
     (out_dir / "parity.zip").write_bytes(buf.getvalue())
+    thr = foil_lab(entries, tex, fixtures["real"], db, out_dir.parent / "foil-lab.md")
+    con = sqlite3.connect(out_dir / "catalog.sqlite")
+    con.execute("INSERT OR REPLACE INTO meta VALUES ('foil_reverse', ?)", (str(round(thr, 4)),))
+    con.commit()
+    con.close()
 
     files = {}
     for f in sorted(out_dir.iterdir()):

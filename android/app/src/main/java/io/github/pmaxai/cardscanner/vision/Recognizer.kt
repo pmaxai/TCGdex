@@ -80,14 +80,24 @@ class Recognizer(pack: Pack) : AutoCloseable {
     }
 
     /** The card's corners in its own order (rectify -> upright card), whichever reading won. */
-    fun cardQuad(r: Recognition, hit: Hit): Array<Point>? {
+    /** The upright card's outline for this reading. margin: extra room around a card rebuilt from its artwork box. */
+    fun cardQuad(r: Recognition, hit: Hit, margin: Double = 0.06): Array<Point>? {
         val q = r.quad ?: return null
         return when (hit.reading) {
             0 -> q
             1 -> arrayOf(q[2], q[3], q[0], q[1])
-            2 -> Readings.cardQuadFromArtwork(q, false, geometry)
-            else -> Readings.cardQuadFromArtwork(q, true, geometry)
+            2 -> Readings.cardQuadFromArtwork(q, false, geometry, margin)
+            else -> Readings.cardQuadFromArtwork(q, true, geometry, margin)
         }
+    }
+
+    /** Single-frame reverse holo score of the card in this frame (null: no texture data in the pack). */
+    fun foilScore(rgb: Mat, r: Recognition, hit: Hit, texture: ByteArray?): FoilCheck.Result? {
+        if (texture == null) return null
+        val quad = cardQuad(r, hit, margin = 0.0) ?: return null
+        val ref = FoilCheck.reference(texture, hit.entry)
+        val grids = FoilCheck.photoGrids(rgb, quad, ref, geometry.rectW, geometry.rectH)
+        return FoilCheck.scores(grids, ref).takeIf { !it.score.isNaN() }
     }
 
     /**

@@ -61,6 +61,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import io.github.pmaxai.cardscanner.data.Printing
+import io.github.pmaxai.cardscanner.vision.FoilEstimate
 import kotlinx.coroutines.delay
 import kotlin.math.cos
 import kotlin.math.sin
@@ -86,7 +88,7 @@ fun YouTubeScreen(state: UiState, vm: ScannerViewModel) {
                 CameraBox(state, vm, torch, Modifier.fillMaxHeight().aspectRatio(4f / 3f))
                 Column(Modifier.weight(1f).fillMaxHeight().then(tap).padding(16.dp)) {
                     TitleLine(state.settings.title)
-                    Reveal(state, Modifier.weight(1f).fillMaxWidth())
+                    Reveal(state, vm, Modifier.weight(1f).fillMaxWidth())
                     SessionBar(state)
                 }
             }
@@ -95,7 +97,7 @@ fun YouTubeScreen(state: UiState, vm: ScannerViewModel) {
                 Box(Modifier.fillMaxWidth().then(tap)) { TitleLine(state.settings.title) }
                 CameraBox(state, vm, torch, Modifier.fillMaxWidth().aspectRatio(3f / 4f))
                 Column(Modifier.weight(1f).fillMaxWidth().then(tap).padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    Reveal(state, Modifier.weight(1f).fillMaxWidth())
+                    Reveal(state, vm, Modifier.weight(1f).fillMaxWidth())
                     SessionBar(state)
                 }
             }
@@ -121,7 +123,7 @@ private fun TitleLine(title: String) {
 }
 
 @Composable
-private fun Reveal(state: UiState, modifier: Modifier) {
+private fun Reveal(state: UiState, vm: ScannerViewModel, modifier: Modifier) {
     val shown = state.shown
     Box(modifier, contentAlignment = Alignment.Center) {
         if (shown == null) {
@@ -134,13 +136,13 @@ private fun Reveal(state: UiState, modifier: Modifier) {
                         fadeIn(tween(120))) togetherWith fadeOut(tween(120))
                 },
                 label = "reveal",
-            ) { _ -> RevealCard(state.shown ?: shown, state.settings) }
+            ) { _ -> RevealCard(state.shown ?: shown, state.settings, vm::choosePrinting) }
         }
     }
 }
 
 @Composable
-private fun RevealCard(s: Shown, settings: Settings) {
+private fun RevealCard(s: Shown, settings: Settings, onPrinting: (Printing.Kind) -> Unit) {
     val value = s.value
     val hit = settings.threshold > 0 && (value ?: 0.0) >= settings.threshold
     val count = remember(s.serial) { Animatable(0f) }
@@ -154,30 +156,54 @@ private fun RevealCard(s: Shown, settings: Settings) {
             RoundedCornerShape(20.dp))
         .border(if (hit) 3.dp else 1.dp, if (hit) Gold else Color(0xFF2A2D34), RoundedCornerShape(20.dp))
         .padding(14.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            val placeholder = s.preview?.let { BitmapPainter(it.asImageBitmap()) }
-            AsyncImage(model = s.version.thumbnailUrl ?: s.priceCard.thumbnailUrl, contentDescription = s.version.name,
-                placeholder = placeholder, error = placeholder, fallback = placeholder,
-                modifier = Modifier.width(110.dp).aspectRatio(63f / 88f))
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(s.version.name, color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Black, maxLines = 2,
-                    overflow = TextOverflow.Ellipsis, lineHeight = 32.sp)
-                s.english?.let { Text(it.name, color = Color.White.copy(alpha = 0.8f), fontSize = 16.sp) }
-                Text("${s.version.setName} · ${s.version.numberText}", color = Muted, fontSize = 15.sp, maxLines = 1,
-                    overflow = TextOverflow.Ellipsis)
-                s.selected?.takeIf { s.priceCard.printings.size > 1 }?.let {
-                    Text(it.kind.label, color = Gold, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val placeholder = s.preview?.let { BitmapPainter(it.asImageBitmap()) }
+                AsyncImage(model = s.version.thumbnailUrl ?: s.priceCard.thumbnailUrl, contentDescription = s.version.name,
+                    placeholder = placeholder, error = placeholder, fallback = placeholder,
+                    modifier = Modifier.width(110.dp).aspectRatio(63f / 88f))
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(s.version.name, color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Black, maxLines = 2,
+                        overflow = TextOverflow.Ellipsis, lineHeight = 32.sp)
+                    s.english?.let { Text(it.name, color = Color.White.copy(alpha = 0.8f), fontSize = 16.sp) }
+                    Text("${s.version.setName} · ${s.version.numberText}", color = Muted, fontSize = 15.sp, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis)
+                    if (s.priceCard.printings.size <= 1) s.selected?.let {
+                        Text(it.kind.label, color = Gold, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(if (value == null) "–" else eur(count.value.toDouble()), color = if (hit) Gold else Color.White,
+                        fontSize = 46.sp, fontWeight = FontWeight.Black)
+                    if (settings.showPsa) s.priceCard.graded?.let { PsaLine(it, big = true) }
                 }
-                Spacer(Modifier.height(4.dp))
-                Text(if (value == null) "–" else eur(count.value.toDouble()), color = if (hit) Gold else Color.White,
-                    fontSize = 46.sp, fontWeight = FontWeight.Black)
-                if (settings.showPsa) s.priceCard.graded?.let { PsaLine(it, big = true) }
             }
+            if (s.priceCard.printings.size > 1) PrintingChips(s, onPrinting, Modifier.padding(top = 8.dp))
         }
         if (hit) {
             HitBadge(s.serial, Modifier.align(Alignment.TopEnd))
             Burst(s.serial)
+        }
+    }
+}
+
+/** Every printing of the card with its price; tap to say which one is in front of the camera. */
+@Composable
+private fun PrintingChips(s: Shown, onPrinting: (Printing.Kind) -> Unit, modifier: Modifier) {
+    Row(modifier.fillMaxWidth().padding(top = 4.dp).horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        s.priceCard.printings.forEach { p ->
+            val sel = p.kind == s.selected?.kind
+            val detected = s.foil?.let { f ->
+                (f.kind == FoilEstimate.Kind.REVERSE && p.kind == Printing.Kind.REVERSE) ||
+                    (f.kind == FoilEstimate.Kind.HOLO && p.kind == Printing.Kind.HOLO)
+            } == true
+            Text("${p.kind.label}${if (detected) " ✨" else ""} ${printingPrice(p)}",
+                color = if (sel) Ink else Color.White, fontSize = 14.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
+                modifier = Modifier
+                    .background(if (sel) Gold else Color(0xFF2A2D34), RoundedCornerShape(10.dp))
+                    .clickable { onPrinting(p.kind) }
+                    .padding(horizontal = 10.dp, vertical = 5.dp))
         }
     }
 }
@@ -224,10 +250,6 @@ private fun SessionBar(state: UiState) {
             Spacer(Modifier.width(12.dp))
             Text("Pack value ", color = Muted, fontSize = 15.sp)
             Text(eur(state.sessionValue), color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.weight(1f))
-            state.bestPull?.takeIf { (it.value ?: 0.0) > 0 }?.let {
-                Text("Best: ${it.name} ${eur(it.value)}", color = Gold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
         }
         if (items.isNotEmpty()) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 6.dp),

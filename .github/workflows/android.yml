@@ -46,6 +46,8 @@ jobs:
           mkdir -p $A/main/assets/pack $A/androidTest/assets/parity $A/androidTest/assets/real
           gh release download data-pack -D $A/main/assets/pack --clobber \
             -p model.onnx -p index.f16 -p catalog.sqlite -p pack.json
+          gh release download data-pack -D $A/main/assets/pack --clobber -p texture.u8 \
+            || echo "this data pack has no foil texture grids yet"
           gh release download data-pack -D /tmp --clobber -p parity.zip
           unzip -o -q /tmp/parity.zip -d $A/androidTest/assets/parity
           find testdata/real -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) \

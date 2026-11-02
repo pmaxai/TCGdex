@@ -9,10 +9,10 @@ on:
     inputs:
       langs:
         description: "Card languages (TCGdex codes, comma separated)"
-        default: "en,de,fr,es,it,pt,ja"
+        default: "en,de,ja,zh-cn,zh-tw"
       image_langs:
         description: "Languages whose card images are fingerprinted (others share artwork with English)"
-        default: "en,de,ja"
+        default: "en,de,ja,zh-cn,zh-tw"
       models:
         description: "Fingerprint models (phash, phash_art, mnv3, mnv3_art, dinov2s, dinov2s_art)"
         default: "phash,mnv3_art"
@@ -52,8 +52,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     env:
-      LANGS: ${{ inputs.langs || 'en,de,fr,es,it,pt,ja' }}
-      IMAGE_LANGS: ${{ inputs.image_langs || 'en,de,ja' }}
+      LANGS: ${{ inputs.langs || 'en,de,ja,zh-cn,zh-tw' }}
+      IMAGE_LANGS: ${{ inputs.image_langs || 'en,de,ja,zh-cn,zh-tw' }}
       MODELS: ${{ inputs.models || 'phash,mnv3_art' }}
       QUERIES: ${{ inputs.queries || '1500' }}
       MAX_SETS: ${{ inputs.max_sets || '0' }}
@@ -135,18 +135,19 @@ jobs:
             --emb-cache ../.cache/emb --models "$MODELS" --queries "$QUERIES" \
             --real ../testdata/real --out ../out
 
+      - name: Export the app's data pack
+        working-directory: pipeline
+        run: |
+          python -m tcgscan export --cache ../.cache/tcgdex --db ../out/catalog.sqlite --emb-cache ../.cache/emb \
+            --model mnv3_art --real ../testdata/real --results ../out/results.json --out ../out/app-pack
+
+      # after the export: it adds the foil texture grids to the cache
       - name: Save fingerprint cache
         if: always()
         uses: actions/cache/save@v4
         with:
           path: .cache/emb
           key: emb-${{ github.run_id }}
-
-      - name: Export the app's data pack
-        working-directory: pipeline
-        run: |
-          python -m tcgscan export --cache ../.cache/tcgdex --db ../out/catalog.sqlite --emb-cache ../.cache/emb \
-            --model mnv3_art --real ../testdata/real --results ../out/results.json --out ../out/app-pack
 
       # full catalog only; the Android build downloads it from here
       - name: Publish data pack (release 'data-pack')
@@ -165,6 +166,10 @@ jobs:
           if [ -f out/report.md ]; then
             cat out/report.md >> "$GITHUB_STEP_SUMMARY"
             echo "=====REPORT====="; cat out/report.md; echo "=====END REPORT====="   # also in the log
+          fi
+          if [ -f out/foil-lab.md ]; then
+            cat out/foil-lab.md >> "$GITHUB_STEP_SUMMARY"
+            echo "=====FOIL====="; cat out/foil-lab.md; echo "=====END FOIL====="
           fi
 
       - name: Upload report

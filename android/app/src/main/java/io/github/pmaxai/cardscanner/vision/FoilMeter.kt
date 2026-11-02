@@ -17,6 +17,9 @@ data class FoilEstimate(
     val art: Double,
     val body: Double,
     val frames: Int,
+    /** single-frame check against the card's scan (FoilCheck): mean score and frames, if available */
+    val staticScore: Double? = null,
+    val staticFrames: Int = 0,
 ) {
     enum class Kind { NORMAL, HOLO, REVERSE, UNSURE }
 }

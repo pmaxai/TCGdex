@@ -22,6 +22,10 @@ market, are the real test.
 
    Anything after a double underscore is ignored, so you can photograph the same card
    several times: `Glurak 4-102__sleeve.jpg`, `Glurak 4-102__binder.jpg`.
+   For the holo check, say the finish after the double underscore: `__reverse`,
+   `__holo` or `__normal`, e.g. `Darumaka 34-167__reverse.jpg`,
+   `Ninetales 27-167__normal.jpg`. The report's *Foil check* table then shows how
+   each photo scores.
 3. Upload them on GitHub: open this folder, then **Add file → Upload files**, then **Commit**.
    The pipeline starts by itself, and the results show up on the run's Summary page.
 

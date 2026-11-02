@@ -116,7 +116,7 @@ fun eur(v: Double?): String = v?.let { String.format(Locale.getDefault(), "%.2f 
 fun usd(v: Double?): String = v?.let { if (it >= 100) String.format(Locale.US, "$%.0f", it) else String.format(Locale.US, "$%.2f", it) } ?: "–"
 
 val LANG_NAMES = mapOf("en" to "English", "de" to "Deutsch", "fr" to "Français", "es" to "Español",
-    "it" to "Italiano", "pt" to "Português", "ja" to "日本語")
+    "it" to "Italiano", "pt" to "Português", "ja" to "日本語", "zh-tw" to "繁體中文", "zh-cn" to "简体中文", "ko" to "한국어")
 
 @Composable
 fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
@@ -317,10 +317,10 @@ fun FoilLine(s: Shown) {
     val text = when {
         s.printingByUser -> null
         f == null -> if (Printing.Kind.REVERSE in kinds || Printing.Kind.HOLO in kinds) "Tilt the card a little to check holo / reverse" else null
-        f.kind == FoilEstimate.Kind.REVERSE -> "Shimmer outside the artwork → looks like a reverse holo"
-        f.kind == FoilEstimate.Kind.HOLO -> "Shimmering artwork → looks like a holo"
-        f.kind == FoilEstimate.Kind.NORMAL -> "No foil shimmer seen → looks like the normal printing"
-        else -> "Holo check unsure – keep tilting, or tap the printing"
+        f.kind == FoilEstimate.Kind.REVERSE -> "✨ Foil outside the artwork → looks like a reverse holo"
+        f.kind == FoilEstimate.Kind.HOLO -> "✨ Shimmering artwork → looks like a holo"
+        f.kind == FoilEstimate.Kind.NORMAL -> "No foil seen → looks like the normal printing"
+        else -> "Holo check unsure – tilt the card a little, or tap the printing"
     }
     if (text != null) Text(text, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
 }

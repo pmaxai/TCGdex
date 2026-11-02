@@ -162,27 +162,34 @@ class Catalog(private val db: SQLiteDatabase) {
     }
 
     /**
-     * Which printings exist (TCGdex variants) and their prices. Cardmarket's price guide has
-     * the card's standard printing plus reverse holo; TCGplayer splits every printing (USD).
+     * Which printings exist and their prices. TCGplayer lists every printing it sells
+     * separately, which is the more reliable "does a reverse holo exist" source; TCGdex
+     * variants fill in where TCGplayer has nothing. Cardmarket's price guide has the
+     * standard printing plus reverse holo (its "holo" columns).
      */
     private fun printings(variantsJson: String?, rarity: String?, p: Prices?, tcg: Map<String, Double>): List<Printing> {
         val v = runCatching { variantsJson?.let { JSONObject(it) } }.getOrNull()
         fun has(k: String) = v?.optBoolean(k, false) == true
         val holoRarity = rarity?.contains("holo", ignoreCase = true) == true
+        val keys = tcg.keys
+        val tcgNormal = tcg["normal"] ?: tcg["unlimited"]
+        val tcgHolo = tcg["holofoil"] ?: tcg["unlimited-holofoil"]
+        val tcgReverse = tcg["reverse-holofoil"] ?: tcg["reverseholofoil"]
+        val tcgFirst = tcg["1st-edition-holofoil"] ?: tcg["1st-edition"] ?: tcg["1stedition"] ?: tcg["1st-edition-normal"]
+        val fromTcg = keys.isNotEmpty()
+        val normal = if (fromTcg) tcgNormal != null || (has("normal") && tcgHolo == null) else has("normal") || (v == null && !holoRarity)
+        val holo = if (fromTcg) tcgHolo != null else has("holo") || (v == null && holoRarity)
+        val reverse = has("reverse") || tcgReverse != null
+        val first = has("firstEdition") || tcgFirst != null
         val out = ArrayList<Printing>()
-        val normal = has("normal") || (v == null && !holoRarity)
-        val holo = has("holo") || (v == null && holoRarity)
-        if (normal) out += Printing(Printing.Kind.NORMAL, p?.headline, p?.avg30, p?.low, tcg["normal"] ?: tcg["unlimited"])
+        if (normal) out += Printing(Printing.Kind.NORMAL, p?.headline, p?.avg30, p?.low, tcgNormal)
         if (holo) {
             // Cardmarket's standard price is the holo price when the card has no non-holo printing
-            val eur = if (!normal) p?.headline else null
-            out += Printing(Printing.Kind.HOLO, eur, if (!normal) p?.avg30 else null, if (!normal) p?.low else null,
-                tcg["holofoil"] ?: tcg["unlimited-holofoil"])
+            out += Printing(Printing.Kind.HOLO, if (!normal) p?.headline else null, if (!normal) p?.avg30 else null,
+                if (!normal) p?.low else null, tcgHolo)
         }
-        if (has("reverse")) out += Printing(Printing.Kind.REVERSE, p?.headlineHolo, p?.avg30Holo, p?.lowHolo,
-            tcg["reverse-holofoil"] ?: tcg["reverseholofoil"])
-        if (has("firstEdition")) out += Printing(Printing.Kind.FIRST_EDITION, null, null, null,
-            tcg["1st-edition-holofoil"] ?: tcg["1st-edition"] ?: tcg["1stedition"])
+        if (reverse) out += Printing(Printing.Kind.REVERSE, p?.headlineHolo, p?.avg30Holo, p?.lowHolo, tcgReverse)
+        if (first) out += Printing(Printing.Kind.FIRST_EDITION, null, null, null, tcgFirst)
         if (out.isEmpty()) out += Printing(Printing.Kind.NORMAL, p?.headline, p?.avg30, p?.low, tcg.values.maxOrNull())
         return out
     }

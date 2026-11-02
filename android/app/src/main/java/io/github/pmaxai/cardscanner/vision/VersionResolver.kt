@@ -50,16 +50,24 @@ class VersionResolver : AutoCloseable {
     fun read(card: Bitmap, tryJapanese: Boolean): CardText {
         val img = InputImage.fromBitmap(card, 0)
         var text = recognise(latin, img, "latin")
-        var japaneseChars = 0
-        if (tryJapanese && (text == null || cjkCount(text.text) > 0 || latinWords(text.text) < 6)) {
+        val latinCount = text?.let { latinWords(it.text) } ?: 0
+        var asian: String? = null
+        var asianChars = 0
+        if (tryJapanese && (text == null || cjkCount(text.text) >= 2 || latinCount < 8)) {
             val jt = recognise(japanese, img, "japanese")
             if (jt != null) {
-                japaneseChars = cjkCount(jt.text)
-                if (japaneseChars >= 4) text = jt
+                val cjk = cjkCount(jt.text)
+                // an Asian card is full of CJK text; blurry English cards still give a few stray characters
+                if (cjk >= 8 && cjk > latinCount) {
+                    text = jt
+                    asianChars = cjk
+                    // Japanese always has kana (katakana names, hiragana in the rules); Chinese has none
+                    asian = if (kanaCount(jt.text) >= 3) "ja" else "zh"
+                }
             }
         }
         if (text == null) return CardText(null, null, null, 0.0, emptyMap(), "", "")
-        val result = analyse(text, card.height, japaneseChars)
+        val result = analyse(text, card.height, asian, asianChars)
         // the set number is tiny: read the bottom strip again, enlarged
         val strip = readNumberStrip(card)
         return if (strip != null) result.copy(number = strip.first, total = strip.second) else result
@@ -77,7 +85,7 @@ class VersionResolver : AutoCloseable {
         return null
     }
 
-    private fun analyse(t: Text, height: Int, japaneseChars: Int): CardText {
+    private fun analyse(t: Text, height: Int, asian: String?, asianChars: Int): CardText {
         val lines = t.textBlocks.flatMap { it.lines }
         val all = lines.joinToString("\n") { it.text }
         // card number: the lowest "123/456" on the card
@@ -105,7 +113,7 @@ class VersionResolver : AutoCloseable {
             val label = m.groupValues[1].ifEmpty { m.groupValues[2] }
             HP_LANGS[label]?.forEach { (lang, w) -> scores[lang] = (scores[lang] ?: 0.0) + w }
         }
-        if (japaneseChars >= 4) scores["ja"] = 3.0 + japaneseChars / 10.0
+        if (asian != null) scores[asian] = 3.0 + asianChars / 10.0
         val ranked = scores.entries.sortedByDescending { it.value }
         val top = ranked.firstOrNull()?.takeIf { it.value > 0 }
         val margin = if (top == null) 0.0 else top.value - (ranked.getOrNull(1)?.value ?: 0.0)
@@ -152,6 +160,9 @@ class VersionResolver : AutoCloseable {
 
         fun cjkCount(s: String): Int = s.count { Character.UnicodeScript.of(it.code).let { sc ->
             sc == Character.UnicodeScript.HIRAGANA || sc == Character.UnicodeScript.KATAKANA || sc == Character.UnicodeScript.HAN } }
+
+        fun kanaCount(s: String): Int = s.count { Character.UnicodeScript.of(it.code).let { sc ->
+            sc == Character.UnicodeScript.HIRAGANA || sc == Character.UnicodeScript.KATAKANA } }
 
         private fun latinWords(s: String): Int = Regex("[A-Za-z]{3,}").findAll(s).count()
 

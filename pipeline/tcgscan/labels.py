@@ -58,7 +58,8 @@ class LabelResolver:
             with_total = [e for e in cands if e.official == int(total)]
             cands = with_total or cands             # secret rares: number > total, keep all
         if name:
-            named = [e for e in cands if name in norm_text(e.name) or norm_text(e.name) in name]
+            # (Asian names fold to nothing: they never match a written name)
+            named = [e for e in cands if norm_text(e.name) and (name in norm_text(e.name) or norm_text(e.name) in name)]
             if not named:
                 return Resolved(raw, problem=f"no card named like '{name}' with number {number}")
             cands = named

@@ -40,9 +40,14 @@ downgrades), or restore the code from the tag.
     was printed in several sets.
   - **Other language?** chips let you correct it with one tap.
 - **Printings:** normal, holo, reverse holo and 1st edition each have their own price
-  chip. If a more valuable printing of the card exists, a ⚠ line says so, so you
-  don't miss a reverse holo or 1st edition in a box of commons. Tilting the card
-  slowly helps the experimental foil check (it watches the shine move).
+  chip (in YouTube mode too); tap the one in front of you. If a more valuable printing
+  exists, a ⚠ line says so, so you don't miss a reverse holo or 1st edition in a box
+  of commons.
+- **Foil check:** the app compares the card with its scan. A reverse holo's foil gives
+  the blank parts of the text area texture the printed card doesn't have; when it
+  sees that, it picks *Reverse holo* and marks it ✨. Tilting the card a little helps.
+  It's new: photos of your own reverse holos and holos (see `testdata/real/`) make
+  it better.
 - **Prices:** Cardmarket trend, 30-day average and lowest price (EUR) for the chosen
   printing, plus TCGplayer (USD) where Cardmarket has none.
 - **PSA 10 / 9 / 8:** recent eBay sold prices for graded copies (USD), if the data
@@ -56,7 +61,8 @@ downgrades), or restore the code from the tag.
   price-check videos. Portrait or landscape, it follows the phone on the tripod.
   - big card name and price with a count-up, and a "HIT" burst for cards above your
     alert price
-  - a session bar with card count, total value and best pull
+  - the printings as chips under the price: tap the right one if the app got it wrong
+  - a session bar with card count and total value
   - tap the panel for controls: new pack, remove last card, next card, light, exit
   - optional title (e.g. your channel name) at the top; no vibration while recording
 - **Light** turns on the torch. **Photo** recognises a picture from the gallery.

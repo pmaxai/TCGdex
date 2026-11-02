@@ -166,6 +166,38 @@ class ParityTest {
     }
 
     @Test
+    fun foilCheckMatchesPipeline() {
+        val texture = pack.texture
+        if (texture == null) { Log.i(TAG, "foil check: this pack has no texture grids, skipped"); return }
+        val items = fixtures.getJSONArray("real")
+        val lines = ArrayList<String>()
+        var bad = 0
+        var n = 0
+        for (i in 0 until items.length()) {
+            val it = items.getJSONObject(i)
+            val f = it.optJSONObject("foil") ?: continue
+            val img = loadAsset("real/${it.getString("file")}")
+            val ref = io.github.pmaxai.cardscanner.vision.FoilCheck.reference(texture, f.getInt("entry"))
+            val g = io.github.pmaxai.cardscanner.vision.FoilCheck.photoGrids(img, quadOf(f.getJSONArray("card_quad")), ref,
+                recognizer.geometry.rectW, recognizer.geometry.rectH)
+            img.release()
+            val want = f.getJSONArray("grids")
+            val close = (0 until want.length()).count { k -> kotlin.math.abs(g[k] - want.getInt(k)) <= 2 }
+            val score = io.github.pmaxai.cardscanner.vision.FoilCheck.scores(g, ref).score
+            val py = if (f.isNull("score")) Double.NaN else f.getDouble("score")
+            val sameScore = (score.isNaN() && py.isNaN()) || kotlin.math.abs(score - py) < 0.05
+            val ok = close >= want.length() * 0.9 && sameScore
+            n++
+            if (!ok) bad++
+            lines += "${it.getString("file")}: cells within 2: $close/${want.length()}, score app %.3f python %.3f %s"
+                .format(score, py, if (ok) "OK" else "DIFF")
+        }
+        lines.forEach { Log.i(TAG, it) }
+        Log.i(TAG, "foil check agrees on ${n - bad}/$n real photos")
+        assertTrue("foil check differs from the pipeline:\n" + lines.joinToString("\n"), bad == 0)
+    }
+
+    @Test
     fun realPhotosRecognisedLikePipeline() {
         val items = fixtures.getJSONArray("real")
         val catalog = Catalog(pack.db)

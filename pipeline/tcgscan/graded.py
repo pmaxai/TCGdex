@@ -40,6 +40,88 @@ def norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", s)
 
 
+ERA_PREFIX = re.compile(r"^\s*(?:sv|swsh|sm|xy|bw|me|hgss|dp|pop|ex)\s*\d*[a-z]?\s*[:\-]\s*", re.I)
+
+
+def set_keys(name: str) -> set[str]:
+    """Name variants for matching: TCGplayer-style names carry an era code
+    ('SV06: Twilight Masquerade', 'SWSH01: Sword & Shield Base Set')."""
+    keys = {norm(name)}
+    stripped = ERA_PREFIX.sub("", name or "")
+    keys.add(norm(stripped))
+    for k in list(keys):
+        if k.endswith("baseset") and len(k) > len("baseset"):
+            keys.add(k[:-len("baseset")])
+        for era in ("scarletandviolet", "swordandshield", "sunandmoon"):
+            if k.startswith(era) and len(k) > len(era) + 1 and not k.endswith("baseset"):
+                keys.add(k[len(era):])          # 'scarletandviolet151' -> '151'
+    return {k for k in keys if k}
+
+
+def _date(s) -> float | None:
+    try:
+        return time.mktime(time.strptime(str(s)[:10], "%Y-%m-%d"))
+    except (TypeError, ValueError):
+        return None
+
+
+def match_sets(ours: list[tuple], ppt_sets: list[dict]) -> dict[str, dict]:
+    """our set id -> PokemonPriceTracker set. By name first, then by release date
+    (and card count) for sets whose names differ too much."""
+    by_key: dict[str, list[dict]] = {}
+    for ps in ppt_sets:
+        for k in set_keys(_first(ps, "name", "setName", default="")):
+            by_key.setdefault(k, []).append(ps)
+    out: dict[str, dict] = {}
+    used: set[int] = set()
+    for sid, name, rel, n in ours:
+        cands = {id(ps): ps for k in set_keys(name) for ps in by_key.get(k, [])}
+        if len(cands) == 1:
+            ps = next(iter(cands.values()))
+            out[sid] = ps
+            used.add(id(ps))
+    for sid, name, rel, n in ours:
+        if sid in out:
+            continue
+        d0 = _date(rel)
+        if d0 is None:
+            continue
+        near = [ps for ps in ppt_sets if id(ps) not in used and (d := _date(ps.get("releaseDate"))) is not None
+                and abs(d - d0) <= 4 * 86400]
+        if len(near) > 1:
+            same_count = [ps for ps in near if ps.get("cardCount") and n and abs(int(ps["cardCount"]) - n) <= 2]
+            near = same_count or near
+        if len(near) > 1:
+            ours_words = set(re.findall(r"[a-z0-9]+", (name or "").lower()))
+            def overlap(ps):
+                w = set(re.findall(r"[a-z0-9]+", ERA_PREFIX.sub("", _first(ps, "name", default="")).lower()))
+                return len(w & ours_words) / max(1, len(w | ours_words))
+            near.sort(key=overlap, reverse=True)
+            near = near[:1] if overlap(near[0]) >= 0.34 else []
+        if len(near) == 1:
+            out[sid] = near[0]
+            used.add(id(near[0]))
+    return out
+
+
+class RateLimited(RuntimeError):
+    pass
+
+
+def credits_spent_today(cache_dir: Path) -> int:
+    """Credits used since midnight UTC, from the cached downloads (2 credits per card)."""
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    spent = 0
+    for f in Path(cache_dir).glob("*.json") if Path(cache_dir).exists() else []:
+        try:
+            d = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        if time.strftime("%Y-%m-%d", time.gmtime(d.get("fetched", 0))) == today:
+            spent += int(d.get("credits") or 2 * max(1, len(d.get("cards", []))))
+    return spent
+
+
 def norm_number(s) -> str:
     """'037/167' -> '37', 'TG05' -> 'TG5', 'SWSH001' -> 'SWSH1'."""
     s = str(s or "").split("/")[0].strip()
@@ -86,14 +168,14 @@ class Client:
                 log.warning("PokemonPriceTracker %s -> HTTP %d, waiting %.0fs", path, r.status_code, wait)
                 time.sleep(wait)
                 continue
-            if r.status_code in (401, 403):
-                raise SystemExit(f"PokemonPriceTracker refused the API key (HTTP {r.status_code}): {r.text[:200]}")
+            if r.status_code in (401, 402, 403):
+                raise RateLimited(f"PokemonPriceTracker refused the request (HTTP {r.status_code}): {r.text[:200]}")
             r.raise_for_status()
             used = r.headers.get("X-API-Calls-Consumed") or r.headers.get("x-credits-used")
             if used and str(used).isdigit():
                 self.credits_used += int(used)
             return r.json()
-        raise RuntimeError(f"PokemonPriceTracker {path} kept failing")
+        raise RateLimited(f"PokemonPriceTracker {path} kept failing (rate limit or server error)")
 
 
 def _items(resp) -> list[dict]:
@@ -106,56 +188,79 @@ def _items(resp) -> list[dict]:
     return []
 
 
-def fetch(db: Path, cache_dir: Path, budget: int = 18000, max_age_days: float = 7, key: str | None = None) -> None:
+def fetch(db: Path, cache_dir: Path, budget: int = 18000, max_age_days: float = 7, key: str | None = None,
+          daily_limit: int = 19500) -> None:
+    """Never fails the pipeline: on any API trouble the cached prices are used."""
     key = key or os.environ.get("POKEMONPRICETRACKER_API_KEY", "").strip()
     cache_dir = Path(cache_dir)
     if not key:
         log.info("no POKEMONPRICETRACKER_API_KEY: skipping PSA price download (cached data is still used)")
     else:
-        client = Client(key, cache_dir)
-        sets_resp = client.get("sets", {"limit": 500})
-        ppt_sets = _items(sets_resp)
-        if ppt_sets:
-            log.info("PokemonPriceTracker: %d sets; first set fields: %s", len(ppt_sets), sorted(ppt_sets[0]))
-        by_name = {norm(_first(s, "name", "setName", default="")): s for s in ppt_sets}
-
-        con = sqlite3.connect(db)
-        ours = con.execute("""SELECT s.id, s.name, s.release_date, COUNT(c.id) FROM sets s
-                              JOIN cards c ON c.set_id = s.id AND c.lang = 'en'
-                              WHERE s.lang = 'en' GROUP BY s.id ORDER BY s.release_date DESC""").fetchall()
-        con.close()
-        plan = []
-        for sid, name, rel, n in ours:
-            ps = by_name.get(norm(name))
-            if not ps:
-                continue
-            f = cache_dir / f"{sid}.json"
-            age = (time.time() - f.stat().st_mtime) / 86400 if f.exists() else 1e9
-            if age > max_age_days:
-                plan.append((age, sid, name, ps, n))
-        plan.sort(key=lambda t: -t[0])     # never fetched / stalest first (newest sets win ties)
-        unmatched = len(ours) - sum(1 for _, name, _, _ in ours if norm(name) in by_name)
-        log.info("PSA prices: %d of our sets matched by name (%d not), %d due for refresh, budget %d credits",
-                 len(ours) - unmatched, unmatched, len(plan), budget)
-        spent = 0
-        probe = True
-        for _, sid, name, ps, n in plan:
-            cost = 2 * max(n, 1)
-            if spent + cost > budget:
-                continue
-            set_param = _first(ps, "name", "setName")
-            resp = client.get("cards", {"set": set_param, "fetchAllInSet": "true", "includeEbay": "true"})
-            cards = _items(resp)
-            if probe and cards:
-                c0 = cards[0]
-                log.info("probe %s: card fields %s; ebay fields %s; grades %s", name, sorted(c0),
-                         sorted((c0.get("ebay") or {})), sorted(((c0.get("ebay") or {}).get("salesByGrade") or {}))[:12])
-                probe = False
-            (cache_dir / f"{sid}.json").write_text(json.dumps({"set": name, "fetched": time.time(), "cards": cards}))
-            spent += cost
-            log.info("PSA prices: %s (%d cards) fetched, ~%d credits used so far", name, len(cards), spent)
-            time.sleep(max(1.0, len(cards) / 10 * 1.1))       # stay under 60 calls/minute
+        try:
+            _download(db, cache_dir, budget, max_age_days, key, daily_limit)
+        except Exception as ex:   # noqa: BLE001 - PSA prices are optional
+            log.warning("PSA price download stopped: %s (cached prices are still used)", ex)
     build_table(db, cache_dir)
+
+
+def _download(db: Path, cache_dir: Path, budget: int, max_age_days: float, key: str, daily_limit: int) -> None:
+    spent_today = credits_spent_today(cache_dir)
+    budget = min(budget, daily_limit - spent_today)
+    if budget <= 0:
+        log.info("PSA prices: today's credits are used up (%d spent since midnight UTC); using the cache", spent_today)
+        return
+    client = Client(key, cache_dir)
+    sets_resp = client.get("sets", {"limit": 500})
+    ppt_sets = _items(sets_resp)
+    if ppt_sets:
+        log.info("PokemonPriceTracker: %d sets; first set fields: %s", len(ppt_sets), sorted(ppt_sets[0]))
+
+    con = sqlite3.connect(db)
+    ours = con.execute("""SELECT s.id, s.name, s.release_date, COUNT(c.id) FROM sets s
+                          JOIN cards c ON c.set_id = s.id AND c.lang = 'en'
+                          WHERE s.lang = 'en' GROUP BY s.id ORDER BY s.release_date DESC""").fetchall()
+    con.close()
+    matched = match_sets(ours, ppt_sets)
+    plan = []
+    for sid, name, rel, n in ours:
+        ps = matched.get(sid)
+        if not ps:
+            continue
+        f = cache_dir / f"{sid}.json"
+        age = (time.time() - f.stat().st_mtime) / 86400 if f.exists() else 1e9
+        if age > max_age_days:
+            plan.append((age, sid, name, ps, n))
+    plan.sort(key=lambda t: -t[0])     # never fetched / stalest first (newest sets win ties)
+    unmatched = [f"{name} ({rel})" for sid, name, rel, _ in ours if sid not in matched]
+    used = {id(ps) for ps in matched.values()}
+    theirs = [f"{_first(ps, 'name', default='?')} ({str(ps.get('releaseDate', ''))[:10]})" for ps in ppt_sets if id(ps) not in used]
+    log.info("PSA prices: %d of our sets matched (%d not), %d due for refresh, budget %d credits (%d spent today)",
+             len(matched), len(unmatched), len(plan), budget, spent_today)
+    log.info("PSA prices: our sets without a match: %s", "; ".join(unmatched[:60]))
+    log.info("PSA prices: their sets without a match: %s", "; ".join(theirs[:60]))
+    spent = 0
+    probe = True
+    for _, sid, name, ps, n in plan:
+        cost = 2 * max(n, 1)
+        if spent + cost > budget:
+            continue
+        set_param = _first(ps, "name", "setName")
+        try:
+            resp = client.get("cards", {"set": set_param, "fetchAllInSet": "true", "includeEbay": "true"})
+        except RateLimited as ex:
+            log.warning("PSA prices: stopping for today: %s", ex)
+            break
+        cards = _items(resp)
+        if probe and cards:
+            c0 = cards[0]
+            log.info("probe %s: card fields %s; ebay fields %s; grades %s", name, sorted(c0),
+                     sorted((c0.get("ebay") or {})), sorted(((c0.get("ebay") or {}).get("salesByGrade") or {}))[:12])
+            probe = False
+        (cache_dir / f"{sid}.json").write_text(json.dumps({"set": name, "fetched": time.time(), "cards": cards,
+                                                          "credits": 2 * max(1, len(cards))}))
+        spent += cost
+        log.info("PSA prices: %s (%d cards) fetched, ~%d credits used so far", name, len(cards), spent)
+        time.sleep(max(1.0, len(cards) / 10 * 1.1))       # stay under 60 calls/minute
 
 
 def build_table(db: Path, cache_dir: Path) -> None:

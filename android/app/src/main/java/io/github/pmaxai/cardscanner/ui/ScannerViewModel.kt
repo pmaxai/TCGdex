@@ -114,6 +114,9 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     private var resolver: VersionResolver? = null
     private var tracker = ScanTracker(0.055f, 0.02f)
     private var foil: FoilMeter? = null
+    private var foilThreshold = 0.2
+    private var foilSum = 0.0
+    private var foilN = 0
     private var marginSure = 0.055f
     private var marginLikely = 0.02f
     private val busy = AtomicBoolean(false)
@@ -146,6 +149,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                 foil = FoilMeter(rec.geometry)
                 marginSure = p.metaFloat("margin_99", marginSure)
                 marginLikely = p.metaFloat("margin_90", marginLikely)
+                foilThreshold = p.metaFloat("foil_reverse", 0.2f).toDouble()
                 tracker = ScanTracker(marginSure, marginLikely)
                 val psa = runCatching {
                     p.db.rawQuery("SELECT COUNT(*) FROM graded", null).use { c -> c.moveToFirst() && c.getInt(0) > 0 }
@@ -221,13 +225,19 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         recognizer?.readText(rgb, r, hit, res, tryJapanese)
     }.onFailure { Log.w(TAG, "text recognition failed", it) }.getOrNull()
 
-    /** Which exact card (set, language) of this artwork group the photo shows. */
+    /**
+     * Which exact card (set, language) of this artwork group the photo shows.
+     * Asian prints (Japanese, Chinese) are only chosen when the printed text is clearly
+     * Japanese or Chinese; otherwise the western version is shown, even when the
+     * picture matched an Asian scan best.
+     */
     private fun resolveVersion(group: String, entry: Int?, text: CardText?): CardInfo? {
         val cat = catalog ?: return null
         val p = pack ?: return null
         val versions = cat.versions(group)
         if (versions.isEmpty()) return cat.card(group, "en")
-        var id = entry?.let { p.entryCard[it] }?.takeIf { e -> versions.any { it.first == e } } ?: versions.first().first
+        val entryCard = entry?.let { p.entryCard[it] }
+        val entryLang = entry?.let { p.entryLang[it] }
         val num = VersionResolver.normNumber(text?.number)
         val total = text?.total?.let { VersionResolver.normNumber(it) }
         // exact number first; then one easily confused digit (6/8, 1/7 ...) if the set size agrees
@@ -240,36 +250,46 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             return total != null && c.setTotal != null && VersionResolver.normNumber(c.setTotal.toString()) == total &&
                 VersionResolver.numberClose(n, num)
         }
-        // Japanese print: pick among the Japanese members
-        if (text?.lang == "ja") {
-            val ja = versions.filter { it.second == "ja" }.map { it.first }.distinct()
-            if (ja.isNotEmpty()) {
-                val pick = ja.firstOrNull { num.isNotEmpty() && numberMatches(it, "ja") }
-                    ?: ja.firstOrNull { num.isNotEmpty() && numberMatches(it, "ja", fuzzy = true) } ?: ja.first()
-                return cat.cardExact(pick, "ja")
+        fun byNumber(pool: List<Pair<String, String>>): String? {
+            if (num.isEmpty()) return null
+            val ids = pool.map { it.first }.distinct()
+            fun m(cid: String, fuzzy: Boolean) = pool.any { it.first == cid && numberMatches(cid, it.second, fuzzy) }
+            return ids.firstOrNull { m(it, false) } ?: ids.firstOrNull { m(it, true) }
+        }
+        // Asian print: only when the text says so
+        val asianLangs = when (text?.lang) {
+            "ja" -> listOf("ja")
+            "zh" -> listOf("zh-tw", "zh-cn")
+            else -> emptyList()
+        }
+        if (asianLangs.isNotEmpty()) {
+            val pool = versions.filter { it.second in asianLangs }
+            if (pool.isNotEmpty()) {
+                val ids = pool.map { it.first }.distinct()
+                val id = byNumber(pool) ?: entryCard?.takeIf { it in ids } ?: ids.first()
+                val langs = pool.filter { it.first == id }.map { it.second }
+                val lang = entryLang?.takeIf { entryCard == id && it in langs } ?: asianLangs.first { it in langs }
+                return cat.cardExact(id, lang)
             }
         }
-        // set: the member whose printed number matches
-        if (num.isNotEmpty()) {
-            val ids = versions.filter { it.second != "ja" }.map { it.first }.distinct()
-            fun matches(cid: String, fuzzy: Boolean) = versions.any { it.first == cid && numberMatches(cid, it.second, fuzzy) }
-            val byNumber = ids.filter { matches(it, false) }.ifEmpty { ids.filter { matches(it, true) } }
-            if (byNumber.isNotEmpty() && id !in byNumber) id = byNumber.first()
-        }
+        // western print (also when the text could not be read)
+        val pool = versions.filter { it.second !in ASIAN }.ifEmpty { versions }
+        val ids = pool.map { it.first }.distinct()
+        val id = byNumber(pool) ?: entryCard?.takeIf { it in ids } ?: group.takeIf { it in ids } ?: ids.first()
         // language: printed words + name, among the languages this card exists in
-        val langs = versions.filter { it.first == id }.map { it.second }.distinct()
+        val langs = pool.filter { it.first == id }.map { it.second }.distinct()
         val scores = HashMap<String, Double>()
+        val names = langs.mapNotNull { cat.cardExact(id, it)?.name }.toSet()
         for (l in langs) {
-            var s = text?.langScores?.get(l) ?: 0.0
+            var sc = text?.langScores?.get(l) ?: 0.0
             val name = cat.cardExact(id, l)?.name
-            val names = langs.mapNotNull { cat.cardExact(id, it)?.name }.toSet()
             if (text != null && name != null && names.size > 1 && text.nameText.isNotBlank()) {
-                s += 2.0 * VersionResolver.nameSimilarity(text.nameText, name)
+                sc += 2.0 * VersionResolver.nameSimilarity(text.nameText, name)
             }
-            scores[l] = s
+            scores[l] = sc
         }
         val bestLang = scores.maxByOrNull { it.value }?.takeIf { it.value > 0.0 }?.key
-            ?: "en".takeIf { it in langs } ?: entry?.let { p.entryLang[it] } ?: langs.first()
+            ?: "en".takeIf { it in langs } ?: entryLang?.takeIf { it in langs } ?: langs.first()
         return cat.cardExact(id, bestLang) ?: cat.card(id, "en")
     }
 
@@ -279,7 +299,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val english = if (version.lang == "en") null else cat.cardExact(version.id, "en") ?: cat.englishOf(group)
         val hasOwnPrice = version.printings.any { it.value != null }
         val priceCard = if (hasOwnPrice || english == null) version else english
-        val langs = cat.versions(group).filter { it.first == version.id || it.second == "ja" }
+        val langs = cat.versions(group).filter { it.first == version.id || it.second in ASIAN }
             .mapNotNull { (id, l) -> cat.cardExact(id, l) }.filter { it.lang != version.lang || it.id != version.id }
         return Shown(group, version, english, priceCard, priceCard.printings.firstOrNull()?.kind, false, null, conf,
             alternatives, langs, text, locked, fromPhoto, preview, ++serial)
@@ -290,34 +310,65 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val p = pack ?: return
         val hit = r.hits.firstOrNull { it.group == group }
         val versions = cat.versions(group)
-        val text = hit?.let { readText(rgb, r, it, tryJapanese = versions.any { v -> v.second == "ja" }) }
+        val text = hit?.let { readText(rgb, r, it, tryJapanese = versions.any { v -> v.second in ASIAN }) }
         lastText = text
         val version = resolveVersion(group, hit?.entry, text) ?: return
         val alternatives = r.hits.filter { it.group != group }.take(3).mapNotNull { h ->
             cat.card(p.entryCard[h.entry], p.entryLang[h.entry])?.let { Candidate(h.group, it, h.score, Recognizer.READINGS[h.reading]) }
         }
         foil?.reset()
-        val shown = build(group, version, text, conf, alternatives, locked = false, fromPhoto = fromPhoto, preview = r.preview)
+        foilSum = 0.0
+        foilN = 0
+        var shown = build(group, version, text, conf, alternatives, locked = false, fromPhoto = fromPhoto, preview = r.preview)
+        if (hit != null) staticFoil(rgb, r, hit)?.let { est ->
+            shown = shown.copy(foil = est, printing = autoPrinting(shown, est.kind, strongOnly = true))
+        }
         _state.update { s -> s.copy(shown = shown, session = if (s.settings.youtube && !fromPhoto) addToSession(s, shown) else s.session) }
         maybeAlert(shown)
     }
 
+    /** Adds this frame's single-frame foil score; the verdict uses the mean over the card's frames. */
+    private fun staticFoil(rgb: Mat, r: Recognition, hit: Hit): FoilEstimate? {
+        val res = runCatching { recognizer?.foilScore(rgb, r, hit, pack?.texture) }
+            .onFailure { Log.w(TAG, "foil check failed", it) }.getOrNull() ?: return null
+        foilSum += res.score
+        foilN++
+        val mean = foilSum / foilN
+        val kind = when {
+            mean >= foilThreshold * 1.4 || (foilN >= 2 && mean >= foilThreshold) -> FoilEstimate.Kind.REVERSE
+            foilN >= 3 && mean < foilThreshold * 0.6 -> FoilEstimate.Kind.NORMAL
+            else -> FoilEstimate.Kind.UNSURE
+        }
+        return FoilEstimate(kind, res.blank, res.text, 0, mean, foilN)
+    }
+
+    /** The printing to select for a foil verdict (unless the user picked one). */
+    private fun autoPrinting(s: Shown, kind: FoilEstimate.Kind, strongOnly: Boolean = false): Printing.Kind? {
+        if (s.printingByUser) return s.printing
+        val kinds = s.priceCard.printings.map { it.kind }
+        return when (kind) {
+            FoilEstimate.Kind.HOLO -> Printing.Kind.HOLO.takeIf { it in kinds } ?: s.printing
+            FoilEstimate.Kind.REVERSE -> if (strongOnly && (s.foil?.staticScore ?: foilSum / maxOf(1, foilN)) < foilThreshold * 1.4)
+                s.printing else Printing.Kind.REVERSE.takeIf { it in kinds } ?: s.printing
+            FoilEstimate.Kind.NORMAL -> kinds.firstOrNull { it == Printing.Kind.NORMAL || it == Printing.Kind.HOLO } ?: s.printing
+            FoilEstimate.Kind.UNSURE -> s.printing
+        }
+    }
+
     private fun trackFoil(current: Shown, r: Recognition, rgb: Mat) {
         val hit = r.best ?: return
-        val quad = cardQuad(r, hit) ?: return
-        val meter = foil ?: return
-        meter.add(rgb, quad)
-        val est = meter.estimate() ?: return
-        var printing = current.printing
-        if (!current.printingByUser) {
-            val kinds = current.priceCard.printings.map { it.kind }
-            printing = when (est.kind) {
-                FoilEstimate.Kind.HOLO -> Printing.Kind.HOLO.takeIf { it in kinds } ?: printing
-                FoilEstimate.Kind.REVERSE -> Printing.Kind.REVERSE.takeIf { it in kinds } ?: printing
-                FoilEstimate.Kind.NORMAL -> kinds.firstOrNull { it == Printing.Kind.NORMAL || it == Printing.Kind.HOLO } ?: printing
-                FoilEstimate.Kind.UNSURE -> printing
-            }
+        val still = staticFoil(rgb, r, hit)
+        val quad = cardQuad(r, hit)
+        val meter = foil
+        val motion = if (quad != null && meter != null) { meter.add(rgb, quad); meter.estimate() } else null
+        // the check against the scan decides when it is sure; the shimmer while tilting otherwise
+        val est = when {
+            still != null && still.kind != FoilEstimate.Kind.UNSURE -> still
+            motion != null && motion.kind != FoilEstimate.Kind.UNSURE ->
+                motion.copy(staticScore = still?.staticScore, staticFrames = still?.staticFrames ?: 0)
+            else -> still ?: motion ?: return
         }
+        val printing = autoPrinting(current, est.kind)
         _state.update { s ->
             val sh = s.shown?.takeIf { it.serial == current.serial } ?: return@update s
             val updated = sh.copy(foil = est, printing = printing)
@@ -343,7 +394,10 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                     .joinToString(" ") { "${it.key} %.1f".format(it.value) })
                 add("name bar: ${t.nameText.take(40)}")
             }
-            st.shown?.foil?.let { f -> add("holo check: ${f.kind} (artwork %.2f, card %.2f, %d frames)".format(f.art, f.body, f.frames)) }
+            st.shown?.foil?.let { f ->
+                add("holo check: ${f.kind}" + (f.staticScore?.let { " – foil score %.2f (reverse from %.2f, %d frames)".format(it, foilThreshold, f.staticFrames) } ?: "") +
+                    if (f.frames > 0) " – shimmer: artwork %.2f, card %.2f, %d frames".format(f.art, f.body, f.frames) else "")
+            }
         }) else null
         _state.update { it.copy(liveQuad = quad, liveFrame = w to h, liveConfidence = conf, debug = debug ?: it.debug) }
     }
@@ -411,6 +465,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         synchronized(lock) {
             tracker.reset()
             foil?.reset()
+            foilSum = 0.0
+            foilN = 0
         }
         _state.update { it.copy(shown = null, paused = false) }
     }
@@ -460,5 +516,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
 
     companion object {
         const val TAG = "CardScanner"
+        /** languages with their own set ids and script */
+        val ASIAN = setOf("ja", "ko", "zh-tw", "zh-cn", "th")
     }
 }

@@ -26,6 +26,8 @@ class Pack(
     val entryLang: Array<String>,
     /** artwork group of each entry: same picture across languages and reprints */
     val entryGroup: Array<String>,
+    /** foil check: n x 72 texture cells of each reference image (null in older packs) */
+    val texture: ByteArray?,
 ) {
     val modelPath: String get() = File(dir, "model.onnx").absolutePath
 
@@ -33,7 +35,9 @@ class Pack(
     fun metaFloat(key: String, default: Float): Float = meta[key]?.toFloatOrNull() ?: default
 
     companion object {
+        const val FOIL_CELLS = 72
         private val FILES = listOf("pack.json", "model.onnx", "index.f16", "catalog.sqlite")
+        private val OPTIONAL = listOf("texture.u8")
 
         fun hasBundledPack(ctx: Context): Boolean =
             runCatching { ctx.assets.open("pack/pack.json").close() }.isSuccess
@@ -48,7 +52,8 @@ class Pack(
             if (installed != version) {
                 dir.deleteRecursively()
                 dir.mkdirs()
-                for (name in FILES.reversed()) {          // pack.json last: marks a complete copy
+                val bundledFiles = ctx.assets.list("pack")?.toSet() ?: emptySet()
+                for (name in OPTIONAL.filter { it in bundledFiles } + FILES.reversed()) {   // pack.json last: marks a complete copy
                     ctx.assets.open("pack/$name").use { input ->
                         File(dir, "$name.tmp").outputStream().use { input.copyTo(it, 1 shl 20) }
                     }
@@ -90,8 +95,11 @@ class Pack(
             val index = FloatArray(n * dim)
             for (i in index.indices) index[i] = Half.toFloat(halves.get(i))
 
+            val texture = File(dir, "texture.u8").takeIf { it.exists() }?.readBytes()
+                ?.takeIf { it.size == n * FOIL_CELLS }
+
             return Pack(dir, version, meta, db, index, n, dim, cards.requireNoNulls(), langs.requireNoNulls(),
-                groups.requireNoNulls())
+                groups.requireNoNulls(), texture)
         }
     }
 }

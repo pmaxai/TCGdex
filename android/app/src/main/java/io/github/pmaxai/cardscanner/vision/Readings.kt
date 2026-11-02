@@ -85,7 +85,7 @@ object Readings {
      * Returned in the card's own order (tl, tr, br, bl of the upright card), so
      * [rectify] gives an upright card. Used to read the card's text.
      */
-    fun cardQuadFromArtwork(quad: Array<Point>, upsideDown: Boolean, g: Geometry): Array<Point> {
+    fun cardQuadFromArtwork(quad: Array<Point>, upsideDown: Boolean, g: Geometry, margin: Double = 0.06): Array<Point> {
         val q = CardDetector.orderQuad(quad)
         val land = arrayOf(q[3], q[0], q[1], q[2])
         val src = if (upsideDown) arrayOf(land[2], land[3], land[0], land[1]) else land
@@ -98,7 +98,7 @@ object Readings {
         val s = MatOfPoint2f(*src)
         val h = Imgproc.getPerspectiveTransform(dst, s)            // card coordinates -> photo
         // a little margin: the artwork box position varies between card eras
-        val m = 0.06
+        val m = margin
         val corners = MatOfPoint2f(Point(-m * cw, -m * ch), Point((1 + m) * cw, -m * ch),
             Point((1 + m) * cw, (1 + m) * ch), Point(-m * cw, (1 + m) * ch))
         val out = MatOfPoint2f()
