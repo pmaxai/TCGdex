@@ -197,6 +197,7 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, model_name: str, out_dir: Pa
         "timm_name": model.timm_name, "dim": pca_dim, "entries": len(entries), "prep_version": PREP_VERSION,
         "card_w": CARD_W, "card_h": CARD_H, "rect_w": RECT_W, "rect_h": RECT_H,
         "art_x": ax, "art_y": ay, "art_w": aw, "art_h": ah, "input": INPUT,
+        "art_box": ",".join(str(v) for v in REGIONS["art"]),
         "readings": ",".join(READINGS), **thresholds,
     }
     write_catalog(db, out_dir / "catalog.sqlite", entries, meta)

@@ -42,7 +42,7 @@ def main(argv: list[str] | None = None) -> None:
     x.add_argument("--db", type=Path, default=Path("out/catalog.sqlite"))
     x.add_argument("--emb-cache", type=Path, default=Path(".cache/emb"))
     x.add_argument("--model", default="mnv3_art")
-    x.add_argument("--pca", type=int, default=256)
+    x.add_argument("--pca", type=int, default=512)
     x.add_argument("--real", type=Path, default=None)
     x.add_argument("--results", type=Path, default=Path("out/results.json"))
     x.add_argument("--out", type=Path, default=Path("out/app-pack"))

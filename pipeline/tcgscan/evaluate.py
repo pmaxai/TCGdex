@@ -220,7 +220,7 @@ def embed_queries(model: Embedder, queries: list[Query]) -> tuple[dict, float]:
     return out, ms
 
 
-PCA_DIM = 256      # compressed fingerprint size tested for the phone app
+PCA_DIMS = (256, 512)   # compressed fingerprint sizes tested for the phone app
 
 
 def fit_pca(x: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
@@ -429,8 +429,9 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, models: list[str], n_queries
         for vname, sl in model.views.items():
             base = f"{name}_{vname}" if vname else name
             variants.append((base, sl, None))
-            if name != "phash" and view(ref[:1], sl).shape[1] > PCA_DIM:
-                variants.append((f"{base}_pca{PCA_DIM}", sl, fit_pca(view(ref, sl), PCA_DIM)))
+            for k in PCA_DIMS:
+                if name != "phash" and view(ref[:1], sl).shape[1] > k:
+                    variants.append((f"{base}_pca{k}", sl, fit_pca(view(ref, sl), k)))
         for label, sl, pca in variants:
             tf = (lambda e, sl=sl, pca=pca: project(view(e, sl), pca))
             ref_t = tf(ref)
