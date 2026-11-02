@@ -21,6 +21,8 @@ OUTER_SUPPORT = 0.0            # ...if its sides are visible at least this well
 OUTER_SCORE_FRAC = 0.25
 REFINE = True                  # snap each side to the edge pixels along it
 EXPAND = True                  # grow an inner-panel outline to the card's outer border
+USE_HULL = True                # also build quads from convex hulls (repairs ragged outlines)
+WORK_SIZES = (800,)            # detection runs on the photo scaled to these longest sides
 
 
 @dataclass
@@ -250,23 +252,31 @@ def expand_to_border(quad: np.ndarray, edges: np.ndarray, img_rgb: np.ndarray,
     return out
 
 
+def _prior_weight(quad: np.ndarray, prior: tuple[float, float, float], shape) -> float:
+    """1.0 for a card where the guide frame is, falling off with distance and size mismatch."""
+    hh, ww = shape[:2]
+    cx, cy, ch = prior
+    q = order_quad(quad)
+    c = q.mean(0) / np.array([ww, hh])
+    size = (np.linalg.norm(q[3] - q[0]) + np.linalg.norm(q[2] - q[1])) / 2 / hh
+    d = np.hypot(c[0] - cx, c[1] - cy)
+    return float(np.exp(-(d / 0.18) ** 2) * np.exp(-(np.log(max(size, 1e-3) / ch) / 0.35) ** 2) + 0.05)
+
+
 def _inside(pt: np.ndarray, quad: np.ndarray) -> bool:
     return cv2.pointPolygonTest(quad.astype(np.float32).reshape(-1, 1, 2), (float(pt[0]), float(pt[1])), False) >= 0
 
 
-def detect_cards(img_rgb: np.ndarray, max_cards: int = 1, min_area_frac: float = 0.03,
-                 work_size: int = 800) -> list[Detection]:
-    """Return up to max_cards card quads, best first."""
+def _scale_candidates(img_rgb: np.ndarray, work_size: int, min_area_frac: float, prior, debug, si: int):
+    """Card-shaped candidates at one working resolution, quads in original image coords."""
     h, w = img_rgb.shape[:2]
     scale = min(1.0, work_size / max(h, w))
     small = cv2.resize(img_rgb, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale < 1 else img_rgb
-    gray = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
-    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+    gray = cv2.GaussianBlur(cv2.cvtColor(small, cv2.COLOR_RGB2GRAY), (5, 5), 0)
     img_area = float(small.shape[0] * small.shape[1])
-
-    cands: list[tuple[float, np.ndarray, float]] = []    # (score, quad, edge support)
     maps = list(_edge_maps(small, gray))
     union = cv2.dilate(np.bitwise_or.reduce(maps), np.ones((3, 3), np.uint8))
+    cands = []
     for edges in maps:
         contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
         for c in contours:
@@ -280,27 +290,57 @@ def detect_cards(img_rgb: np.ndarray, max_cards: int = 1, min_area_frac: float =
                 if len(approx) == 4 and cv2.isContourConvex(approx):
                     quads.append(approx.reshape(4, 2).astype(np.float32))
                     break
-            hull = cv2.convexHull(c)
-            hull_area = cv2.contourArea(hull)
-            if hull_area > 0 and area / hull_area > 0.8:     # mostly convex blob
-                hq = _hull_to_quad(cv2.approxPolyDP(hull, 0.005 * peri, True))
-                if hq is not None and area / max(cv2.contourArea(hq), 1) > 0.8:
-                    quads.append(hq)
+            if USE_HULL:
+                hull = cv2.convexHull(c)
+                hull_area = cv2.contourArea(hull)
+                if hull_area > 0 and area / hull_area > 0.8:     # mostly convex blob
+                    hq = _hull_to_quad(cv2.approxPolyDP(hull, 0.005 * peri, True))
+                    if hq is not None and area / max(cv2.contourArea(hq), 1) > 0.8:
+                        quads.append(hq)
             for quad in quads:
                 s = _quad_score(quad, img_area)
                 if s <= 0:
+                    if debug is not None:
+                        debug.append((quad / scale, "shape"))
                     continue
                 sup_mean, sup_min = _edge_support(quad, union)
                 if sup_min < SUPPORT_MIN:
+                    if debug is not None:
+                        debug.append((quad / scale, "support"))
                     continue
-                cands.append((s * sup_mean ** SUPPORT_POW, quad, sup_mean))
+                if prior is not None:
+                    s *= _prior_weight(quad, prior, small.shape)
+                if debug is not None:
+                    debug.append((quad / scale, "candidate"))
+                cands.append((s * sup_mean ** SUPPORT_POW, quad / scale, sup_mean, si))
+    return cands, {"scale": scale, "small": small, "gray": gray, "union": union}
+
+
+def detect_cards(img_rgb: np.ndarray, max_cards: int = 1, min_area_frac: float = 0.03,
+                 work_sizes: tuple[int, ...] | None = None, prior: tuple[float, float, float] | None = None,
+                 debug: list | None = None) -> list[Detection]:
+    """Return up to max_cards card quads, best first.
+
+    work_sizes: detection runs on the photo scaled to each of these longest
+    sides; candidates from all scales compete (coarse scales see a card's
+    outline as one clean shape, fine scales place the corners more precisely).
+    prior: (cx, cy, height) of where the card is expected, as fractions of the
+    image (the app's on-screen guide frame). Candidates far from it score lower.
+    debug: if a list is given, every quad considered is appended as
+    (quad in image coords, stage) with stage 'shape', 'support' or 'candidate'.
+    """
+    cands, ctx = [], []
+    for si, ws in enumerate(work_sizes or WORK_SIZES):
+        c, x = _scale_candidates(img_rgb, ws, min_area_frac, prior, debug, si)
+        cands += c
+        ctx.append(x)
 
     cands.sort(key=lambda t: -t[0])
-    kept: list[list] = []          # [group best score, quad, score of quad]
-    for s, q, sup in cands:
-        clash = [i for i, (_, k, _) in enumerate(kept) if _inside(q.mean(0), k) or _inside(k.mean(0), q)]
+    kept: list[list] = []          # [group best score, quad, score of quad, scale index]
+    for s, q, sup, si in cands:
+        clash = [i for i, k in enumerate(kept) if _inside(q.mean(0), k[1]) or _inside(k[1].mean(0), q)]
         if not clash:
-            kept.append([s, q, s])
+            kept.append([s, q, s, si])
             continue
         # q overlaps an already kept shape. Prefer the outer one (card rather than
         # its inner panel or artwork box) if its outline is clearly visible too.
@@ -310,15 +350,20 @@ def detect_cards(img_rgb: np.ndarray, max_cards: int = 1, min_area_frac: float =
         ratio = cv2.contourArea(q) / max(cv2.contourArea(g[1]), 1)
         if OUTER_MIN_RATIO < ratio < 4.5 and _inside(g[1].mean(0), q) and sup >= OUTER_SUPPORT \
                 and s > OUTER_SCORE_FRAC * g[0]:
-            g[1], g[2] = q, s
+            g[1], g[2], g[3] = q, s, si
     kept = kept[:max_cards]
     if REFINE and kept:
-        raw = np.bitwise_or.reduce([_auto_canny(gray), _auto_canny(gray, 0.33, 0.8)])
+        raws: dict[int, np.ndarray] = {}
         for g in kept:
-            g[1] = refine_quad(g[1], raw)
+            x = ctx[g[3]]
+            if g[3] not in raws:
+                raws[g[3]] = np.bitwise_or.reduce([_auto_canny(x["gray"]), _auto_canny(x["gray"], 0.33, 0.8)])
+            raw, sc = raws[g[3]], x["scale"]
+            q = refine_quad(g[1] * sc, raw)
             if EXPAND:
-                g[1] = refine_quad(expand_to_border(g[1], union, small), raw)
-    return [Detection(order_quad(q / scale), s) for _, q, s in kept]
+                q = refine_quad(expand_to_border(q, x["union"], x["small"]), raw)
+            g[1] = q / sc
+    return [Detection(order_quad(g[1]), g[2]) for g in kept]
 
 
 def rectify(img_rgb: np.ndarray, quad: np.ndarray, size: tuple[int, int] = (RECT_W, RECT_H)) -> np.ndarray:

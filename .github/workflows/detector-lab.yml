@@ -1,0 +1,48 @@
+name: Detector lab
+
+# Compares card-detector variants on synthetic photos of real cards (no AI
+# models, a few minutes). Results: the run's Summary page.
+
+on:
+  workflow_dispatch:
+    inputs:
+      photos:
+        description: "Synthetic photos per scenario"
+        default: "400"
+      max_sets:
+        description: "Sets to draw cards from"
+        default: "15"
+
+concurrency:
+  group: detector-lab
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install (no AI libraries needed)
+        run: pip install numpy opencv-python-headless pillow requests
+      - name: Restore TCGdex cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/tcgdex
+          key: tcgdex-${{ github.run_id }}
+          restore-keys: tcgdex-
+      - name: Catalog (from cache)
+        working-directory: pipeline
+        run: python -m tcgscan fetch --cache ../.cache/tcgdex --db ../out/catalog.sqlite --max-sets "${{ inputs.max_sets }}" --no-prices
+      - name: Detector lab
+        working-directory: pipeline
+        run: python -m tcgscan detector-lab --cache ../.cache/tcgdex --db ../out/catalog.sqlite --photos "${{ inputs.photos }}" --out ../out/detector-lab.md
+      - name: Show results on the run page
+        if: always()
+        run: if [ -f out/detector-lab.md ]; then cat out/detector-lab.md >> "$GITHUB_STEP_SUMMARY"; fi

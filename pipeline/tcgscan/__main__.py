@@ -31,6 +31,12 @@ def main(argv: list[str] | None = None) -> None:
     e.add_argument("--out", type=Path, default=Path("out"))
     e.add_argument("--seed", type=int, default=1234)
 
+    d = sub.add_parser("detector-lab", help="compare card-detector variants (no AI models)")
+    d.add_argument("--cache", type=Path, default=Path(".cache/tcgdex"))
+    d.add_argument("--db", type=Path, default=Path("out/catalog.sqlite"))
+    d.add_argument("--photos", type=int, default=400)
+    d.add_argument("--out", type=Path, default=Path("out/detector-lab.md"))
+
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
 
@@ -41,6 +47,12 @@ def main(argv: list[str] | None = None) -> None:
         fetch_catalog(client, a.db, [x.strip() for x in a.langs.split(",") if x.strip()], a.price_lang,
                       with_details=not a.no_prices, download_images=not a.no_images, max_sets=a.max_sets,
                       exclude_series=tuple(x.strip() for x in a.exclude_series.split(",") if x.strip()))
+    elif a.cmd == "detector-lab":
+        from .lab import run as lab_run
+        text = lab_run(a.db, a.cache, a.photos)
+        a.out.parent.mkdir(parents=True, exist_ok=True)
+        a.out.write_text(text, encoding="utf-8")
+        print(text)
     else:
         from .evaluate import run
         run(a.db, a.cache, a.emb_cache, [m.strip() for m in a.models.split(",") if m.strip()], a.queries,

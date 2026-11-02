@@ -112,12 +112,20 @@ class SynthMeta:
     blur: bool = False
     distractors: int = 0
     card_frac: float = 0.0
+    guided: bool = False
     tags: list[str] = field(default_factory=list)
 
 
+GUIDE = (0.5, 0.5, 0.7)        # app guide frame: centre x, centre y, card height (fractions)
+
+
 def synth_photo(card_rgba: np.ndarray, rng: np.random.Generator,
-                distractors: list[np.ndarray] | tuple = ()) -> tuple[np.ndarray, np.ndarray, SynthMeta]:
-    """Returns (photo RGB uint8, ground-truth quad tl,tr,br,bl of the upright card, meta)."""
+                distractors: list[np.ndarray] | tuple = (), guided: bool = False
+                ) -> tuple[np.ndarray, np.ndarray, SynthMeta]:
+    """Returns (photo RGB uint8, ground-truth quad tl,tr,br,bl of the upright card, meta).
+
+    guided=True mimics the app: the user lines the card up with an on-screen
+    frame, so it is roughly centred, upright and of the expected size."""
     H, W = CANVAS_H, CANVAS_W
     meta = SynthMeta()
     canvas = random_background(rng, H, W)
@@ -133,12 +141,18 @@ def synth_photo(card_rgba: np.ndarray, rng: np.random.Generator,
         meta.distractors += 1
 
     # target card pose
-    rot = float(np.clip(rng.normal(0, 8), -25, 25))
-    if rng.random() < 0.10:
-        rot += 180; meta.rot180 = True
-    elif rng.random() < 0.08:
-        rot += 90; meta.sideways = True
-    ch = rng.uniform(0.45, 0.85) * H
+    if guided:
+        rot = float(np.clip(rng.normal(0, 4), -12, 12))
+        if rng.random() < 0.05:
+            rot += 180; meta.rot180 = True
+        ch = GUIDE[2] * rng.uniform(0.8, 1.2) * H
+    else:
+        rot = float(np.clip(rng.normal(0, 8), -25, 25))
+        if rng.random() < 0.10:
+            rot += 180; meta.rot180 = True
+        elif rng.random() < 0.08:
+            rot += 90; meta.sideways = True
+        ch = rng.uniform(0.45, 0.85) * H
     q = _card_quad(rng, ch, rot, rng.uniform(0, 0.05))
     # fit inside the canvas with a margin, then place randomly
     span = q.max(0) - q.min(0)
@@ -146,7 +160,11 @@ def synth_photo(card_rgba: np.ndarray, rng: np.random.Generator,
     q *= fit
     lo = -q.min(0) + 0.02 * np.array([W, H])
     hi = np.array([W, H]) - q.max(0) - 0.02 * np.array([W, H])
-    q += np.array([rng.uniform(lo[0], max(lo[0], hi[0])), rng.uniform(lo[1], max(lo[1], hi[1]))], np.float32)
+    if guided:   # near the guide centre, still fully inside the photo
+        want = np.array([GUIDE[0] * W, GUIDE[1] * H]) + rng.normal(0, 0.05, 2) * np.array([W, H])
+        q += np.clip(want, lo, np.maximum(lo, hi)).astype(np.float32)
+    else:
+        q += np.array([rng.uniform(lo[0], max(lo[0], hi[0])), rng.uniform(lo[1], max(lo[1], hi[1]))], np.float32)
     meta.card_frac = float(cv2.contourArea(q) / (W * H))
     canvas = _paste(canvas, card, q)
     card_mask = _quad_mask(q, H, W)
@@ -204,6 +222,7 @@ def synth_photo(card_rgba: np.ndarray, rng: np.random.Generator,
         ok, buf = cv2.imencode(".jpg", photo[..., ::-1], [cv2.IMWRITE_JPEG_QUALITY, int(rng.integers(35, 91))])
         photo = cv2.imdecode(buf, cv2.IMREAD_COLOR)[..., ::-1].copy()
 
+    meta.guided = guided
     meta.tags = [k for k in ("rot180", "sideways", "sleeve", "glare", "shadow", "blur") if getattr(meta, k)]
     if meta.distractors:
         meta.tags.append("other_cards")
