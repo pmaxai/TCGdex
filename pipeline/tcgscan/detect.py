@@ -22,6 +22,7 @@ OUTER_SCORE_FRAC = 0.25
 REFINE = True                  # snap each side to the edge pixels along it
 EXPAND = True                  # grow an inner-panel outline to the card's outer border
 USE_HULL = True                # also build quads from convex hulls (repairs ragged outlines)
+USE_LINES = False              # also assemble quads from straight edge lines (cards touching others)
 WORK_SIZES = (800,)            # detection runs on the photo scaled to these longest sides
 
 
@@ -267,6 +268,77 @@ def _inside(pt: np.ndarray, quad: np.ndarray) -> bool:
     return cv2.pointPolygonTest(quad.astype(np.float32).reshape(-1, 1, 2), (float(pt[0]), float(pt[1])), False) >= 0
 
 
+def _line_quads(edges: np.ndarray, max_lines: int = 18) -> list[np.ndarray]:
+    """Card-shaped quads assembled from straight edge lines.
+
+    Works where contours fail: when a card touches neighbouring cards its
+    outline merges with theirs, but its four straight sides are still there."""
+    h, w = edges.shape
+    md = min(h, w)
+    segs = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=40, minLineLength=0.12 * md, maxLineGap=0.02 * max(h, w))
+    if segs is None:
+        return []
+    segs = np.asarray(segs).reshape(-1, 4).astype(np.float32)   # OpenCV 4: (N,1,4), OpenCV 5: (N,4)
+    x1, y1, x2, y2 = segs.T
+    length = np.hypot(x2 - x1, y2 - y1)
+    phi = (np.arctan2(y2 - y1, x2 - x1) + np.pi / 2) % np.pi          # normal angle in [0, pi)
+    rho = x1 * np.cos(phi) + y1 * np.sin(phi)
+    # merge collinear segments into lines, strongest first
+    lines: list[list[float]] = []                                    # [phi, rho, support]
+    for i in np.argsort(-length):
+        for ln in lines:
+            dphi = abs(phi[i] - ln[0])
+            r = rho[i]
+            if dphi > np.pi / 2:                                     # wrap-around: same line, flipped normal
+                dphi, r = np.pi - dphi, -r
+            if dphi < np.deg2rad(3) and abs(r - ln[1]) < 0.015 * md:
+                ln[2] += length[i]
+                break
+        else:
+            lines.append([float(phi[i]), float(rho[i]), float(length[i])])
+    lines = sorted(lines, key=lambda t: -t[2])[:max_lines]
+
+    def angdiff(a, b):
+        d = abs(a - b) % np.pi
+        return min(d, np.pi - d)
+
+    def same_dir_rho(a, b):   # rho of b expressed with a's normal direction
+        return b[1] if abs(a[0] - b[0]) < np.pi / 2 else -b[1]
+
+    pairs = []
+    for i in range(len(lines)):
+        for j in range(i + 1, len(lines)):
+            a, b = lines[i], lines[j]
+            if angdiff(a[0], b[0]) < np.deg2rad(12):
+                d = abs(a[1] - same_dir_rho(a, b))
+                if d > 0.12 * md:
+                    pairs.append((a, b, d))
+    out = []
+    for p in range(len(pairs)):
+        for q in range(p + 1, len(pairs)):
+            a, b, d1 = pairs[p]
+            c, e, d2 = pairs[q]
+            if not np.deg2rad(65) < angdiff(a[0], c[0]) < np.deg2rad(115):
+                continue
+            if not 0.6 < min(d1, d2) / max(d1, d2) < 0.85:
+                continue
+            pts = []
+            for l1, l2 in ((a, c), (c, b), (b, e), (e, a)):
+                m = np.array([[np.cos(l1[0]), np.sin(l1[0])], [np.cos(l2[0]), np.sin(l2[0])]])
+                if abs(np.linalg.det(m)) < 1e-6:
+                    break
+                pts.append(np.linalg.solve(m, [l1[1], l2[1]]))
+            if len(pts) < 4:
+                continue
+            quad = np.array(pts, np.float32)
+            if (quad[:, 0] < -0.02 * w).any() or (quad[:, 0] > 1.02 * w).any() or \
+                    (quad[:, 1] < -0.02 * h).any() or (quad[:, 1] > 1.02 * h).any():
+                continue
+            if cv2.isContourConvex(order_quad(quad).reshape(-1, 1, 2)):
+                out.append(quad)
+    return out
+
+
 def _scale_candidates(img_rgb: np.ndarray, work_size: int, min_area_frac: float, prior, debug, si: int):
     """Card-shaped candidates at one working resolution, quads in original image coords."""
     h, w = img_rgb.shape[:2]
@@ -277,6 +349,27 @@ def _scale_candidates(img_rgb: np.ndarray, work_size: int, min_area_frac: float,
     maps = list(_edge_maps(small, gray))
     union = cv2.dilate(np.bitwise_or.reduce(maps), np.ones((3, 3), np.uint8))
     cands = []
+
+    def consider(quad: np.ndarray) -> None:
+        s = _quad_score(quad, img_area)
+        if s <= 0:
+            if debug is not None:
+                debug.append((quad / scale, "shape"))
+            return
+        sup_mean, sup_min = _edge_support(quad, union)
+        if sup_min < SUPPORT_MIN:
+            if debug is not None:
+                debug.append((quad / scale, "support"))
+            return
+        if prior is not None:
+            s *= _prior_weight(quad, prior, small.shape)
+        if debug is not None:
+            debug.append((quad / scale, "candidate"))
+        cands.append((s * sup_mean ** SUPPORT_POW, quad / scale, sup_mean, si))
+
+    if USE_LINES:
+        for quad in _line_quads(union):
+            consider(quad)
     for edges in maps:
         contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
         for c in contours:
@@ -298,21 +391,7 @@ def _scale_candidates(img_rgb: np.ndarray, work_size: int, min_area_frac: float,
                     if hq is not None and area / max(cv2.contourArea(hq), 1) > 0.8:
                         quads.append(hq)
             for quad in quads:
-                s = _quad_score(quad, img_area)
-                if s <= 0:
-                    if debug is not None:
-                        debug.append((quad / scale, "shape"))
-                    continue
-                sup_mean, sup_min = _edge_support(quad, union)
-                if sup_min < SUPPORT_MIN:
-                    if debug is not None:
-                        debug.append((quad / scale, "support"))
-                    continue
-                if prior is not None:
-                    s *= _prior_weight(quad, prior, small.shape)
-                if debug is not None:
-                    debug.append((quad / scale, "candidate"))
-                cands.append((s * sup_mean ** SUPPORT_POW, quad / scale, sup_mean, si))
+                consider(quad)
     return cands, {"scale": scale, "small": small, "gray": gray, "union": union}
 
 

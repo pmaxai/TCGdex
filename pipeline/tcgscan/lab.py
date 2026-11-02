@@ -30,16 +30,15 @@ VARIANTS: dict[str, dict] = {
     "current": {},
     "no edge check": {"SUPPORT_MIN": 0.0, "SUPPORT_POW": 0},
     "no border expansion": {"EXPAND": False},
-    "no hull repair": {"USE_HULL": False},
-    "no outer preference": {"PREFER_OUTER": False},
     "work size 600": {"WORK_SIZES": (600,)},
-    "work size 500": {"WORK_SIZES": (500,)},
-    "work size 400": {"WORK_SIZES": (400,)},
     "600, no edge check": {"WORK_SIZES": (600,), "SUPPORT_MIN": 0.0, "SUPPORT_POW": 0},
-    "600, edge check 0.15": {"WORK_SIZES": (600,), "SUPPORT_MIN": 0.15},
     "multi-scale 400+800": {"WORK_SIZES": (400, 800)},
-    "multi-scale 450+650": {"WORK_SIZES": (450, 650)},
     "multi-scale 400+600+800": {"WORK_SIZES": (400, 600, 800)},
+    "multi 400+600+800, no edge check": {"WORK_SIZES": (400, 600, 800), "SUPPORT_MIN": 0.0, "SUPPORT_POW": 0},
+    "multi 400+600+800, edge check 0.15": {"WORK_SIZES": (400, 600, 800), "SUPPORT_MIN": 0.15},
+    "lines": {"USE_LINES": True},
+    "lines + multi 400+800": {"USE_LINES": True, "WORK_SIZES": (400, 800)},
+    "lines + multi 400+600+800": {"USE_LINES": True, "WORK_SIZES": (400, 600, 800)},
 }
 DEFAULTS = {k: getattr(detect, k) for v in VARIANTS.values() for k in v}
 
@@ -100,6 +99,44 @@ def _explain(photos, prior) -> Counter:
     return why
 
 
+def ref_image_stats(entries, n: int = 400, seed: int = 5) -> list[str]:
+    """Do the reference scans have margins around the actual card?"""
+    r = np.random.default_rng(seed)
+    rows = []
+    for i in r.choice(len(entries), size=min(n, len(entries)), replace=False):
+        im = load_rgba(entries[int(i)].path)
+        a = im[..., 3]
+        h, w = a.shape
+        ys, xs = np.nonzero(a > 128)
+        transparent = float((a < 128).mean())
+        if len(xs):
+            box = (xs.min() / w, ys.min() / h, (xs.max() + 1) / w, (ys.max() + 1) / h)
+        else:
+            box = (0, 0, 0, 0)
+        # uniform-colour margin: how far in from each side do rows/cols match the outermost line?
+        rgb = im[..., :3].astype(np.int16)
+        def depth(lines):
+            ref = lines[0]
+            for k, ln in enumerate(lines):
+                if np.abs(ln - ref).sum(-1).mean() > 40:
+                    return k
+            return len(lines)
+        m = [depth([rgb[k] for k in range(h // 4)]) / h, depth([rgb[h - 1 - k] for k in range(h // 4)]) / h,
+             depth([rgb[:, k] for k in range(w // 4)]) / w, depth([rgb[:, w - 1 - k] for k in range(w // 4)]) / w]
+        rows.append((w, h, transparent, box, np.mean(m)))
+    sizes = Counter((w, h) for w, h, *_ in rows)
+    tr = np.array([t for _, _, t, _, _ in rows])
+    boxes = np.array([b for *_, b, _ in rows])
+    marg = np.array([m for *_, m in rows])
+    out = ["\n### Reference images\n",
+           f"Sizes: {', '.join(f'{w}x{h} ({c})' for (w, h), c in sizes.most_common(4))}.  ",
+           f"Transparent pixels: median {np.median(tr):.1%}, 90th pct {np.percentile(tr, 90):.1%}.  ",
+           f"Opaque area box (median x0,y0,x1,y1): {', '.join(f'{v:.3f}' for v in np.median(boxes, 0))}.  ",
+           f"Uniform-colour band at the image edge (card border or scan margin): median {np.median(marg):.1%} "
+           f"of the size, 90th pct {np.percentile(marg, 90):.1%}; images with a band > 6%: {(marg > 0.06).mean():.1%}.\n"]
+    return out
+
+
 def run(db: Path, cache_dir: Path, n: int, seed: int = 99) -> str:
     t0 = time.time()
     entries = load_entries(db, cache_dir)
@@ -131,5 +168,6 @@ def run(db: Path, cache_dir: Path, n: int, seed: int = 99) -> str:
         for reason, c in why.most_common():
             explain_out.append(f"| {reason} | {c} ({c / n:.1%}) |")
     lines += explain_out
+    lines += ref_image_stats(entries)
     lines.append(f"\nRuntime {time.time() - t0:.0f}s.")
     return "\n".join(lines) + "\n"
