@@ -27,12 +27,12 @@ import cv2
 import numpy as np
 from PIL import Image, ImageOps
 
-from .augment import flatten, load_rgba, oracle_crop, synth_photo
+from .augment import GUIDE, flatten, load_rgba, oracle_crop, synth_photo
 from .catalog import Entry, load_entries
 from .detect import RECT_H, RECT_W, detect_cards, draw_quad, quad_iou, rectify
 from .embedders import CARD_H, CARD_W, PREP_VERSION, Embedder, get_embedder, timed_embed, to_card, view
 from .labels import LabelResolver
-from .report import write_report
+from .report import has_tag, write_report
 
 log = logging.getLogger(__name__)
 IMG_EXT = {".jpg", ".jpeg", ".png", ".webp"}
@@ -136,8 +136,11 @@ def _generate(entries: list[Entry], qi: int, ei: int, seed: int):
             j = int(r.integers(len(entries)))
             if entries[j].card_id != entries[ei].card_id:
                 distract.append(load_rgba(entries[j].path))
-    photo, quad, meta = synth_photo(card, r, distract)
-    dets = detect_cards(photo, max_cards=1)
+    guided = qi % 2 == 1          # half the photos: card lined up with the app's guide frame
+    photo, quad, meta = synth_photo(card, r, distract, guided=guided)
+    dets = detect_cards(photo, max_cards=1, prior=GUIDE if guided else None)
+    if guided:
+        meta.tags.append("guided")
     return r, photo, quad, meta, dets
 
 
@@ -152,6 +155,8 @@ def make_queries(entries: list[Entry], n: int, seed: int, debug_dir: Path | None
         if dets:
             iou = quad_iou(dets[0].quad, quad)
             det_crop = to_card(rectify(photo, dets[0].quad))
+        elif "guided" in meta.tags:   # the app matches what is inside its guide frame
+            det_crop = to_card(rectify(photo, guide_quad(photo)))
         orc = to_card(oracle_crop(photo, quad, r))
         if debug_dir is not None and qi < n_examples:
             vis = draw_quad(photo, quad, (0, 120, 255), 3)
@@ -232,8 +237,8 @@ def detection_stats(queries: list[Query]) -> dict:
                ("slightly off, e.g. inner panel only (0.8-0.9)", (iou >= 0.8) & (iou < 0.9)),
                ("good (0.9-0.95)", (iou >= 0.9) & (iou < 0.95)), ("precise (>= 0.95)", iou >= 0.95)]
     by_tag = {}
-    for tag in ("clean", "glare", "blur", "sleeve", "shadow", "rot180", "sideways", "other_cards"):
-        sel = np.array([(not q.tags) if tag == "clean" else tag in q.tags for q in queries])
+    for tag in ("guided", "free", "clean", "glare", "blur", "sleeve", "shadow", "rot180", "sideways", "other_cards"):
+        sel = np.array([has_tag(q.tags, tag) for q in queries])
         if sel.any():
             by_tag[tag] = {"n": int(sel.sum()), "right": float((iou[sel] >= 0.6).mean()),
                            "good": float((iou[sel] >= 0.9).mean())}
@@ -280,14 +285,15 @@ def load_photo(path: Path) -> np.ndarray:
         return np.asarray(ImageOps.exif_transpose(im).convert("RGB"))
 
 
-def _fallback_quad(img: np.ndarray) -> np.ndarray:
-    """No card found: use a centred card-shaped box (what the app's guide frame would do)."""
+def guide_quad(img: np.ndarray, guide: tuple[float, float, float] = GUIDE) -> np.ndarray:
+    """The app's on-screen guide frame as a quad (used when no card is found)."""
     h, w = img.shape[:2]
-    ch = 0.8 * h
+    cx, cy, gh = guide
+    ch = gh * h
     cw = ch * 63 / 88
     if cw > 0.9 * w:
         cw = 0.9 * w; ch = cw * 88 / 63
-    x0, y0 = (w - cw) / 2, (h - ch) / 2
+    x0, y0 = cx * w - cw / 2, cy * h - ch / 2
     return np.array([[x0, y0], [x0 + cw, y0], [x0 + cw, y0 + ch], [x0, y0 + ch]], np.float32)
 
 
@@ -350,7 +356,7 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, models: list[str], n_queries
                 continue
             img = load_photo(p)
             dets = detect_cards(img, max_cards=1)
-            quad = dets[0].quad if dets else _fallback_quad(img)
+            quad = dets[0].quad if dets else guide_quad(img)
             crop = rectify(img, quad)
             lab = resolver.resolve(text)
             if text and lab.problem:

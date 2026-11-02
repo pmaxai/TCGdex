@@ -28,17 +28,10 @@ log = logging.getLogger(__name__)
 
 VARIANTS: dict[str, dict] = {
     "current": {},
+    "single scale 800 (old)": {"WORK_SIZES": (800,), "SUPPORT_MIN": 0.25},
     "no edge check": {"SUPPORT_MIN": 0.0, "SUPPORT_POW": 0},
     "no border expansion": {"EXPAND": False},
-    "work size 600": {"WORK_SIZES": (600,)},
-    "600, no edge check": {"WORK_SIZES": (600,), "SUPPORT_MIN": 0.0, "SUPPORT_POW": 0},
-    "multi-scale 400+800": {"WORK_SIZES": (400, 800)},
-    "multi-scale 400+600+800": {"WORK_SIZES": (400, 600, 800)},
-    "multi 400+600+800, no edge check": {"WORK_SIZES": (400, 600, 800), "SUPPORT_MIN": 0.0, "SUPPORT_POW": 0},
-    "multi 400+600+800, edge check 0.15": {"WORK_SIZES": (400, 600, 800), "SUPPORT_MIN": 0.15},
-    "lines": {"USE_LINES": True},
-    "lines + multi 400+800": {"USE_LINES": True, "WORK_SIZES": (400, 800)},
-    "lines + multi 400+600+800": {"USE_LINES": True, "WORK_SIZES": (400, 600, 800)},
+    "+ line-based quads": {"USE_LINES": True},
 }
 DEFAULTS = {k: getattr(detect, k) for v in VARIANTS.values() for k in v}
 

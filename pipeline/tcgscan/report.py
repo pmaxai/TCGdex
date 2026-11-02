@@ -12,9 +12,22 @@ ERR_TEXT = {
     "different_card": "a completely different card",
 }
 TAG_TEXT = {
+    "guided": "card lined up with the app's frame",
+    "free": "card anywhere in the photo",
     "clean": "no glare/blur/sleeve/shadow", "glare": "glare", "blur": "blur", "sleeve": "in a sleeve",
     "shadow": "shadow", "rot180": "upside down", "sideways": "sideways", "other_cards": "other cards in view",
 }
+
+
+EFFECTS = ("rot180", "sideways", "sleeve", "glare", "shadow", "blur", "other_cards")
+
+
+def has_tag(tags: list[str], tag: str) -> bool:
+    if tag == "clean":
+        return not any(t in EFFECTS for t in tags)
+    if tag == "free":
+        return "guided" not in tags
+    return tag in tags
 
 
 def _pct(x: float | None) -> str:
@@ -42,8 +55,10 @@ def write_report(path: Path, s: dict, per_query: dict, entries) -> None:
       + f". Runtime {s['seconds'] // 60} min.\n")
 
     w("## Synthetic photos\n")
-    w("*Full pipeline* = card found by the detector, then matched. *Perfect detection* = matched using the true "
-      "corners, so it measures the fingerprint model alone. Speed is on the GitHub machine's CPU, not a phone.\n")
+    w("*Full pipeline* = card found by the detector, then matched. Half the photos are *guided* (card roughly "
+      "lined up with the app's on-screen frame; if no card is found, the frame area is matched, as the app will). "
+      "*Perfect detection* = matched using the true corners, so it measures the fingerprint model alone. "
+      "Speed is on the GitHub machine's CPU, not a phone.\n")
     w("| model | top-1 full pipeline | top-5 | top-1 perfect detection | top-5 | ms / image | sure answers at ≥99% accuracy |")
     w("|---|---|---|---|---|---|---|")
     for m in models:
@@ -93,7 +108,7 @@ def write_report(path: Path, s: dict, per_query: dict, entries) -> None:
     w("|---|---|" + "---|" * len(models))
     first = per_query[models[0]]["detector"]
     for tag in TAG_TEXT:
-        sel = [i for i, r in enumerate(first) if (not r["tags"] if tag == "clean" else tag in r["tags"])]
+        sel = [i for i, r in enumerate(first) if has_tag(r["tags"], tag)]
         if not sel:
             continue
         cells = [_pct(_acc([per_query[m]["detector"][i] for i in sel])) for m in models]

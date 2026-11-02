@@ -13,7 +13,7 @@ import numpy as np
 
 CARD_ASPECT = 63 / 88          # width / height of a standard card
 RECT_W, RECT_H = 448, 626      # size of a straightened card crop (63:88)
-SUPPORT_MIN = 0.25             # every side must run along an edge for >= this fraction
+SUPPORT_MIN = 0.15             # every side must run along an edge for >= this fraction
 SUPPORT_POW = 2
 PREFER_OUTER = True
 OUTER_MIN_RATIO = 1.6          # prefer an enclosing outline (card vs. its artwork box)...
@@ -22,8 +22,8 @@ OUTER_SCORE_FRAC = 0.25
 REFINE = True                  # snap each side to the edge pixels along it
 EXPAND = True                  # grow an inner-panel outline to the card's outer border
 USE_HULL = True                # also build quads from convex hulls (repairs ragged outlines)
-USE_LINES = False              # also assemble quads from straight edge lines (cards touching others)
-WORK_SIZES = (800,)            # detection runs on the photo scaled to these longest sides
+USE_LINES = False              # also assemble quads from straight edge lines (tested: +1%, 4x slower)
+WORK_SIZES = (400, 600, 800)   # detection runs on the photo scaled to these longest sides
 
 
 @dataclass
