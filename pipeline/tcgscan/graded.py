@@ -55,7 +55,16 @@ def set_keys(name: str) -> set[str]:
         for era in ("scarletandviolet", "swordandshield", "sunandmoon"):
             if k.startswith(era) and len(k) > len(era) + 1 and not k.endswith("baseset"):
                 keys.add(k[len(era):])          # 'scarletandviolet151' -> '151'
+    for k in list(keys):
+        if k in BASE_ALIASES:
+            keys.add(BASE_ALIASES[k])
     return {k for k in keys if k}
+
+
+# TCGplayer calls some era base sets by their code
+BASE_ALIASES = {"smbaseset": "sunandmoon", "xybaseset": "xy", "bwbaseset": "blackandwhite",
+                "dpbaseset": "diamondandpearl", "hgssbaseset": "heartgoldandsoulsilver",
+                "swshbaseset": "swordandshield", "svbaseset": "scarletandviolet"}
 
 
 def _date(s) -> float | None:
