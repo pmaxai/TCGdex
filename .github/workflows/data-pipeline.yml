@@ -12,7 +12,7 @@ on:
         default: "en,de"
       models:
         description: "Fingerprint models (phash, phash_art, mnv3, mnv3_art, dinov2s, dinov2s_art)"
-        default: "phash,phash_art,mnv3,mnv3_art,dinov2s,dinov2s_art"
+        default: "phash,mnv3_art,dinov2s_art"
       queries:
         description: "Number of synthetic test photos"
         default: "1500"
@@ -43,7 +43,7 @@ jobs:
     timeout-minutes: 300
     env:
       LANGS: ${{ inputs.langs || 'en,de' }}
-      MODELS: ${{ inputs.models || 'phash,phash_art,mnv3,mnv3_art,dinov2s,dinov2s_art' }}
+      MODELS: ${{ inputs.models || 'phash,mnv3_art,dinov2s_art' }}
       QUERIES: ${{ inputs.queries || '1500' }}
       MAX_SETS: ${{ inputs.max_sets || '0' }}
       PRICES: ${{ github.event_name == 'push' || inputs.prices }}

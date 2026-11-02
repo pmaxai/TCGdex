@@ -19,12 +19,13 @@ def main(argv: list[str] | None = None) -> None:
     f.add_argument("--no-images", action="store_true")
     f.add_argument("--max-sets", type=int, default=0, help="0 = all sets; N = evenly spread subset for quick tests")
     f.add_argument("--workers", type=int, default=8)
+    f.add_argument("--exclude-series", default="tcgp", help="TCGdex series ids to skip (tcgp = TCG Pocket, digital only)")
 
     e = sub.add_parser("evaluate", help="accuracy test on synthetic + real photos")
     e.add_argument("--cache", type=Path, default=Path(".cache/tcgdex"))
     e.add_argument("--db", type=Path, default=Path("out/catalog.sqlite"))
     e.add_argument("--emb-cache", type=Path, default=Path(".cache/emb"))
-    e.add_argument("--models", default="phash,phash_art,mnv3,mnv3_art,dinov2s,dinov2s_art")
+    e.add_argument("--models", default="phash,mnv3_art,dinov2s_art")
     e.add_argument("--queries", type=int, default=1500)
     e.add_argument("--real", type=Path, default=None, help="folder with your own labelled photos")
     e.add_argument("--out", type=Path, default=Path("out"))
@@ -38,7 +39,8 @@ def main(argv: list[str] | None = None) -> None:
         from .tcgdex import TCGdexClient
         client = TCGdexClient(a.cache, workers=a.workers)
         fetch_catalog(client, a.db, [x.strip() for x in a.langs.split(",") if x.strip()], a.price_lang,
-                      with_details=not a.no_prices, download_images=not a.no_images, max_sets=a.max_sets)
+                      with_details=not a.no_prices, download_images=not a.no_images, max_sets=a.max_sets,
+                      exclude_series=tuple(x.strip() for x in a.exclude_series.split(",") if x.strip()))
     else:
         from .evaluate import run
         run(a.db, a.cache, a.emb_cache, [m.strip() for m in a.models.split(",") if m.strip()], a.queries,

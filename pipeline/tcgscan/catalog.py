@@ -80,7 +80,9 @@ def pick_sets(set_ids: list[str], max_sets: int) -> list[str]:
 
 def fetch_catalog(client: TCGdexClient, out_db: Path, langs: list[str], price_lang: str = "en",
                   with_details: bool = True, download_images: bool = True, max_sets: int = 0,
-                  list_max_age_h: float = 24, details_max_age_h: float = 20) -> list[FetchStats]:
+                  list_max_age_h: float = 24, details_max_age_h: float = 20,
+                  exclude_series: tuple[str, ...] = ("tcgp",)) -> list[FetchStats]:
+    """exclude_series: 'tcgp' = Pokémon TCG Pocket, a phone game without physical cards."""
     t0 = time.time()
     stats: list[FetchStats] = []
     sets_rows: list[tuple] = []
@@ -102,8 +104,10 @@ def fetch_catalog(client: TCGdexClient, out_db: Path, langs: list[str], price_la
             s = details.get(sid)
             if not s:
                 continue
-            st.sets += 1
             serie = s.get("serie") or {}
+            if serie.get("id") in exclude_series:
+                continue
+            st.sets += 1
             cc = s.get("cardCount") or {}
             sets_rows.append((lang, sid, s.get("name"), serie.get("id"), serie.get("name"),
                               s.get("releaseDate"), cc.get("official"), cc.get("total")))
@@ -181,6 +185,7 @@ def fetch_catalog(client: TCGdexClient, out_db: Path, langs: list[str], price_la
     meta = {
         "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "langs": ",".join(langs), "price_lang": price_lang, "max_sets": str(max_sets),
+        "excluded_series": ",".join(exclude_series),
         "source": "TCGdex (https://tcgdex.dev)",
     }
     con.executemany("INSERT INTO meta VALUES (?,?)", meta.items())
