@@ -98,7 +98,7 @@ object Readings {
         val s = MatOfPoint2f(*src)
         val h = Imgproc.getPerspectiveTransform(dst, s)            // card coordinates -> photo
         // a little margin: the artwork box position varies between card eras
-        val m = 0.03
+        val m = 0.06
         val corners = MatOfPoint2f(Point(-m * cw, -m * ch), Point((1 + m) * cw, -m * ch),
             Point((1 + m) * cw, (1 + m) * ch), Point(-m * cw, (1 + m) * ch))
         val out = MatOfPoint2f()

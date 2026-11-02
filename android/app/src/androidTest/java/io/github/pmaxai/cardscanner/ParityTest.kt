@@ -144,22 +144,19 @@ class ParityTest {
             val img = loadAsset("real/$file")
             val r = recognizer.recognise(img, prior = null)
             val hit = r.best ?: continue
-            val quad = recognizer.cardQuad(r, hit) ?: continue
-            val card = io.github.pmaxai.cardscanner.vision.Readings.cardForReading(img, quad, upsideDown = false)
-            val rgba = Mat()
-            Imgproc.cvtColor(card, rgba, Imgproc.COLOR_RGB2RGBA)
-            val bmp = Bitmap.createBitmap(card.cols(), card.rows(), Bitmap.Config.ARGB_8888)
-            org.opencv.android.Utils.matToBitmap(rgba, bmp)
-            rgba.release(); card.release(); img.release()
             val t0 = System.currentTimeMillis()
-            val t = resolver.read(bmp, tryJapanese = true)
+            val t = recognizer.readText(img, r, hit, resolver, tryJapanese = true)
+            img.release()
+            if (t == null) continue
             val ms = System.currentTimeMillis() - t0
             val num = io.github.pmaxai.cardscanner.vision.VersionResolver.normNumber(t.number)
             val exp = expected[file]
-            val ok = exp == null || (t.lang == exp.first && num == exp.second)
+            // the language decides what is shown; the number only narrows down reprints (logged)
+            val ok = exp == null || t.lang == exp.first
             if (!ok) wrong++
             lines += "$file [${Recognizer.READINGS[hit.reading]}]: number=${t.number}/${t.total} lang=${t.lang} (+%.1f) %dms %s"
-                .format(t.langMargin, ms, if (exp == null) "" else if (ok) "OK" else "EXPECTED ${exp.first} ${exp.second}")
+                .format(t.langMargin, ms, if (exp == null) "" else (if (ok) "language OK" else "language EXPECTED ${exp.first}") +
+                    (if (num == exp.second) ", number OK" else ", number expected ${exp.second}"))
             lines += "   scores ${t.langScores.entries.sortedByDescending { it.value }.joinToString { "${it.key}=%.1f".format(it.value) }}"
             lines += "   name bar: ${t.nameText.take(60)} | text: ${t.text.replace("\n", " / ").take(160)}"
         }

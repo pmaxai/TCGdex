@@ -90,6 +90,30 @@ class Recognizer(pack: Pack) : AutoCloseable {
         }
     }
 
+    /**
+     * Read the card's printed text (number, language). When only the artwork box was
+     * found, its orientation is a guess, so the other way round is tried too if the
+     * first attempt finds no number.
+     */
+    fun readText(rgb: Mat, r: Recognition, hit: Hit, resolver: VersionResolver, tryJapanese: Boolean): CardText? {
+        fun attempt(h: Hit): CardText? {
+            val quad = cardQuad(r, h) ?: return null
+            val card = Readings.cardForReading(rgb, quad, upsideDown = false)
+            val bmp = Bitmap.createBitmap(card.cols(), card.rows(), Bitmap.Config.ARGB_8888)
+            val rgba = Mat()
+            Imgproc.cvtColor(card, rgba, Imgproc.COLOR_RGB2RGBA)
+            Utils.matToBitmap(rgba, bmp)
+            rgba.release(); card.release()
+            return resolver.read(bmp, tryJapanese)
+        }
+        val first = attempt(hit)
+        if (first?.number != null) return first
+        val other = when (hit.reading) { 0 -> 1; 1 -> 0; 2 -> 3; else -> 2 }
+        val second = attempt(hit.copy(reading = other)) ?: return first
+        fun quality(t: CardText?) = (if (t?.number != null) 3.0 else 0.0) + (t?.langMargin ?: 0.0)
+        return if (quality(second) > quality(first)) second else first
+    }
+
     companion object {
         val READINGS = listOf("card", "card upside down", "artwork", "artwork upside down")
 

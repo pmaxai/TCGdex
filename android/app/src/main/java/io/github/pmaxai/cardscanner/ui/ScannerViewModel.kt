@@ -216,14 +216,9 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun cardQuad(r: Recognition, hit: Hit): Array<Point>? = recognizer?.cardQuad(r, hit)
 
-    private fun readText(rgb: Mat, quad: Array<Point>, tryJapanese: Boolean): CardText? = runCatching {
-        val card = Readings.cardForReading(rgb, quad, upsideDown = false)
-        val bmp = Bitmap.createBitmap(card.cols(), card.rows(), Bitmap.Config.ARGB_8888)
-        val rgba = Mat()
-        Imgproc.cvtColor(card, rgba, Imgproc.COLOR_RGB2RGBA)
-        Utils.matToBitmap(rgba, bmp)
-        rgba.release(); card.release()
-        resolver?.read(bmp, tryJapanese)
+    private fun readText(rgb: Mat, r: Recognition, hit: Hit, tryJapanese: Boolean): CardText? = runCatching {
+        val res = resolver ?: return null
+        recognizer?.readText(rgb, r, hit, res, tryJapanese)
     }.onFailure { Log.w(TAG, "text recognition failed", it) }.getOrNull()
 
     /** Which exact card (set, language) of this artwork group the photo shows. */
@@ -235,24 +230,30 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         var id = entry?.let { p.entryCard[it] }?.takeIf { e -> versions.any { it.first == e } } ?: versions.first().first
         val num = VersionResolver.normNumber(text?.number)
         val total = text?.total?.let { VersionResolver.normNumber(it) }
-        fun numberMatches(cid: String, lang: String): Boolean {
+        // exact number first; then one easily confused digit (6/8, 1/7 ...) if the set size agrees
+        fun numberMatches(cid: String, lang: String, fuzzy: Boolean = false): Boolean {
             val c = cat.cardExact(cid, lang) ?: return false
-            if (VersionResolver.normNumber(c.number) != num) return false
-            return total == null || c.setTotal == null || VersionResolver.normNumber(c.setTotal.toString()) == total ||
+            val n = VersionResolver.normNumber(c.number)
+            val totalOk = total == null || c.setTotal == null || VersionResolver.normNumber(c.setTotal.toString()) == total ||
                 (c.number.toIntOrNull() ?: 0) > (c.setTotal)        // secret rares: number above the total
+            if (!fuzzy) return n == num && totalOk
+            return total != null && c.setTotal != null && VersionResolver.normNumber(c.setTotal.toString()) == total &&
+                VersionResolver.numberClose(n, num)
         }
         // Japanese print: pick among the Japanese members
         if (text?.lang == "ja") {
             val ja = versions.filter { it.second == "ja" }.map { it.first }.distinct()
             if (ja.isNotEmpty()) {
-                val pick = ja.firstOrNull { num.isNotEmpty() && numberMatches(it, "ja") } ?: ja.first()
+                val pick = ja.firstOrNull { num.isNotEmpty() && numberMatches(it, "ja") }
+                    ?: ja.firstOrNull { num.isNotEmpty() && numberMatches(it, "ja", fuzzy = true) } ?: ja.first()
                 return cat.cardExact(pick, "ja")
             }
         }
         // set: the member whose printed number matches
         if (num.isNotEmpty()) {
             val ids = versions.filter { it.second != "ja" }.map { it.first }.distinct()
-            val byNumber = ids.filter { cid -> numberMatches(cid, "en") || versions.any { it.first == cid && numberMatches(cid, it.second) } }
+            fun matches(cid: String, fuzzy: Boolean) = versions.any { it.first == cid && numberMatches(cid, it.second, fuzzy) }
+            val byNumber = ids.filter { matches(it, false) }.ifEmpty { ids.filter { matches(it, true) } }
             if (byNumber.isNotEmpty() && id !in byNumber) id = byNumber.first()
         }
         // language: printed words + name, among the languages this card exists in
@@ -288,9 +289,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val cat = catalog ?: return
         val p = pack ?: return
         val hit = r.hits.firstOrNull { it.group == group }
-        val quad = hit?.let { cardQuad(r, it) }
         val versions = cat.versions(group)
-        val text = quad?.let { readText(rgb, it, tryJapanese = versions.any { v -> v.second == "ja" }) }
+        val text = hit?.let { readText(rgb, r, it, tryJapanese = versions.any { v -> v.second == "ja" }) }
         lastText = text
         val version = resolveVersion(group, hit?.entry, text) ?: return
         val alternatives = r.hits.filter { it.group != group }.take(3).mapNotNull { h ->

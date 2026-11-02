@@ -59,7 +59,22 @@ class VersionResolver : AutoCloseable {
             }
         }
         if (text == null) return CardText(null, null, null, 0.0, emptyMap(), "", "")
-        return analyse(text, card.height, japaneseChars)
+        val result = analyse(text, card.height, japaneseChars)
+        // the set number is tiny: read the bottom strip again, enlarged
+        val strip = readNumberStrip(card)
+        return if (strip != null) result.copy(number = strip.first, total = strip.second) else result
+    }
+
+    private fun readNumberStrip(card: Bitmap): Pair<String, String>? {
+        val y0 = (card.height * 0.86).toInt()
+        val crop = Bitmap.createBitmap(card, 0, y0, card.width, card.height - y0)
+        val big = Bitmap.createScaledBitmap(crop, (crop.width * 2.5).toInt(), (crop.height * 2.5).toInt(), true)
+        val t = recognise(latin, InputImage.fromBitmap(big, 0), "number strip") ?: return null
+        for (line in t.textBlocks.flatMap { it.lines }) {
+            val m = NUMBER.find(line.text.replace(" ", "")) ?: continue
+            return m.groupValues[1] to m.groupValues[2]
+        }
+        return null
     }
 
     private fun analyse(t: Text, height: Int, japaneseChars: Int): CardText {
@@ -144,6 +159,22 @@ class VersionResolver : AutoCloseable {
         fun normNumber(s: String?): String {
             val m = Regex("""^([A-Za-z]*)0*(\d+)([a-zA-Z]?)$""").find(s?.trim() ?: return "") ?: return s.trim().uppercase()
             return m.groupValues[1].uppercase() + m.groupValues[2] + m.groupValues[3].lowercase()
+        }
+
+        /** digit pairs text recognition mixes up on small print */
+        private val CONFUSABLE = setOf("68", "69", "89", "08", "38", "56", "17", "09", "06", "35", "13", "47", "58")
+
+        /** true if two normalised numbers differ in at most one easily confused digit */
+        fun numberClose(a: String, b: String): Boolean {
+            if (a == b) return true
+            if (a.isEmpty() || a.length != b.length) return false
+            var diff = 0
+            for (i in a.indices) if (a[i] != b[i]) {
+                val pair = "${minOf(a[i], b[i])}${maxOf(a[i], b[i])}"
+                if (pair !in CONFUSABLE) return false
+                diff++
+            }
+            return diff <= 1
         }
 
         /** similarity 0..1 of two names (OCR noise tolerant) */
