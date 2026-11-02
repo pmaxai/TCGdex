@@ -1,0 +1,99 @@
+name: Android app
+
+# Builds the APK with the latest data pack, publishes it as the release
+# 'app-latest' (download it on the phone), then self-tests it on an emulator.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+  # a new data pack (prices, cards) -> a new APK
+  workflow_run:
+    workflows: ["Data pipeline"]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: android
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Get the data pack and test photos
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          A=android/app/src
+          mkdir -p $A/main/assets/pack $A/androidTest/assets/parity $A/androidTest/assets/real
+          gh release download data-pack -D $A/main/assets/pack --clobber \
+            -p model.onnx -p index.f16 -p catalog.sqlite -p pack.json
+          gh release download data-pack -D /tmp --clobber -p parity.zip
+          unzip -o -q /tmp/parity.zip -d $A/androidTest/assets/parity
+          find testdata/real -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) \
+            -exec cp {} $A/androidTest/assets/real/ \;
+          ls -la $A/main/assets/pack $A/androidTest/assets/real
+
+      - name: Build APK
+        working-directory: android
+        run: ./gradlew --no-daemon --stacktrace assembleDebug assembleDebugAndroidTest
+
+      - name: Publish APK (release 'app-latest')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk CardScanner.apk
+          ls -la CardScanner.apk
+          gh release view app-latest >/dev/null 2>&1 || gh release create app-latest --latest \
+            --title "Card Scanner app" \
+            --notes "Latest build. On your phone: download CardScanner.apk below and open it (allow installing from your browser once)."
+          gh release upload app-latest CardScanner.apk --clobber
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: CardScanner.apk
+          retention-days: 7
+
+      - name: Enable KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Self-test on an emulator (app vs. pipeline)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          ram-size: 4096M
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          disable-animations: true
+          working-directory: android
+          script: ./gradlew --no-daemon connectedDebugAndroidTest; s=$?; adb logcat -d -s ParityTest:I CardScanner:E AndroidRuntime:E; exit $s
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-reports
+          path: android/app/build/reports/androidTests/
+          if-no-files-found: ignore

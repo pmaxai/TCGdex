@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A tilted card with a magnifier and a euro coin: original artwork. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:pivotX="50" android:pivotY="54" android:rotation="-10">
+        <path android:fillColor="#FFF2C14E"
+            android:pathData="M36,26 h26 a4,4 0 0 1 4,4 v44 a4,4 0 0 1 -4,4 h-26 a4,4 0 0 1 -4,-4 v-44 a4,4 0 0 1 4,-4 z" />
+        <path android:fillColor="#FFFFF6E0"
+            android:pathData="M37,32 h24 v18 h-24 z" />
+        <path android:fillColor="#FF1F3A5F" android:fillAlpha="0.35"
+            android:pathData="M37,55 h24 v2.5 h-24 z M37,60 h18 v2.5 h-18 z M37,65 h21 v2.5 h-21 z" />
+    </group>
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="5"
+        android:pathData="M66,64 m-10,0 a10,10 0 1 0 20,0 a10,10 0 1 0 -20,0" />
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="6"
+        android:strokeLineCap="round" android:pathData="M73.5,71.5 L82,80" />
+</vector>

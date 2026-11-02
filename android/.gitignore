@@ -1,0 +1,8 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+# filled in by CI from the 'data-pack' release
+app/src/main/assets/pack/
+app/src/androidTest/assets/
