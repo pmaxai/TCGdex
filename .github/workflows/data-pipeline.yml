@@ -11,8 +11,8 @@ on:
         description: "Card languages (TCGdex codes, comma separated)"
         default: "en,de"
       models:
-        description: "Fingerprint models to test (phash, mnv3, dinov2s)"
-        default: "phash,mnv3,dinov2s"
+        description: "Fingerprint models (phash, phash_art, mnv3, mnv3_art, dinov2s, dinov2s_art)"
+        default: "phash,phash_art,mnv3,mnv3_art,dinov2s,dinov2s_art"
       queries:
         description: "Number of synthetic test photos"
         default: "1500"
@@ -43,7 +43,7 @@ jobs:
     timeout-minutes: 300
     env:
       LANGS: ${{ inputs.langs || 'en,de' }}
-      MODELS: ${{ inputs.models || 'phash,mnv3,dinov2s' }}
+      MODELS: ${{ inputs.models || 'phash,phash_art,mnv3,mnv3_art,dinov2s,dinov2s_art' }}
       QUERIES: ${{ inputs.queries || '1500' }}
       MAX_SETS: ${{ inputs.max_sets || '0' }}
       PRICES: ${{ github.event_name == 'push' || inputs.prices }}
@@ -111,7 +111,10 @@ jobs:
       - name: Show report on the run page
         if: always()
         run: |
-          if [ -f out/report.md ]; then cat out/report.md >> "$GITHUB_STEP_SUMMARY"; fi
+          if [ -f out/report.md ]; then
+            cat out/report.md >> "$GITHUB_STEP_SUMMARY"
+            echo "=====REPORT====="; cat out/report.md; echo "=====END REPORT====="   # also in the log
+          fi
 
       - name: Upload report
         if: always()

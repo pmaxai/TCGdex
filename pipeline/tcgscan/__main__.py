@@ -24,7 +24,7 @@ def main(argv: list[str] | None = None) -> None:
     e.add_argument("--cache", type=Path, default=Path(".cache/tcgdex"))
     e.add_argument("--db", type=Path, default=Path("out/catalog.sqlite"))
     e.add_argument("--emb-cache", type=Path, default=Path(".cache/emb"))
-    e.add_argument("--models", default="phash,mnv3,dinov2s")
+    e.add_argument("--models", default="phash,phash_art,mnv3,mnv3_art,dinov2s,dinov2s_art")
     e.add_argument("--queries", type=int, default=1500)
     e.add_argument("--real", type=Path, default=None, help="folder with your own labelled photos")
     e.add_argument("--out", type=Path, default=Path("out"))

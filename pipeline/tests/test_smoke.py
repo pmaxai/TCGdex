@@ -64,7 +64,7 @@ def test_full_evaluation(tmp_path):
     Image.fromarray(photo).save(real / f"{e.card_id}__test.jpg")
     Image.fromarray(photo).save(real / "unknown__mystery.jpg")
 
-    s = run(db, cache, tmp_path / "emb", ["phash"], 120, real, out)
+    s = run(db, cache, tmp_path / "emb", ["phash", "phash_art"], 120, real, out)
     m = s["models"]["phash"]
     print(json.dumps({k: m[k]["top1"] for k in ("detector", "oracle")}))
     assert m["oracle"]["top1"] > 0.5

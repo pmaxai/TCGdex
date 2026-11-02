@@ -54,8 +54,21 @@ def write_report(path: Path, s: dict, per_query: dict, entries) -> None:
         w(f"| **{m}**{star} | {_pct(d['detector']['top1'])} | {_pct(d['detector']['top5'])} | "
           f"{_pct(d['oracle']['top1'])} | {_pct(d['oracle']['top5'])} | {d['ms_per_img']:.1f} | {sure} |")
     det = s["detection"]
-    w(f"\n**Detector:** found a card in {_pct(det['found'])} of photos; the right card in "
-      f"{_pct(det['found_right_card'])} (the rest picked another card or object in view).\n")
+    w(f"\n### Card detection\n")
+    w(f"Found the right card in **{_pct(det['found_right_card'])}** of photos, with a good outline "
+      f"(overlap ≥ 0.9) in **{_pct(det.get('good_outline'))}**.\n")
+    if det.get("overlap"):
+        w("| outline vs. the true card | share of photos |")
+        w("|---|---|")
+        for name, frac in det["overlap"]:
+            w(f"| {name} | {_pct(frac)} |")
+        w("")
+    if det.get("by_tag"):
+        w("| condition | photos | right card found | good outline |")
+        w("|---|---|---|---|")
+        for tag, d in det["by_tag"].items():
+            w(f"| {TAG_TEXT.get(tag, tag)} | {d['n']} | {_pct(d['right'])} | {_pct(d['good'])} |")
+        w("")
 
     w(f"### What goes wrong ({best}, full pipeline)\n")
     errs = s["models"][best]["detector"]["errors"]

@@ -30,7 +30,7 @@ from PIL import Image, ImageOps
 from .augment import flatten, load_rgba, oracle_crop, synth_photo
 from .catalog import Entry, load_entries
 from .detect import RECT_H, RECT_W, detect_cards, draw_quad, quad_iou, rectify
-from .embedders import Embedder, HashEmbedder, get_embedder, timed_embed, to_input
+from .embedders import CARD_H, CARD_W, PREP_VERSION, Embedder, get_embedder, timed_embed, to_card, view
 from .labels import LabelResolver
 from .report import write_report
 
@@ -46,16 +46,16 @@ def _entry_key(e: Entry) -> str:
 
 def _ref_input(e: Entry) -> np.ndarray:
     try:
-        return to_input(flatten(load_rgba(e.path)))
+        return to_card(flatten(load_rgba(e.path)))
     except Exception as ex:  # corrupt download: neutral image, never matches well
         log.warning("cannot read %s: %s", e.path, ex)
-        return np.full((224, 224, 3), 128, np.uint8)
+        return np.full((CARD_H, CARD_W, 3), 128, np.uint8)
 
 
 def ref_embeddings(model: Embedder, entries: list[Entry], emb_cache: Path) -> np.ndarray:
     """Fingerprints of all reference images; only new/changed images are computed."""
     keys = [_entry_key(e) for e in entries]
-    f = Path(emb_cache) / f"{model.name}_refs.npz"
+    f = Path(emb_cache) / f"{model.name}_v{PREP_VERSION}_refs.npz"
     cached: dict[str, np.ndarray] = {}
     if f.exists():
         z = np.load(f, allow_pickle=False)
@@ -151,8 +151,8 @@ def make_queries(entries: list[Entry], n: int, seed: int, debug_dir: Path | None
         det_crop, iou = None, 0.0
         if dets:
             iou = quad_iou(dets[0].quad, quad)
-            det_crop = to_input(rectify(photo, dets[0].quad))
-        orc = to_input(oracle_crop(photo, quad, r))
+            det_crop = to_card(rectify(photo, dets[0].quad))
+        orc = to_card(oracle_crop(photo, quad, r))
         if debug_dir is not None and qi < n_examples:
             vis = draw_quad(photo, quad, (0, 120, 255), 3)
             if dets:
@@ -178,25 +178,33 @@ def _classify(truth: Entry, pred_entry: Entry, top_ids: list[str], phash_ref: np
     return "in_top5" if truth.card_id in top_ids else "different_card"
 
 
-def score_queries(model: Embedder, ref: np.ndarray, entries: list[Entry], queries: list[Query],
-                  phash_ref: np.ndarray, names: dict) -> tuple[dict, float]:
-    ids = [e.card_id for e in entries]
-    # index of the truth entry used to make each query (for reprint check)
-    results: dict[str, list[dict]] = {}
+def embed_queries(model: Embedder, queries: list[Query]) -> tuple[dict, float]:
+    """Fingerprints of every query, upright and rotated 180 degrees, per mode."""
+    out: dict[str, tuple] = {}
     ms = 0.0
     for mode in ("detector", "oracle"):
         sel = [i for i, q in enumerate(queries) if mode == "oracle" or q.det_crop is not None]
-        rows: list[dict] = []
         if sel:
             imgs = np.stack([queries[i].oracle if mode == "oracle" else queries[i].det_crop for i in sel])
             e0, t = timed_embed(model, imgs)
             if mode == "detector":
                 ms = t
             e180 = model.embed(_rot180(imgs))
-            found = search(ref, ids, e0, e180)
         else:
-            found = []
+            e0 = e180 = np.zeros((0, model.dim), np.float32)
+        out[mode] = (sel, e0, e180)
+    return out, ms
+
+
+def score_view(ref: np.ndarray, qemb: dict, sl, entries: list[Entry], queries: list[Query],
+               phash_ref: np.ndarray, names: dict) -> dict:
+    ids = [e.card_id for e in entries]
+    ref_v = view(ref, sl)
+    results: dict[str, list[dict]] = {}
+    for mode, (sel, e0, e180) in qemb.items():
+        found = search(ref_v, ids, view(e0, sl), view(e180, sl)) if sel else []
         by_q = dict(zip(sel, found))
+        rows: list[dict] = []
         for i, q in enumerate(queries):
             truth = entries[q.entry]
             row = {"q": i, "truth": truth.card_id, "lang": truth.lang, "serie": truth.serie_id, "tags": q.tags}
@@ -213,7 +221,25 @@ def score_queries(model: Embedder, ref: np.ndarray, entries: list[Entry], querie
                            err=None if ok else _classify(truth, entries[pj], top_ids, phash_ref, q.entry, pj, names))
             rows.append(row)
         results[mode] = rows
-    return results, ms
+    return results
+
+
+def detection_stats(queries: list[Query]) -> dict:
+    """How well the detector outlines the card (overlap with the true outline)."""
+    iou = np.array([q.det_iou if q.det_found else -1.0 for q in queries])
+    buckets = [("nothing found", iou < 0), ("another card/object (overlap < 0.6)", (iou >= 0) & (iou < 0.6)),
+               ("rough outline (0.6-0.8)", (iou >= 0.6) & (iou < 0.8)),
+               ("slightly off, e.g. inner panel only (0.8-0.9)", (iou >= 0.8) & (iou < 0.9)),
+               ("good (0.9-0.95)", (iou >= 0.9) & (iou < 0.95)), ("precise (>= 0.95)", iou >= 0.95)]
+    by_tag = {}
+    for tag in ("clean", "glare", "blur", "sleeve", "shadow", "rot180", "sideways", "other_cards"):
+        sel = np.array([(not q.tags) if tag == "clean" else tag in q.tags for q in queries])
+        if sel.any():
+            by_tag[tag] = {"n": int(sel.sum()), "right": float((iou[sel] >= 0.6).mean()),
+                           "good": float((iou[sel] >= 0.9).mean())}
+    return {"found": float((iou >= 0).mean()), "found_right_card": float((iou >= 0.6).mean()),
+            "good_outline": float((iou >= 0.9).mean()),
+            "overlap": [(name, float(m.mean())) for name, m in buckets], "by_tag": by_tag}
 
 
 def confidence_table(rows: list[dict]) -> list[dict]:
@@ -309,12 +335,10 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, models: list[str], n_queries
     log.info("%d reference images (%s), %d distinct cards", len(entries), dict(by_lang), len(set(ids)))
 
     # pHash fingerprints are always computed: cheap, and used to spot identical-art reprints
-    phash = HashEmbedder()
+    phash = get_embedder("phash")
     phash_ref = ref_embeddings(phash, entries, emb_cache)
 
     queries = make_queries(entries, n_queries, seed, debug_dir)
-    n_det = sum(q.det_found for q in queries)
-    n_det_right = sum(q.det_found and q.det_iou >= 0.6 for q in queries)
 
     real = []
     if real_dir and Path(real_dir).is_dir():
@@ -333,12 +357,12 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, models: list[str], n_queries
                 log.warning("label of %s (%r): %s", fname, text, lab.problem)
             real.append({"file": fname, "label": text, "truth": lab.ids or None, "label_problem": lab.problem if text else None,
                          "detected": bool(dets), "img": img, "quad": quad,
-                         "crop": crop, "input": to_input(crop), "preds": {}})
+                         "crop": crop, "input": to_card(crop), "preds": {}})
         log.info("%d real photos", len(real))
 
     summary = {"models": {}, "n_queries": len(queries), "n_refs": len(entries), "n_cards": len(set(ids)),
                "refs_by_lang": dict(by_lang),
-               "detection": {"found": n_det / len(queries), "found_right_card": n_det_right / len(queries)}}
+               "detection": detection_stats(queries)}
     per_query: dict[str, dict] = {}
     pack_dir = out_dir / "pack"
     pack_dir.mkdir(parents=True, exist_ok=True)
@@ -349,25 +373,29 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, models: list[str], n_queries
     for name in models:
         model = phash if name == "phash" else get_embedder(name)
         ref = phash_ref if name == "phash" else ref_embeddings(model, entries, emb_cache)
-        res, ms = score_queries(model, ref, entries, queries, phash_ref, names)
-        per_query[name] = res
-        s = {"ms_per_img": ms, "dim": model.dim}
-        for mode, rows in res.items():
-            s[mode] = {"top1": float(np.mean([r["top1"] for r in rows])),
-                       "top5": float(np.mean([r["top5"] for r in rows])),
-                       "errors": _count([r["err"] for r in rows if r["err"]])}
-        s["confidence"] = confidence_table(res["detector"])
-        summary["models"][name] = s
-        log.info("[%s] top-1 full pipeline %.1f%%, perfect detection %.1f%%", name,
-                 100 * s["detector"]["top1"], 100 * s["oracle"]["top1"])
-        np.save(pack_dir / f"{name}_embeddings.f16.npy", ref.astype(np.float16))
-
+        qemb, ms = embed_queries(model, queries)
         if real:
             x = np.stack([r["input"] for r in real])
-            found = search(ref, ids, model.embed(x), model.embed(_rot180(x)))
-            for r, f in zip(real, found):
-                r["preds"][name] = [{"id": c, "name": entries[j].name, "lang": entries[j].lang,
-                                     "score": round(sc, 4), "entry": j} for c, sc, j in f[:5]]
+            real_e0, real_e180 = model.embed(x), model.embed(_rot180(x))
+        for vname, sl in model.views.items():
+            label = f"{name}_{vname}" if vname else name
+            res = score_view(ref, qemb, sl, entries, queries, phash_ref, names)
+            per_query[label] = res
+            s = {"ms_per_img": ms, "dim": int(view(ref[:1], sl).shape[1])}
+            for mode, rows in res.items():
+                s[mode] = {"top1": float(np.mean([r["top1"] for r in rows])),
+                           "top5": float(np.mean([r["top5"] for r in rows])),
+                           "errors": _count([r["err"] for r in rows if r["err"]])}
+            s["confidence"] = confidence_table(res["detector"])
+            summary["models"][label] = s
+            log.info("[%s] top-1 full pipeline %.1f%%, perfect detection %.1f%%", label,
+                     100 * s["detector"]["top1"], 100 * s["oracle"]["top1"])
+            np.save(pack_dir / f"{label}_embeddings.f16.npy", view(ref, sl).astype(np.float16))
+            if real:
+                found = search(view(ref, sl), ids, view(real_e0, sl), view(real_e180, sl))
+                for r, f in zip(real, found):
+                    r["preds"][label] = [{"id": c, "name": entries[j].name, "lang": entries[j].lang,
+                                          "score": round(sc, 4), "entry": j} for c, sc, j in f[:5]]
         del model
 
     # ---------------------------------------------------------- debug images
