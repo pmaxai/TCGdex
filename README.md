@@ -1,10 +1,39 @@
 # Card scanner (flea-market edition)
 
-A phone app that points at Pokémon cards and shows their Cardmarket price. This
-repository is built in stages:
+A phone app that points at Pokémon cards and shows their Cardmarket price, offline,
+for flea markets.
 
-1. **Data pipeline + accuracy test** (this stage, `pipeline/`)
-2. Android app, built into an APK by GitHub Actions (next)
+- `pipeline/`: card database, fingerprints, accuracy tests and the app's data pack (Python)
+- `android/`: the app (Kotlin). GitHub Actions builds it into an APK.
+
+## Install the app
+
+1. On your phone, open **github.com/pmaxai/TCGdex/releases/tag/app-latest** and tap
+   **CardScanner.apk**.
+2. Open the downloaded file. Android asks once to allow installing from your browser:
+   allow it.
+3. Start **Card Scanner** and allow the camera. The first start takes a few seconds
+   while it unpacks the card database (about 50 MB).
+
+New builds install over the old one (same signing key), so updating is the same two taps.
+Every data pipeline run with fresh prices also builds a new APK.
+
+## Using it
+
+- **Scan:** hold one card inside the frame. When the same card wins twice in a row
+  with a clear margin, it appears below with:
+  - name, set, number and language
+  - Cardmarket **trend** price, 30-day average and lowest price, plus holo/reverse
+    prices if there are any
+- **Not this card?** The other candidates are listed under it; tap the right one.
+- **Alert:** set a price (e.g. 5 €). The phone vibrates when a card worth at least
+  that appears, so you can sweep through a box and only stop when it buzzes.
+- **Light** turns on the torch.
+- **Photo** recognises a picture from the gallery, handy for testing at home.
+- **Details** shows what the scanner saw: the straightened card, the top 5 matches
+  with scores, and timings.
+- **Offline:** recognition and prices work without a connection. The card thumbnail
+  and the Cardmarket button need the internet.
 
 ## What the pipeline does
 
