@@ -135,7 +135,12 @@ object Readings {
         return arrayOf(Point(x0, y0), Point(x0 + cw, y0), Point(x0 + cw, y0 + ch), Point(x0, y0 + ch))
     }
 
-    /** augment.guide_prior: card centred, 70% of the height but at most 80% of the width. */
-    fun guidePrior(w: Int, h: Int): Prior =
-        Prior(0.5, 0.5, minOf(0.7, 0.8 * w / (CardDetector.CARD_ASPECT * h)))
+    /**
+     * The guide frame: card centred, [size] of the height (augment.guide_prior: 0.7) but at
+     * most size + 10% of the width (never more than 90%), so it fits any box shape.
+     */
+    fun guidePrior(w: Int, h: Int, size: Double = 0.7): Prior {
+        val s = size.coerceIn(0.3, 0.95)
+        return Prior(0.5, 0.5, minOf(s, minOf(s + 0.1, 0.9) * w / (CardDetector.CARD_ASPECT * h)))
+    }
 }

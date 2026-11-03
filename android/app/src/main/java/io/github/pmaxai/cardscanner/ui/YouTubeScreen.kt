@@ -21,7 +21,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -35,9 +34,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -52,8 +57,6 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -78,20 +81,19 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import io.github.pmaxai.cardscanner.data.CardInfo
-import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import io.github.pmaxai.cardscanner.data.Printing
 import io.github.pmaxai.cardscanner.vision.FoilEstimate
-import kotlinx.coroutines.delay
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
 
 /**
  * Recording mode for unboxing / price-check videos: phone on a tripod, screen recording on.
- * Full screen, no buttons in the picture (tap the panel for controls), an animated reveal
- * for every new card, a HIT effect above the alert price, and the pack's running value.
+ * Full screen, camera and card half and half, an animated reveal for every new card, a HIT
+ * effect above the alert price, and the pack's running value. ⚙ next to the pack value
+ * opens the menu (save pack, new pack, light, settings ...).
  */
 @Composable
 fun YouTubeScreen(state: UiState, vm: ScannerViewModel) {
@@ -103,52 +105,41 @@ fun YouTubeScreen(state: UiState, vm: ScannerViewModel) {
             Toast.makeText(ctx, r.fold({ "Pack saved: $it cards" }, { "Could not save: ${it.message}" }), Toast.LENGTH_LONG).show()
         }
     }
-    var controls by remember { mutableStateOf(false) }
-    var settings by remember { mutableStateOf(false) }
-    var torch by remember { mutableStateOf(false) }
-    LaunchedEffect(controls) { if (controls) { delay(6000); controls = false } }
-    val tap = Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { controls = !controls }
+    var settings by rememberSaveable { mutableStateOf(false) }
+    var torch by rememberSaveable { mutableStateOf(false) }
+    val menu: @Composable () -> Unit = {
+        MenuButton(state, vm, torch, onTorch = { torch = it }, onSettings = { settings = true },
+            onSave = { savePack.launch(PackCsv.fileName(state.settings)) })
+    }
 
     Box(Modifier.fillMaxSize().background(Ink)) {
         if (landscape) {
             Row(Modifier.fillMaxSize()) {
-                CameraBox(state, vm, torch, Modifier.fillMaxHeight().aspectRatio(4f / 3f))
-                Column(Modifier.weight(1f).fillMaxHeight().then(tap).padding(16.dp)) {
+                CameraArea(state, vm, torch, video = true, modifier = Modifier.weight(1f).fillMaxHeight())
+                Column(Modifier.weight(1f).fillMaxHeight().padding(horizontal = 16.dp, vertical = 10.dp)) {
                     TitleLine(state.settings.title)
                     Reveal(state, vm, Modifier.weight(1f).fillMaxWidth())
-                    SessionBar(state)
+                    SessionBar(state, menu)
                 }
             }
         } else {
             Column(Modifier.fillMaxSize()) {
-                Box(Modifier.fillMaxWidth().then(tap)) { TitleLine(state.settings.title) }
-                CameraBox(state, vm, torch, Modifier.fillMaxWidth().aspectRatio(3f / 4f))
-                Column(Modifier.weight(1f).fillMaxWidth().then(tap).padding(horizontal = 16.dp, vertical = 8.dp)) {
+                TitleLine(state.settings.title)
+                CameraArea(state, vm, torch, video = true, modifier = Modifier.fillMaxWidth().weight(1f))
+                Column(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Reveal(state, vm, Modifier.weight(1f).fillMaxWidth())
-                    SessionBar(state)
+                    SessionBar(state, menu)
                 }
             }
         }
-        if (controls) Controls(state, vm, torch, onTorch = { torch = it }, onSettings = { settings = true; controls = false },
-            onSave = { controls = false; savePack.launch(PackCsv.fileName(state.settings)) })
     }
     if (settings) SettingsDialog(state, vm) { settings = false }
 }
 
 @Composable
-private fun CameraBox(state: UiState, vm: ScannerViewModel, torch: Boolean, modifier: Modifier) {
-    Box(modifier.background(Color.Black)) {
-        CameraPreview(onFrame = vm::onFrame, torch = torch, modifier = Modifier.fillMaxSize())
-        GuideOverlay(state, Modifier.fillMaxSize(), dim = false)
-        ManualTrigger(state, vm)
-    }
-}
-
-@Composable
 private fun TitleLine(title: String) {
     if (title.isBlank()) return
-    Text(title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
-        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(8.dp))
+    FitText(title, 20.sp, Color.White, Modifier.fillMaxWidth().padding(8.dp), weight = FontWeight.Bold, align = TextAlign.Center)
 }
 
 @Composable
@@ -156,7 +147,7 @@ private fun Reveal(state: UiState, vm: ScannerViewModel, modifier: Modifier) {
     val shown = state.shown
     Box(modifier, contentAlignment = Alignment.Center) {
         if (shown == null) {
-            Text("Show the next card…", color = Muted, fontSize = 22.sp)
+            FitText("Show the next card…", 22.sp, Muted, align = TextAlign.Center)
         } else {
             AnimatedContent(
                 targetState = shown.serial,
@@ -195,24 +186,20 @@ private fun RevealCard(s: Shown, settings: Settings, onPrinting: (Printing.Kind)
         .padding(14.dp)) {
         Column {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                val placeholder = s.preview?.let { BitmapPainter(it.asImageBitmap()) }
-                AsyncImage(model = s.version.thumbnailUrl ?: s.priceCard.thumbnailUrl, contentDescription = s.version.name,
-                    placeholder = placeholder, error = placeholder, fallback = placeholder,
-                    modifier = Modifier.width(110.dp).aspectRatio(63f / 88f))
+                CardImage(s, Modifier.width(120.dp).aspectRatio(63f / 88f))
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(s.version.name, color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Black, maxLines = 2,
-                        overflow = TextOverflow.Ellipsis, lineHeight = 32.sp)
-                    s.english?.let { Text(it.name, color = Color.White.copy(alpha = 0.8f), fontSize = 16.sp) }
-                    Text("${s.version.setName} · ${s.version.numberText}", color = Muted, fontSize = 15.sp, maxLines = 1,
-                        overflow = TextOverflow.Ellipsis)
+                    FitText(s.version.name, 30.sp, Color.White, weight = FontWeight.Black, minSize = 16.sp)
+                    s.english?.let { FitText(it.name, 16.sp, Color.White.copy(alpha = 0.8f)) }
+                    FitText("${s.version.setName} · ${s.version.numberText}", 15.sp, Muted)
                     VersionSwitcher(s, onStep, onVersion, onOther)
                     if (s.priceCard.printings.size <= 1) s.selected?.let {
-                        Text(it.kind.label, color = Gold, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        FitText(it.kind.label, 15.sp, Gold, weight = FontWeight.Bold)
                     }
                     Spacer(Modifier.height(4.dp))
-                    Text(if (value == null) "–" else eur(count.value.toDouble()), color = if (hit) Gold else Color.White,
-                        fontSize = 46.sp, fontWeight = FontWeight.Black)
+                    // sized for the final price, so it doesn't jump while counting up
+                    FitText(if (value == null) "–" else eur(count.value.toDouble()), 46.sp, if (hit) Gold else Color.White,
+                        weight = FontWeight.Black, sizing = if (value == null) "–" else eur(value))
                     if (settings.showPsa) s.graded?.let { PsaLine(it, big = true) }
                     if (settings.showPsa) s.population?.let { GemLine(it, big = true) }
                 }
@@ -227,20 +214,24 @@ private fun RevealCard(s: Shown, settings: Settings, onPrinting: (Printing.Kind)
 }
 
 /**
- * Shows the content at its natural size, or scaled down evenly when the space is too small
- * (a HIT card with English name, PSA prices and printing chips): never cut off or squeezed.
+ * Lays the card out at a fixed width ([designWidth]) and scales it evenly to the space it
+ * has: the same look in portrait and landscape, nothing wrapped, cut off or squeezed
+ * (a HIT card with English name, PSA prices and printing chips just gets a bit smaller).
  */
 @Composable
-private fun FitInside(content: @Composable () -> Unit) {
+private fun FitInside(designWidth: Dp = 440.dp, maxScale: Float = 1.25f, content: @Composable () -> Unit) {
     Layout(content) { measurables, constraints ->
-        val p = measurables.first().measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
-        val maxH = if (constraints.hasBoundedHeight) constraints.maxHeight else p.height
-        val scale = if (p.height > maxH && p.height > 0) maxH.toFloat() / p.height else 1f
-        layout(p.width, (p.height * scale).roundToInt()) {
+        val dw = designWidth.roundToPx()
+        val p = measurables.first().measure(Constraints(maxWidth = dw, maxHeight = Constraints.Infinity))
+        val availW = if (constraints.hasBoundedWidth) constraints.maxWidth else p.width
+        val availH = if (constraints.hasBoundedHeight) constraints.maxHeight else p.height
+        val scale = minOf(maxScale, availW.toFloat() / p.width.coerceAtLeast(1), availH.toFloat() / p.height.coerceAtLeast(1))
+            .coerceAtLeast(0.2f)
+        layout((p.width * scale).roundToInt().coerceAtMost(availW), (p.height * scale).roundToInt().coerceAtMost(availH)) {
             p.placeWithLayer(0, 0) {
                 scaleX = scale
                 scaleY = scale
-                transformOrigin = TransformOrigin(0.5f, 0f)
+                transformOrigin = TransformOrigin(0f, 0f)
             }
         }
     }
@@ -300,7 +291,7 @@ private fun VersionSwitcher(s: Shown, onStep: (Int) -> Unit, onVersion: (CardInf
             modifier = chip.clickable { onStep(-1) }.padding(horizontal = 8.dp, vertical = 1.dp))
         Box {
             Text(if (n > 1) "Version ${s.versionIndex + 1}/$n · ${s.version.lang.uppercase()} ▾" else "Other card ▾",
-                color = Color.White, fontSize = 14.sp, maxLines = 1,
+                color = Color.White, fontSize = 14.sp, maxLines = 1, softWrap = false,
                 modifier = chip.clickable { open = true }.padding(horizontal = 10.dp, vertical = 4.dp))
             DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
                 s.versions.forEach { v ->
@@ -340,6 +331,7 @@ private fun PrintingChips(s: Shown, onPrinting: (Printing.Kind) -> Unit, modifie
             } == true
             Text("${p.kind.label}${if (detected) " ✨" else ""} ${printingPrice(p)}",
                 color = if (sel) Ink else Color.White, fontSize = 14.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
+                maxLines = 1, softWrap = false,
                 modifier = Modifier
                     .background(if (sel) Gold else Color(0xFF2A2D34), RoundedCornerShape(10.dp))
                     .clickable { onPrinting(p.kind) }
@@ -382,15 +374,17 @@ private fun BoxScope.Burst(key: Int) {
 }
 
 @Composable
-private fun SessionBar(state: UiState) {
+private fun SessionBar(state: UiState, menu: @Composable () -> Unit) {
     val items = state.session
     val threshold = state.settings.threshold
     Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text("${items.size} cards", color = Muted, fontSize = 15.sp)
-            Spacer(Modifier.width(12.dp))
-            Text("Pack value ", color = Muted, fontSize = 15.sp)
-            Text(eur(state.sessionValue), color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val line = buildAnnotatedString {
+                withStyle(SpanStyle(color = Muted, fontSize = 15.sp)) { append("${items.size} cards   Pack value ") }
+                withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.Bold)) { append(eur(state.sessionValue)) }
+            }
+            FitText(line, 22.sp, Color.White, Modifier.weight(1f))
+            menu()
         }
         if (items.isNotEmpty()) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 6.dp),
@@ -398,6 +392,7 @@ private fun SessionBar(state: UiState) {
                 items.asReversed().take(12).forEach { item ->
                     val hit = threshold > 0 && (item.value ?: 0.0) >= threshold
                     Text("${item.name} ${eur(item.value)}", color = if (hit) Ink else Color.White, fontSize = 13.sp,
+                        maxLines = 1, softWrap = false,
                         modifier = Modifier.background(if (hit) Gold else Panel, RoundedCornerShape(10.dp))
                             .padding(horizontal = 10.dp, vertical = 4.dp))
                 }
@@ -406,19 +401,29 @@ private fun SessionBar(state: UiState) {
     }
 }
 
+/** The settings button (⚙) with the YouTube mode's menu. */
 @Composable
-private fun Controls(state: UiState, vm: ScannerViewModel, torch: Boolean, onTorch: (Boolean) -> Unit, onSettings: () -> Unit,
-                     onSave: () -> Unit) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopEnd) {
-        Column(Modifier.padding(12.dp).background(Color(0xE61A1C21), RoundedCornerShape(14.dp)).padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            FilledTonalButton(onSave, enabled = state.session.isNotEmpty()) { Text("Save pack (CSV)") }
-            FilledTonalButton({ vm.resetSession() }) { Text("New pack (reset value)") }
-            FilledTonalButton({ vm.undoLast() }, enabled = state.session.isNotEmpty()) { Text("Remove last card") }
-            FilledTonalButton({ vm.next() }) { Text("Next card") }
-            FilledTonalButton({ onTorch(!torch) }) { Text(if (torch) "Light off" else "Light on") }
-            FilledTonalButton(onSettings) { Text("Settings") }
-            FilledTonalButton({ vm.updateSettings { it.copy(youtube = false) } }) { Text("Exit YouTube mode") }
+private fun MenuButton(state: UiState, vm: ScannerViewModel, torch: Boolean, onTorch: (Boolean) -> Unit, onSettings: () -> Unit,
+                       onSave: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        Box(Modifier.size(44.dp).background(Panel, CircleShape).clickable { open = true }, contentAlignment = Alignment.Center) {
+            Text("⚙", color = Color.White, fontSize = 22.sp)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            val items: List<Triple<String, Boolean, () -> Unit>> = listOf(
+                Triple("Save pack (CSV)", state.session.isNotEmpty(), onSave),
+                Triple("New pack (reset value)", true) { vm.resetSession() },
+                Triple("Remove last card", state.session.isNotEmpty()) { vm.undoLast() },
+                Triple("Next card", true) { vm.next() },
+                Triple(if (torch) "Light off" else "Light on", true) { onTorch(!torch) },
+                Triple("Settings…", true, onSettings),
+                Triple("Exit YouTube mode", true) { vm.updateSettings { it.copy(youtube = false) } },
+            )
+            items.forEachIndexed { i, (label, enabled, action) ->
+                if (i == 5) HorizontalDivider()
+                DropdownMenuItem(text = { Text(label) }, enabled = enabled, onClick = { open = false; action() })
+            }
         }
     }
 }

@@ -9,6 +9,7 @@ import io.github.pmaxai.cardscanner.ui.PackCsv
 import io.github.pmaxai.cardscanner.ui.SessionItem
 import io.github.pmaxai.cardscanner.ui.Settings
 import io.github.pmaxai.cardscanner.ui.Shown
+import io.github.pmaxai.cardscanner.vision.Readings
 import io.github.pmaxai.cardscanner.vision.ScanTracker
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -58,6 +59,24 @@ class TrackerAndCsvTest {
         assertFalse(t.update("a", 0.05f, now = 600))          // three frames, but only 0.6 s
         assertTrue(t.update("a", 0.05f, now = 1000))
         assertNull(t.streakMillis(now = 1000))
+    }
+
+    @Test
+    fun guideFrameFitsEveryBoxShapeAndSize() {
+        for (w in listOf(400, 960, 1067, 1280, 1600)) for (h in listOf(400, 960, 1004, 1280)) for (size in listOf(50, 60, 70, 80, 90)) {
+            val prior = Readings.guidePrior(w, h, size / 100.0)
+            val q = Readings.guideQuad(w, h, prior)
+            val gw = q[1].x - q[0].x
+            val gh = q[3].y - q[0].y
+            assertTrue("inside $w x $h at $size%", q[0].x >= 0 && q[0].y >= 0 && q[2].x <= w && q[2].y <= h)
+            assertTrue("card shape", kotlin.math.abs(gw / gh - 63.0 / 88.0) < 0.01)
+            assertTrue("not wider than 90%", gw <= 0.9 * w + 1e-6)
+            // the asked height whenever the box is wide enough for it
+            if ((size / 100.0 + 0.1).coerceAtMost(0.9) * w >= size / 100.0 * h * 63 / 88) assertEquals(size / 100.0 * h, gh, 1.0)
+        }
+        // the old default (portrait 4:3 frame, 70%) is unchanged
+        assertEquals(0.7, Readings.guidePrior(960, 1280).h, 1e-9)
+        assertEquals(Readings.guidePrior(960, 1280).h, Readings.guidePrior(960, 1280, 0.7).h, 1e-12)
     }
 
     private fun card(id: String, lang: String, name: String, printings: List<Printing>,

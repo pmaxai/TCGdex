@@ -141,6 +141,22 @@ class Recognizer(pack: Pack) : AutoCloseable {
     }
 
     /**
+     * The card as the camera saw it, straightened and upright: the picture shown when the
+     * card has no image in the database or the phone is offline.
+     */
+    fun cardBitmap(rgb: Mat, r: Recognition, hit: Hit, w: Int = 360, h: Int = 503): Bitmap? {
+        val quad = cardQuad(r, hit, margin = 0.03) ?: return null
+        val card = Readings.rectify(rgb, quad, w, h)
+        return try {
+            val rgba = Mat()
+            Imgproc.cvtColor(card, rgba, Imgproc.COLOR_RGB2RGBA)
+            Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { Utils.matToBitmap(rgba, it); rgba.release() }
+        } finally {
+            card.release()
+        }
+    }
+
+    /**
      * Single-frame reverse holo score of the card in this frame, against the scan of pack
      * entry [refEntry] (the version shown). Null: no texture data in the pack, or no score.
      */

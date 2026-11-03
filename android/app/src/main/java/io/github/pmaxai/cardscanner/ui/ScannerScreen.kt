@@ -1,6 +1,7 @@
 package io.github.pmaxai.cardscanner.ui
 
 import android.Manifest
+import android.content.res.Configuration
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.ActivityInfo
@@ -84,7 +85,6 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
 import io.github.pmaxai.cardscanner.camera.FrameAnalyzer
 import io.github.pmaxai.cardscanner.camera.loadPhoto
 import io.github.pmaxai.cardscanner.data.CardInfo
@@ -92,6 +92,18 @@ import android.widget.Toast
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 import androidx.compose.ui.input.pointer.pointerInput
 import io.github.pmaxai.cardscanner.data.Graded
 import io.github.pmaxai.cardscanner.data.Population
@@ -137,12 +149,13 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
         state.message?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show(); vm.messageShown() }
     }
 
-    // YouTube mode: follow the phone's orientation (tripod), hide the system bars
+    // orientation setting (both modes); YouTube mode also hides the system bars
     val activity = ctx as? Activity
+    LaunchedEffect(state.settings.orientation) {
+        activity?.requestedOrientation = orientationOf(state.settings.orientation)
+    }
     LaunchedEffect(state.settings.youtube) {
         activity ?: return@LaunchedEffect
-        activity.requestedOrientation = if (state.settings.youtube) ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
-                                        else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         val c = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
         if (state.settings.youtube) {
             c.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -187,30 +200,29 @@ private fun Message(text: String, action: @Composable () -> Unit = {}) =
 @Composable
 private fun Scanner(state: UiState, vm: ScannerViewModel) {
     val ctx = LocalContext.current
-    var torch by remember { mutableStateOf(false) }
-    var settings by remember { mutableStateOf(false) }
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    var torch by rememberSaveable { mutableStateOf(false) }
+    var settings by rememberSaveable { mutableStateOf(false) }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri: Uri? ->
         if (uri != null) loadPhoto(ctx.contentResolver, uri)?.let { vm.onPhoto(it) }
     }
 
-    Column(Modifier.fillMaxSize()) {
+    val topBar: @Composable () -> Unit = {
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Card Scanner", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp,
-                modifier = Modifier.padding(start = 8.dp).weight(1f))
+            Text("Card Scanner", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp, maxLines = 1,
+                softWrap = false, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 8.dp).weight(1f))
             AssistChip(onClick = { settings = true }, label = {
-                Text(if (state.settings.threshold > 0) "Alert ≥ ${state.settings.threshold.toInt()} €" else "Alert off")
+                Text(if (state.settings.threshold > 0) "Alert ≥ ${state.settings.threshold.toInt()} €" else "Alert off", maxLines = 1)
             })
-            TextButton({ torch = !torch }) { Text("Light", color = if (torch) Gold else Color.White) }
+            TextButton({ torch = !torch }) { Text("Light", color = if (torch) Gold else Color.White, maxLines = 1) }
             TextButton({ pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
-                Text("Photo", color = Color.White)
+                Text("Photo", color = Color.White, maxLines = 1)
             }
             TextButton({ settings = true }) { Text("⚙", color = Color.White, fontSize = 20.sp) }
         }
-
-        Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f).background(Color.Black)) {
-            CameraPreview(onFrame = vm::onFrame, torch = torch, modifier = Modifier.fillMaxSize())
-            GuideOverlay(state, Modifier.fillMaxSize(), dim = true)
-            ManualTrigger(state, vm)
+    }
+    val camera: @Composable (Modifier) -> Unit = { m ->
+        CameraArea(state, vm, torch, video = false, modifier = m) {
             if (state.paused) {
                 Box(Modifier.fillMaxSize().background(Color(0xAA000000)).clickable { vm.resume() },
                     contentAlignment = Alignment.Center) {
@@ -223,18 +235,19 @@ private fun Scanner(state: UiState, vm: ScannerViewModel) {
                     state.liveConfidence == Confidence.LIKELY -> "Probably…"
                     else -> "Fit the card into the frame"
                 }
-                Text(hint, color = Color.White, fontSize = 14.sp,
+                Text(hint, color = Color.White, fontSize = 14.sp, maxLines = 1,
                     modifier = Modifier.align(Alignment.BottomCenter).padding(10.dp)
                         .background(Color(0x88000000), RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 4.dp))
             }
         }
-
-        Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(12.dp)) {
+    }
+    val result: @Composable (Modifier) -> Unit = { m ->
+        Column(m.verticalScroll(rememberScrollState()).padding(12.dp)) {
             val s = state.shown
             if (s == null) {
                 Text("Hold a card inside the frame. Its name and Cardmarket price appear here; " +
                         "the phone vibrates when any printing of it is worth at least your alert price. " +
-                        "Not recognised? Double-tap the picture to take it anyway.", color = Muted)
+                        "Not recognised? Double-tap the picture to take it anyway. Pinch to zoom.", color = Muted)
             } else {
                 ResultCard(s, state.settings, vm)
             }
@@ -243,7 +256,48 @@ private fun Scanner(state: UiState, vm: ScannerViewModel) {
             Text(state.packInfo, color = Muted, fontSize = 11.sp)
         }
     }
+
+    // camera and result share the screen half and half
+    if (landscape) {
+        Row(Modifier.fillMaxSize()) {
+            camera(Modifier.weight(1f).fillMaxHeight())
+            Column(Modifier.weight(1f).fillMaxHeight()) {
+                topBar()
+                result(Modifier.weight(1f).fillMaxWidth())
+            }
+        }
+    } else {
+        Column(Modifier.fillMaxSize()) {
+            topBar()
+            camera(Modifier.fillMaxWidth().weight(1f))
+            result(Modifier.fillMaxWidth().weight(1f))
+        }
+    }
     if (settings) SettingsDialog(state, vm) { settings = false }
+}
+
+/** Screen orientation for the setting: "auto" follows the phone, the others stay put. */
+fun orientationOf(setting: String): Int = when (setting) {
+    "portrait" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+    "landscape" -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+    else -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+}
+
+/**
+ * The camera picture with the guide frame. Double tap takes the card by hand, pinch zooms.
+ * The frames are cut to the box's shape, so any box size works (half the screen).
+ */
+@Composable
+fun CameraArea(state: UiState, vm: ScannerViewModel, torch: Boolean, video: Boolean, modifier: Modifier,
+               extra: @Composable BoxScope.() -> Unit = {}) {
+    Box(modifier.background(Color.Black).clipToBounds()
+        .onSizeChanged { if (it.width > 0 && it.height > 0) vm.setViewAspect(it.width.toFloat() / it.height) }) {
+        CameraPreview(onFrame = vm::onFrame, torch = torch, zoom = state.settings.zoom, onMaxZoom = vm::setMaxZoom,
+            modifier = Modifier.fillMaxSize())
+        GuideOverlay(state, Modifier.fillMaxSize(), dim = !video)
+        CameraGestures(state, vm, alwaysShowZoom = !video)
+        extra()
+    }
 }
 
 @Composable
@@ -251,8 +305,7 @@ private fun ResultCard(s: Shown, settings: Settings, vm: ScannerViewModel) {
     val ctx = LocalContext.current
     val c = s.version
     Row {
-        AsyncImage(model = c.thumbnailUrl ?: s.priceCard.thumbnailUrl, contentDescription = c.name,
-            modifier = Modifier.width(86.dp).aspectRatio(63f / 88f).background(Panel, RoundedCornerShape(6.dp)))
+        CardImage(s, Modifier.width(96.dp).aspectRatio(63f / 88f))
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(c.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -375,8 +428,8 @@ fun PsaLine(g: Graded, big: Boolean = false, printing: Printing.Kind? = null) {
     Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         listOf("PSA 10" to g.psa10, "PSA 9" to g.psa9, "PSA 8" to g.psa8).forEach { (label, v) ->
             Column {
-                Text(label, color = Muted, fontSize = 11.sp)
-                Text(usd(v), color = Color.White, fontSize = size, fontWeight = FontWeight.Bold)
+                Text(label, color = Muted, fontSize = 11.sp, maxLines = 1, softWrap = false)
+                Text(usd(v), color = Color.White, fontSize = size, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
             }
         }
     }
@@ -384,17 +437,21 @@ fun PsaLine(g: Graded, big: Boolean = false, printing: Printing.Kind? = null) {
         color = Muted, fontSize = 11.sp)
 }
 
-/** "Gem rate 11.3% · PSA 10: 340 of 3,000 graded" (PSA population report) */
+/** "Gem rate 11.3% · PSA 10: 340 of 3,000 graded" (PSA population report), on one line */
 @Composable
 fun GemLine(p: Population, big: Boolean = false) {
     val rate = p.gemRate ?: p.psa10?.let { it.toDouble() / p.psaTotal } ?: return
-    Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.Bottom) {
-        Text("Gem rate ", color = Muted, fontSize = if (big) 14.sp else 12.sp)
-        Text(String.format(Locale.getDefault(), "%.1f%%", rate * 100), color = Color.White,
-            fontSize = if (big) 18.sp else 14.sp, fontWeight = FontWeight.Bold)
-        Text(String.format(Locale.getDefault(), "  · PSA 10: %,d of %,d graded", p.psa10 ?: 0, p.psaTotal),
-            color = Muted, fontSize = if (big) 14.sp else 12.sp)
+    val small = if (big) 14.sp else 12.sp
+    val text = buildAnnotatedString {
+        withStyle(SpanStyle(color = Muted, fontSize = small)) { append("Gem rate ") }
+        withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.Bold)) {
+            append(String.format(Locale.getDefault(), "%.1f%%", rate * 100))
+        }
+        withStyle(SpanStyle(color = Muted, fontSize = small)) {
+            append(String.format(Locale.getDefault(), "  · PSA 10: %,d of %,d graded", p.psa10 ?: 0, p.psaTotal))
+        }
     }
+    FitText(text, if (big) 18.sp else 14.sp, Color.White, Modifier.padding(top = 4.dp))
 }
 
 @Composable
@@ -412,7 +469,7 @@ private fun DebugPanel(d: DebugInfo) {
 @Composable
 fun SettingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) {
     val s = state.settings
-    var title by remember { mutableStateOf(s.title) }
+    var title by rememberSaveable { mutableStateOf(s.title) }
     AlertDialog(
         onDismissRequest = { vm.updateSettings { it.copy(title = title) }; onClose() },
         title = { Text("Settings") },
@@ -437,6 +494,30 @@ fun SettingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) {
                         }
                     }
                 }
+                Text("Screen orientation", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("auto" to "Auto", "portrait" to "Portrait", "landscape" to "Landscape").forEach { (v, label) ->
+                        FilterChip(selected = v == s.orientation, onClick = { vm.updateSettings { it.copy(orientation = v, title = title) } },
+                            label = { Text(label) })
+                    }
+                }
+                Text("Portrait and Landscape stay put; Auto turns with the phone", color = Muted, fontSize = 12.sp)
+                Text("Capture frame size", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(50, 60, 70, 80, 90).forEach { v ->
+                        FilterChip(selected = v == s.guideSize, onClick = { vm.updateSettings { it.copy(guideSize = v) } },
+                            label = { Text("$v%") })
+                    }
+                }
+                Text("height of the frame in the camera picture; bigger = hold the card closer", color = Muted, fontSize = 12.sp)
+                Text("Camera zoom", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(1f, 1.5f, 2f, 3f, 4f).forEach { v ->
+                        FilterChip(selected = kotlin.math.abs(v - s.zoom) < 0.05f, enabled = v <= state.maxZoom + 0.01f,
+                            onClick = { vm.setZoom(v) }, label = { Text(zoomLabel(v)) })
+                    }
+                }
+                Text("or pinch the camera picture", color = Muted, fontSize = 12.sp)
                 Text("Energy cards", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf(0 to "recognise", 1 to "skip common", 2 to "skip all").forEach { (v, label) ->
@@ -457,7 +538,7 @@ fun SettingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) {
                     color = Muted, fontSize = 12.sp)
                 SettingSwitch("PSA 10 / 9 / 8 prices", if (state.hasPsaData) "eBay sold averages, USD" else "not in this data pack yet",
                     s.showPsa) { v -> vm.updateSettings { it.copy(showPsa = v) } }
-                SettingSwitch("YouTube mode", "full screen, price reveal, pack value; follows the phone's orientation",
+                SettingSwitch("YouTube mode", "full screen, price reveal, pack value",
                     s.youtube) { v -> vm.updateSettings { it.copy(youtube = v, title = title) } }
                 OutlinedTextField(value = title, onValueChange = { title = it }, singleLine = true,
                     label = { Text("YouTube title line (optional)") }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
@@ -482,11 +563,12 @@ private fun SettingSwitch(label: String, sub: String, value: Boolean, onChange: 
 }
 
 /**
- * Double tap on the camera picture: take the card in the frame now (cards the scanner isn't
- * sure about). A short white flash, like a camera shutter, confirms it.
+ * Touches on the camera picture. Double tap: take the card in the frame now (cards the
+ * scanner isn't sure about); a short white flash, like a camera shutter, confirms it.
+ * Pinch: zoom. The zoom shows while it changes (and all the time in scanner mode).
  */
 @Composable
-fun ManualTrigger(state: UiState, vm: ScannerViewModel) {
+fun CameraGestures(state: UiState, vm: ScannerViewModel, alwaysShowZoom: Boolean) {
     val flash = remember { Animatable(0f) }
     LaunchedEffect(state.flash) {
         if (state.flash > 0) {
@@ -494,18 +576,40 @@ fun ManualTrigger(state: UiState, vm: ScannerViewModel) {
             flash.animateTo(0f, tween(380))
         }
     }
+    val zoom = state.settings.zoom
+    var firstZoom by remember { mutableStateOf(zoom) }
+    var recent by remember { mutableStateOf(false) }
+    LaunchedEffect(zoom) {
+        if (zoom == firstZoom) return@LaunchedEffect
+        firstZoom = Float.NaN
+        recent = true
+        delay(1500)
+        recent = false
+    }
     Box(Modifier.fillMaxSize()
         .background(Color.White.copy(alpha = flash.value))
-        .pointerInput(Unit) { detectTapGestures(onDoubleTap = { vm.manualTrigger() }) })
+        .pointerInput(Unit) { detectTapGestures(onDoubleTap = { vm.manualTrigger() }) }
+        .pointerInput(Unit) { detectTransformGestures { _, _, z, _ -> if (z != 1f) vm.zoomBy(z) } }) {
+        if (recent || (alwaysShowZoom && zoom > 1.01f)) {
+            Text(zoomLabel(zoom), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.align(Alignment.TopStart).padding(10.dp)
+                    .background(Color(0x88000000), RoundedCornerShape(10.dp)).padding(horizontal = 8.dp, vertical = 3.dp))
+        }
+    }
 }
+
+fun zoomLabel(z: Float): String =
+    if (kotlin.math.abs(z - z.roundToInt()) < 0.05f) "${z.roundToInt()}×" else String.format(Locale.getDefault(), "%.1f×", z)
 
 @Composable
 fun GuideOverlay(state: UiState, modifier: Modifier, dim: Boolean) {
     Canvas(modifier) {
-        val prior = Readings.guidePrior(size.width.toInt().coerceAtLeast(1), size.height.toInt().coerceAtLeast(1))
-        val gh = (prior.h * size.height).toFloat()
-        val gw = gh * 63f / 88f
-        val tl = Offset((size.width - gw) / 2, (size.height - gh) / 2)
+        val w = size.width.toInt().coerceAtLeast(1)
+        val h = size.height.toInt().coerceAtLeast(1)
+        val g = Readings.guideQuad(w, h, Readings.guidePrior(w, h, state.settings.guideFraction))
+        val gw = (g[1].x - g[0].x).toFloat()
+        val gh = (g[3].y - g[0].y).toFloat()
+        val tl = Offset(g[0].x.toFloat(), g[0].y.toFloat())
         val col = when (state.liveConfidence) { Confidence.SURE -> Sure; Confidence.LIKELY -> Likely; else -> Color.White }
         if (dim) {
             val guide = Path().apply { addRoundRect(RoundRect(tl.x, tl.y, tl.x + gw, tl.y + gh, CornerRadius(18f, 18f))) }
@@ -524,7 +628,7 @@ fun GuideOverlay(state: UiState, modifier: Modifier, dim: Boolean) {
         }
         // hold still: the green bar under the frame fills up until the card is taken
         state.liveProgress?.takeIf { it > 0f && state.liveConfidence == Confidence.SURE }?.let { p ->
-            val y = tl.y + gh + 14f
+            val y = minOf(tl.y + gh + 14f, size.height - 8f)
             drawLine(Color.White.copy(alpha = 0.25f), Offset(tl.x, y), Offset(tl.x + gw, y), 8f, StrokeCap.Round)
             drawLine(Sure, Offset(tl.x, y), Offset(tl.x + gw * p, y), 8f, StrokeCap.Round)
         }
@@ -544,7 +648,8 @@ fun GuideOverlay(state: UiState, modifier: Modifier, dim: Boolean) {
 }
 
 @Composable
-fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, modifier: Modifier) {
+fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, zoom: Float, onMaxZoom: (Float) -> Unit,
+                  modifier: Modifier) {
     val ctx = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val previewView = remember {
@@ -559,7 +664,7 @@ fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, modifi
         val future = ProcessCameraProvider.getInstance(ctx)
         future.addListener({
             val provider = future.get()
-            // 4:3 frames; the preview box has the same shape, so the guide matches the analysed frame
+            // 4:3 frames for preview and analysis (same view); the view model cuts them to the box's shape
             val selector = ResolutionSelector.Builder()
                 .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
                 .setResolutionStrategy(ResolutionStrategy(Size(1280, 960), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER))
@@ -573,7 +678,9 @@ fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, modifi
                 .build()
             analysis.setAnalyzer(executor, FrameAnalyzer(onFrame))
             provider.unbindAll()
-            camera = provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+            camera = provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis).also { c ->
+                c.cameraInfo.zoomState.observe(owner) { z -> onMaxZoom(z.maxZoomRatio) }
+            }
         }, ContextCompat.getMainExecutor(ctx))
         onDispose {
             runCatching { future.get().unbindAll() }
@@ -581,6 +688,11 @@ fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, modifi
         }
     }
     LaunchedEffect(torch, camera) { camera?.cameraControl?.enableTorch(torch) }
+    LaunchedEffect(zoom, camera) {
+        val c = camera ?: return@LaunchedEffect
+        val max = maxOf(1f, c.cameraInfo.zoomState.value?.maxZoomRatio ?: 1f)
+        c.cameraControl.setZoomRatio(zoom.coerceIn(1f, max))
+    }
     AndroidView(factory = { previewView }, modifier = modifier)
 }
 

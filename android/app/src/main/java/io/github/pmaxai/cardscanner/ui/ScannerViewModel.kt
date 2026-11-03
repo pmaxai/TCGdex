@@ -39,6 +39,7 @@ import org.opencv.core.Mat
 import org.opencv.core.Point
 import org.opencv.imgproc.Imgproc
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.roundToInt
 
 enum class Confidence { SURE, LIKELY, UNSURE }
 
@@ -71,7 +72,16 @@ data class Shown(
     val versionByUser: Boolean = false,
     /** every version of this artwork (sets, languages), the shown one included, for switching */
     val versions: List<CardInfo> = emptyList(),
+    /** the card as the camera saw it, straightened: shown when there is no image (or no internet) */
+    val scan: Bitmap? = null,
 ) {
+    /**
+     * Whose picture is shown: this version, else the same card in another language (same
+     * artwork), else any other version of the artwork. Null: no version has an image, the
+     * scanned card is shown instead.
+     */
+    val imageCard: CardInfo? get() = (listOfNotNull(version, priceCard, english) +
+        versions.sortedBy { if (it.id == version.id) 0 else 1 }).firstOrNull { it.imageUrl != null }
     /** position of the shown version in [versions] */
     val versionIndex: Int get() = versions.indexOfFirst { it.id == version.id && it.lang == version.lang }
     val selected: Printing? get() = priceCard.printing(printing)
@@ -107,7 +117,15 @@ data class Settings(
     val energyFilter: Int = 0,
     /** a card must cover at least this share of the guide frame (percent, 0 = off): no "ghost" cards */
     val minFillPercent: Int = 0,
-)
+    /** screen orientation: "auto" (follows the phone), "portrait" or "landscape" (fixed) */
+    val orientation: String = "auto",
+    /** camera zoom (1 = no zoom) */
+    val zoom: Float = 1f,
+    /** height of the capture frame, percent of the camera picture */
+    val guideSize: Int = 70,
+) {
+    val guideFraction: Double get() = guideSize / 100.0
+}
 
 data class DebugInfo(val preview: Bitmap?, val lines: List<String>)
 
@@ -133,6 +151,8 @@ data class UiState(
     val flash: Int = 0,
     /** a short message for the user (toast), null when there is none */
     val message: String? = null,
+    /** the camera's largest zoom (as far as the app uses it) */
+    val maxZoom: Float = ScannerViewModel.MAX_ZOOM,
 ) {
     val sessionValue: Double get() = session.sumOf { it.value ?: 0.0 }
 }
@@ -175,6 +195,11 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                 triggerDelayMs = prefs.getInt("trigger_delay", 300),
                 energyFilter = prefs.getInt("energy_filter", 0),
                 minFillPercent = prefs.getInt("min_fill", 0),
+                // before this setting: scanning in portrait, YouTube mode following the phone
+                orientation = prefs.getString("orientation", null)
+                    ?: if (prefs.getBoolean("youtube", false)) "auto" else "portrait",
+                zoom = prefs.getFloat("zoom", 1f),
+                guideSize = prefs.getInt("guide_size", 70),
             ))
         }
         viewModelScope.launch(Dispatchers.IO) {
@@ -206,38 +231,75 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ------------------------------------------------------------------ frames
+    /** width / height of the camera box on screen (0: not known yet) */
+    @Volatile private var viewAspect = 0f
+
+    /** The camera box changed size: frames are cut to what it shows. */
+    fun setViewAspect(aspect: Float) { viewAspect = aspect }
+
+    /**
+     * The part of the frame the camera box shows (the preview fills the box and cuts off
+     * the rest, centred), so the guide frame, the outline drawn and the analysed picture
+     * agree for any box shape. Null: the frame already has the box's shape.
+     */
+    private fun visiblePart(rgb: Mat): Mat? {
+        val a = viewAspect
+        if (a <= 0f) return null
+        val fw = rgb.cols()
+        val fh = rgb.rows()
+        val fa = fw.toFloat() / fh
+        if (kotlin.math.abs(fa - a) / fa < 0.01f) return null
+        val rect = if (a > fa) {
+            val h = (fw / a).roundToInt().coerceIn(1, fh)
+            org.opencv.core.Rect(0, (fh - h) / 2, fw, h)
+        } else {
+            val w = (fh * a).roundToInt().coerceIn(1, fw)
+            org.opencv.core.Rect((fw - w) / 2, 0, w, fh)
+        }
+        val sub = rgb.submat(rect)
+        return sub.clone().also { sub.release() }
+    }
+
     /** Called on the camera's analysis thread with an upright RGB frame. Drops frames while busy. */
-    fun onFrame(rgb: Mat) {
-        val rec = recognizer ?: return
+    fun onFrame(full: Mat) {
+        if (recognizer == null) return
         if (_state.value.paused || !busy.compareAndSet(false, true)) return
+        var crop: Mat? = null
         try {
-            val prior = Readings.guidePrior(rgb.cols(), rgb.rows())
-            if (manualRequest.getAndSet(false)) {
-                takeByHand(rec, rgb, prior)
-                return
-            }
-            val r0 = rec.recognise(rgb, prior, withPreview = _state.value.settings.showDebug)
-            // too little of the frame covered by a card: treat as "no card" (no ghost cards)
-            val minFill = _state.value.settings.minFillPercent
-            val fill = r0.best?.let { rec.guideFill(r0, it, rgb.cols(), rgb.rows(), prior) }
-            lastFill = fill
-            val r = if (minFill > 0 && (fill ?: 0.0) * 100 < minFill) r0.withoutCard() else r0
-            val conf = confidenceOf(r)
-            synchronized(lock) {
-                val changed = tracker.update(r.best?.group, r.margin)
-                val current = _state.value.shown
-                if (changed) {
-                    showNew(tracker.shown!!, r, rgb, fromPhoto = false, conf = conf)
-                } else if (current != null && !current.fromPhoto && r.detected && r.best?.group == current.group) {
-                    trackFoil(current, r, rgb)
-                }
-            }
-            publishLive(r, rgb.cols(), rgb.rows(), conf)
+            crop = visiblePart(full)
+            analyse(crop ?: full)
         } catch (t: Throwable) {
             Log.e(TAG, "frame failed", t)
         } finally {
+            crop?.release()
             busy.set(false)
         }
+    }
+
+    private fun analyse(rgb: Mat) {
+        val rec = recognizer ?: return
+        val prior = Readings.guidePrior(rgb.cols(), rgb.rows(), _state.value.settings.guideFraction)
+        if (manualRequest.getAndSet(false)) {
+            takeByHand(rec, rgb, prior)
+            return
+        }
+        val r0 = rec.recognise(rgb, prior, withPreview = _state.value.settings.showDebug)
+        // too little of the frame covered by a card: treat as "no card" (no ghost cards)
+        val minFill = _state.value.settings.minFillPercent
+        val fill = r0.best?.let { rec.guideFill(r0, it, rgb.cols(), rgb.rows(), prior) }
+        lastFill = fill
+        val r = if (minFill > 0 && (fill ?: 0.0) * 100 < minFill) r0.withoutCard() else r0
+        val conf = confidenceOf(r)
+        synchronized(lock) {
+            val changed = tracker.update(r.best?.group, r.margin)
+            val current = _state.value.shown
+            if (changed) {
+                showNew(tracker.shown!!, r, rgb, fromPhoto = false, conf = conf)
+            } else if (current != null && !current.fromPhoto && r.detected && r.best?.group == current.group) {
+                trackFoil(current, r, rgb)
+            }
+        }
+        publishLive(r, rgb.cols(), rgb.rows(), conf)
     }
 
     /** Double tap on the camera: the next frame is taken by hand. */
@@ -373,7 +435,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun build(group: String, version: CardInfo, text: CardText?, conf: Confidence, alternatives: List<Candidate>,
-                      locked: Boolean, fromPhoto: Boolean, preview: Bitmap?): Shown {
+                      locked: Boolean, fromPhoto: Boolean, preview: Bitmap?, scan: Bitmap?): Shown {
         val cat = catalog!!
         val english = if (version.lang == "en") null else cat.cardExact(version.id, "en") ?: cat.englishOf(group)
         val hasOwnPrice = version.printings.any { it.value != null }
@@ -383,7 +445,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             .let { v -> if (v.none { it.id == version.id && it.lang == version.lang }) listOf(version) + v else v }
         val langs = all.filter { (it.id == version.id || it.lang in ASIAN) && (it.lang != version.lang || it.id != version.id) }
         return Shown(group, version, english, priceCard, priceCard.printings.firstOrNull()?.kind, false, null, conf,
-            alternatives, langs, text, locked, fromPhoto, preview, ++serial, versions = all)
+            alternatives, langs, text, locked, fromPhoto, preview, ++serial, versions = all, scan = scan)
     }
 
     private fun showNew(group: String, r: Recognition, rgb: Mat, fromPhoto: Boolean, conf: Confidence) {
@@ -400,7 +462,9 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         foilSum = 0.0
         foilN = 0
         lastText = null
-        var shown = build(group, version, null, conf, alternatives, locked = false, fromPhoto = fromPhoto, preview = r.preview)
+        // the card as the camera saw it: the picture when the database has none (or there is no internet)
+        val scan = hit?.let { h -> runCatching { recognizer?.cardBitmap(rgb, r, h) }.onFailure { Log.w(TAG, "card picture failed", it) }.getOrNull() }
+        var shown = build(group, version, null, conf, alternatives, locked = false, fromPhoto = fromPhoto, preview = r.preview, scan = scan)
         if (hit != null) staticFoil(rgb, r, hit, shown)?.let { est -> shown = shown.copy(foil = est) }
         val first = shown
         _state.update { s -> s.copy(shown = first, session = if (s.settings.youtube && !fromPhoto) addToSession(s, first) else s.session) }
@@ -426,7 +490,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             cur.copy(text = text)
         } else {
             val b = build(group, version, text, cur.confidence, cur.alternatives, locked = cur.locked, fromPhoto = cur.fromPhoto,
-                preview = cur.preview)
+                preview = cur.preview, scan = cur.scan)
             val keep = cur.printing.takeIf { cur.printingByUser && b.priceCard.printings.any { it.kind == cur.printing } }
             b.copy(serial = cur.serial, foil = cur.foil, printing = keep ?: b.printing, printingByUser = keep != null)
         }
@@ -521,12 +585,12 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     private fun addToSession(s: UiState, sh: Shown): List<SessionItem> {
         if (sh.confidence == Confidence.UNSURE) return s.session
         if (s.session.lastOrNull()?.group == sh.group) return s.session
-        return s.session + SessionItem(sh.serial, System.currentTimeMillis(), sh.copy(preview = null))
+        return s.session + SessionItem(sh.serial, System.currentTimeMillis(), sh.copy(preview = null, scan = null))
     }
 
     /** The pack entry of a card that changed (printing, language, text read, or another card chosen). */
     private fun replaceInSession(session: List<SessionItem>, sh: Shown, oldSerial: Int = sh.serial): List<SessionItem> =
-        session.map { if (it.serial == oldSerial) it.copy(serial = sh.serial, shown = sh.copy(preview = null)) else it }
+        session.map { if (it.serial == oldSerial) it.copy(serial = sh.serial, shown = sh.copy(preview = null, scan = null)) else it }
 
     fun resetSession() = _state.update { it.copy(session = emptyList()) }
     fun undoLast() = _state.update { it.copy(session = it.session.dropLast(1)) }
@@ -557,8 +621,9 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         foil?.reset()
         val version = resolveVersion(c.group, null, lastText) ?: c.info
         val alternatives = (listOf(Candidate(s.group, s.version, 0f, "")) + s.alternatives).filter { it.group != c.group }
+        // another artwork: the picture of the scanned card still shows what was in front of the camera
         val shown = build(c.group, version, lastText, Confidence.SURE, alternatives, locked = true, fromPhoto = s.fromPhoto,
-            preview = s.preview).copy(versionByUser = true)
+            preview = s.preview, scan = s.scan).copy(versionByUser = true)
         _state.update { st -> st.copy(shown = shown, session = replaceInSession(st.session, shown, oldSerial = s.serial)) }
         maybeAlert(shown)
     }
@@ -576,7 +641,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
 
     fun chooseLanguage(info: CardInfo) = _state.update { st ->
         val s = st.shown ?: return@update st
-        val shown = build(s.group, info, s.text, s.confidence, s.alternatives, true, s.fromPhoto, s.preview)
+        val shown = build(s.group, info, s.text, s.confidence, s.alternatives, true, s.fromPhoto, s.preview, s.scan)
             .copy(serial = s.serial, printing = s.printing, printingByUser = s.printingByUser, foil = s.foil, versionByUser = true)
             .let { if (it.priceCard.printing(s.printing)?.kind != s.printing) it.copy(printing = it.priceCard.printings.firstOrNull()?.kind) else it }
         tracker.lock(s.group)
@@ -614,11 +679,33 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             .putBoolean("debug", new.showDebug).putBoolean("youtube", new.youtube).putString("title", new.title)
             .putInt("trigger_delay", new.triggerDelayMs)
             .putInt("energy_filter", new.energyFilter).putInt("min_fill", new.minFillPercent)
+            .putString("orientation", new.orientation).putFloat("zoom", new.zoom).putInt("guide_size", new.guideSize)
             .apply()
         tracker.delayMs = new.triggerDelayMs.toLong()
         if (new.energyFilter != _state.value.settings.energyFilter) applyEnergyFilter(new.energyFilter)
         if (new.threshold != _state.value.settings.threshold) lastAlerted = null
         _state.update { it.copy(settings = new) }
+    }
+
+    private var zoomSave: kotlinx.coroutines.Job? = null
+
+    /** Pinch or zoom setting: applied at once, saved when the fingers rest. */
+    fun setZoom(z: Float) {
+        val v = z.coerceIn(1f, _state.value.maxZoom)
+        _state.update { it.copy(settings = it.settings.copy(zoom = v)) }
+        zoomSave?.cancel()
+        zoomSave = viewModelScope.launch { delay(500); prefs.edit().putFloat("zoom", v).apply() }
+    }
+
+    /** Pinch: zoom by this factor (reads the current zoom at once, so fast pinches add up). */
+    fun zoomBy(factor: Float) = setZoom(_state.value.settings.zoom * factor)
+
+    /** The camera says how far it can zoom. */
+    fun setMaxZoom(max: Float) {
+        val m = max.coerceIn(1f, MAX_ZOOM)
+        if (m != _state.value.maxZoom) _state.update {
+            it.copy(maxZoom = m, settings = it.settings.copy(zoom = it.settings.zoom.coerceAtMost(m)))
+        }
     }
 
     /** Energy cards the user switched off are never matched (so they can't be shown either). */
@@ -665,6 +752,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
 
     companion object {
         const val TAG = "CardScanner"
+        /** further than this the analysed picture gets too coarse */
+        const val MAX_ZOOM = 5f
         /** languages with their own set ids and script */
         val ASIAN = setOf("ja", "ko", "zh-tw", "zh-cn", "th")
     }

@@ -58,6 +58,8 @@ data class CardInfo(
 ) {
     val numberText: String get() = if (setTotal != null && setTotal > 0) "$number/$setTotal" else number
     val thumbnailUrl: String? get() = imageUrl?.let { "$it/low.webp" }
+    /** the large image (fullscreen view) */
+    val highUrl: String? get() = imageUrl?.let { "$it/high.webp" }
     val bestValue: Double? get() = printings.mapNotNull { it.value }.maxOrNull()
     fun printing(kind: Printing.Kind?): Printing? = printings.firstOrNull { it.kind == kind } ?: printings.firstOrNull()
 

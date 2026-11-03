@@ -70,6 +70,18 @@ downgrades), or restore the code from the tag.
   the scanner isn't sure about: it reads every outline it found plus the frame itself
   and shows the best match (a white flash confirms it). The frame-fill setting doesn't
   apply to it.
+- **Camera and card, half and half:** the camera picture takes one half of the screen and
+  the result the other, in portrait (camera on top) and landscape (camera left).
+- **Screen orientation** (⚙): *Auto* turns with the phone, *Portrait* and *Landscape* stay
+  put. Works in both modes.
+- **Zoom:** pinch the camera picture, or pick 1× … 4× in ⚙. The zoom is kept.
+- **Capture frame size** (⚙, 50–90 %): how tall the frame is in the camera picture.
+  Bigger means holding the card closer (more detail), smaller suits a tripod further away.
+- **Card picture:** always shown: the card's image, the same card in another language, or
+  another print of the artwork; without internet or when there is no image at all, the
+  card as the camera saw it. **Hold the picture for a second** to see it full screen (✕
+  closes it); *Card image* / *Your card* switches between the database image and your
+  card, e.g. to check its condition.
 - **Other versions:** the same picture printed in other sets or languages is listed
   under the card (*Other version or language?*); tap one to switch, prices follow.
 - **Not this card?** The other candidates are listed under it; tap the right one. It
@@ -78,7 +90,9 @@ downgrades), or restore the code from the tag.
   that appears (any printing), so you can sweep through a box and only stop when it
   buzzes.
 - **YouTube mode** (⚙ → YouTube mode): a clean screen for screen-recorded opening and
-  price-check videos. Portrait or landscape, it follows the phone on the tripod.
+  price-check videos, in portrait or landscape (see *Screen orientation*). The card box
+  keeps the same look in both: it is scaled as a whole instead of wrapping text, and long
+  names or prices shrink to one line.
   - big card name and price with a count-up, and a "HIT" burst for cards above your
     alert price
   - the printings as chips under the price: tap the right one if the app got it wrong
@@ -88,8 +102,8 @@ downgrades), or restore the code from the tag.
   - **swipe the card to the left** to take it out of the pack (wrong match, or a card
     you don't want to count); the same card isn't taken again until you show another
   - a session bar with card count and total value
-  - tap the panel for controls: **save pack (CSV)**, new pack, remove last card, next
-    card, light, exit
+  - the **⚙ button** next to the pack value opens the menu: **save pack (CSV)**, new
+    pack, remove last card, next card, light, settings, exit
   - *Save pack* writes one row per card (name, English name, set, number, language,
     printing, Cardmarket and TCGplayer prices, PSA 10/9/8 with sale counts, hit, all
     printings) plus the pack total. On a German phone it uses `;` and decimal commas,
