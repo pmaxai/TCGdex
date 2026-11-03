@@ -321,3 +321,44 @@ def build_table(db: Path, cache_dir: Path) -> None:
     con.commit()
     log.info("PSA prices: %d cards with graded prices in the catalog", len(rows))
     con.close()
+
+
+def _skeleton(v, depth: int = 0, max_items: int = 4):
+    """Structure of a JSON value with short sample values (for looking at the API's format)."""
+    if isinstance(v, dict):
+        if depth > 5:
+            return "{...}"
+        return {k: _skeleton(x, depth + 1) for k, x in list(v.items())[:40]}
+    if isinstance(v, list):
+        return [_skeleton(x, depth + 1) for x in v[:max_items]] + (["..."] if len(v) > max_items else [])
+    if isinstance(v, str):
+        return v[:60]
+    return v
+
+
+def inspect(cache_dir: Path, n: int = 3) -> None:
+    """Print how cached PokemonPriceTracker cards describe graded sales per printing."""
+    files = sorted(Path(cache_dir).glob("*.json"))
+    log.info("PSA cache: %d sets", len(files))
+    shown = 0
+    stats = {"cards": 0, "with_salesByGrade": 0, "with_salesByPrinting": 0}
+    printings: dict[str, int] = {}
+    for f in files:
+        d = json.loads(f.read_text())
+        for c in d.get("cards", []):
+            stats["cards"] += 1
+            eb = c.get("ebay") or {}
+            if eb.get("salesByGrade"):
+                stats["with_salesByGrade"] += 1
+            sbp = eb.get("salesByPrinting")
+            if sbp:
+                stats["with_salesByPrinting"] += 1
+                for k in (sbp if isinstance(sbp, dict) else [x.get("printing", "?") for x in sbp if isinstance(x, dict)]):
+                    printings[str(k)] = printings.get(str(k), 0) + 1
+                if shown < n:
+                    shown += 1
+                    top = {k: _skeleton(v) for k, v in c.items() if k not in ("attacks", "flavorText", "weakness",
+                                                                                "resistance", "retreatCost")}
+                    log.info("PSA card with salesByPrinting (%s): %s", f.stem, json.dumps(top, ensure_ascii=False)[:6000])
+    log.info("PSA cache stats: %s", stats)
+    log.info("PSA printings in salesByPrinting: %s", dict(sorted(printings.items(), key=lambda t: -t[1])[:30]))

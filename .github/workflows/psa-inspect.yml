@@ -1,0 +1,26 @@
+name: PSA data check
+
+# Looks at the PSA prices already downloaded (no API calls, no credits):
+# prints how graded sales are split by printing.
+on:
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install numpy requests
+      - name: Restore PSA price cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/graded
+          key: graded-none
+          restore-keys: graded-
+      - name: Inspect
+        working-directory: pipeline
+        run: python -c "import logging,sys; logging.basicConfig(level=logging.INFO, format='%(message)s'); from tcgscan.graded import inspect; inspect('../.cache/graded')"
