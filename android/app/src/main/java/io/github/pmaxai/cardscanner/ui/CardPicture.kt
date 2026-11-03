@@ -118,7 +118,7 @@ fun FullscreenCard(s: Shown, scan: Painter?, onClose: () -> Unit) {
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally) {
                 FitText(s.version.name, 22.sp, Color.White, weight = FontWeight.Bold, align = TextAlign.Center)
-                FitText("${s.version.setName} · ${s.version.numberText} · ${LANG_NAMES[s.version.lang] ?: s.version.lang}",
+                FitText("${s.version.setLine(withLang = false)} · ${LANG_NAMES[s.version.lang] ?: s.version.lang}",
                     14.sp, Muted, align = TextAlign.Center)
                 if (img != null && scan != null) {
                     Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -81,7 +81,8 @@ class TrackerAndCsvTest {
 
     private fun card(id: String, lang: String, name: String, printings: List<Printing>,
                      graded: Map<Printing.Kind?, Graded> = emptyMap()) =
-        CardInfo(id, lang, name, "034", "Twilight Masquerade", 167, "Scarlet & Violet", "Common", null, null, printings, graded)
+        CardInfo(id, lang, name, "034", "Twilight Masquerade", 167, "Scarlet & Violet", "Common", null, null, printings, graded,
+            releaseDate = "2024-05-24")
 
     @Test
     fun packCsvHasOneRowPerCardAndRegionalNumbers() {
@@ -101,6 +102,8 @@ class TrackerAndCsvTest {
         assertEquals("Reverse holo", row[8]); assertEquals("0,07", row[9]); assertEquals("EUR", row[10])
         assertEquals("40,00", row[15]); assertEquals("2", row[16])          // PSA 10 of the reverse holo
         assertTrue(csv.contains("Pack value EUR;0,07"))
+        assertTrue(lines[0].contains(";Released;") && row.contains("2024-05-24"))
+        assertEquals("2024", de.year)
         assertTrue(csv.contains("\"Pack; one\""))                            // the separator inside a cell is quoted
         val us = PackCsv.build(items, Settings(), Locale.US)
         assertTrue(us.contains("Reverse holo,0.07,EUR"))

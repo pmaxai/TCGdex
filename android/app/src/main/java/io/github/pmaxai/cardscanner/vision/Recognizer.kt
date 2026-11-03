@@ -19,11 +19,13 @@ class Recognition(
     /** straightened card as the matcher saw it (for the debug view) */
     val preview: Bitmap?,
     val timings: Map<String, Long>,
+    /** taken by hand: the most likely cards over every outline read, best first (else = hits) */
+    val candidates: List<Hit> = hits,
 ) {
     val best: Hit? get() = hits.firstOrNull()
 
     /** The same frame, as if no card was in it (it covered too little of the guide frame). */
-    fun withoutCard() = Recognition(quad, false, emptyList(), 0f, preview, timings)
+    fun withoutCard() = Recognition(quad, false, emptyList(), 0f, preview, timings, emptyList())
 }
 
 class Recognizer(pack: Pack) : AutoCloseable {
@@ -65,8 +67,12 @@ class Recognizer(pack: Pack) : AutoCloseable {
 
         var best: Read? = null
         var bestIsOutline = false
+        // by hand: a longer list, merged over every outline (each card with its best score)
+        val k = if (manual) MANUAL_CANDIDATES else 5
+        val all = HashMap<String, Hit>()
         for ((i, q) in quads.withIndex()) {
-            val r = read(rgb, q, withPreview, ::lap)
+            val r = read(rgb, q, withPreview, ::lap, k, pool = if (manual) 160 else 40)
+            if (manual) r.hits.forEach { h -> if ((all[h.group]?.score ?: Float.NEGATIVE_INFINITY) < h.score) all[h.group] = h }
             if (best == null || (r.hits.firstOrNull()?.score ?: -1f) > (best.hits.firstOrNull()?.score ?: -1f)) {
                 best?.preview?.recycle()
                 best = r
@@ -75,12 +81,13 @@ class Recognizer(pack: Pack) : AutoCloseable {
             if (!manual && r.margin >= sureMargin) break
         }
         val b = best!!
-        return Recognition(b.quad, bestIsOutline, b.hits, b.margin, b.preview, t)
+        val candidates = if (manual) all.values.sortedByDescending { it.score }.take(MANUAL_CANDIDATES) else b.hits
+        return Recognition(b.quad, bestIsOutline, b.hits, b.margin, b.preview, t, candidates)
     }
 
     private class Read(val quad: Array<Point>, val hits: List<Hit>, val margin: Float, val preview: Bitmap?)
 
-    private fun read(rgb: Mat, quad: Array<Point>, withPreview: Boolean, lap: (String) -> Unit): Read {
+    private fun read(rgb: Mat, quad: Array<Point>, withPreview: Boolean, lap: (String) -> Unit, k: Int = 5, pool: Int = 40): Read {
         val g = geometry
         val card = Readings.toCard(rgb, quad, g)
         val card180 = Readings.rot180(card)
@@ -89,7 +96,7 @@ class Recognizer(pack: Pack) : AutoCloseable {
         lap("readings")
         val fps = fingerprinter.embed(inputs)
         lap("model")
-        val hits = matcher.search(fps)
+        val hits = matcher.search(fps, k = k, pool = pool)
         lap("search")
         val preview = if (withPreview) {
             Bitmap.createBitmap(card.cols(), card.rows(), Bitmap.Config.ARGB_8888).also {
@@ -195,6 +202,8 @@ class Recognizer(pack: Pack) : AutoCloseable {
     companion object {
         /** outlines tried per frame at most (the detector's answer + second guesses) */
         const val HYPOTHESES = 2
+        /** cards listed after a double tap */
+        const val MANUAL_CANDIDATES = 10
         val READINGS = listOf("card", "card upside down", "artwork", "artwork upside down")
 
         /** Android bitmap -> RGB Mat. */

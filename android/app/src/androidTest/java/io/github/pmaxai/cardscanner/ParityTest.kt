@@ -15,6 +15,7 @@ import io.github.pmaxai.cardscanner.vision.CardDetector
 import io.github.pmaxai.cardscanner.vision.Recognizer
 import org.json.JSONArray
 import org.json.JSONObject
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.BeforeClass
 import org.junit.Test
@@ -180,6 +181,12 @@ class ParityTest {
             val m = manual.best?.score ?: -1f
             Log.i(TAG, "by hand $file: ${manual.best?.group} %.3f (automatic ${auto.best?.group} %.3f)".format(m, a))
             assertTrue("$file: taking it by hand found a worse match (%.3f < %.3f)".format(m, a), m >= a - 1e-4f)
+            // the list to pick from: 10 different cards, best first, the shown one on top
+            val c = manual.candidates
+            assertTrue("$file: list size ${c.size}", c.size in 6..10)
+            assertEquals("$file: distinct cards", c.size, c.map { it.group }.toSet().size)
+            assertEquals("$file: shown card first", manual.best?.group, c.first().group)
+            assertTrue("$file: best first", c.zipWithNext().all { (x, y) -> x.score >= y.score })
             n++
         }
         assertTrue(n > 0)

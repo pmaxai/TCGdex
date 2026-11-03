@@ -20,7 +20,7 @@ object PackCsv {
         "Value", "Currency", "Cardmarket trend EUR", "Cardmarket 30-day avg EUR", "Cardmarket lowest EUR",
         "TCGplayer USD", "PSA 10 USD", "PSA 10 sales", "PSA 9 USD", "PSA 9 sales", "PSA 8 USD", "PSA 8 sales",
         "PSA gem rate %", "PSA graded",
-        "Hit", "All printings", "Rarity", "Series", "Prices from", "Cardmarket search",
+        "Hit", "All printings", "Rarity", "Series", "Released", "Prices from", "Cardmarket search",
     )
 
     fun build(items: List<SessionItem>, settings: Settings, locale: Locale): String {
@@ -59,7 +59,8 @@ object PackCsv {
                 s.population?.psaTotal,
                 if (hit) "yes" else "",
                 s.priceCard.printings.joinToString(" | ") { pr -> "${pr.kind.label} ${printingValue(pr, ::num)}" },
-                s.priceCard.rarity, s.priceCard.series, s.priceCard.prices?.updated?.take(10),
+                s.priceCard.rarity, s.priceCard.series, v.releaseDate ?: s.priceCard.releaseDate,
+                s.priceCard.prices?.updated?.take(10),
                 "https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=" +
                     URLEncoder.encode(s.priceCard.name, "UTF-8"),
             ))

@@ -69,7 +69,11 @@ downgrades), or restore the code from the tag.
 - **Double tap** on the camera picture takes the card in the frame right away, for cards
   the scanner isn't sure about: it reads every outline it found plus the frame itself
   and shows the best match (a white flash confirms it). The frame-fill setting doesn't
-  apply to it.
+  apply to it. A small window then lists the **10 most likely cards** (picture, set,
+  number, year, price; a bar shows how close each came): tap the right one, or ✕ to keep
+  the one shown.
+- **Release year:** the year the card's set came out (in its language) is shown next to
+  the set and number, also in the version lists, and goes into the pack CSV.
 - **Camera and card, half and half:** the camera picture takes one half of the screen and
   the result the other, in portrait (camera on top) and landscape (camera left).
 - **Screen orientation** (⚙): *Auto* turns with the phone, *Portrait* and *Landscape* stay
@@ -102,6 +106,10 @@ downgrades), or restore the code from the tag.
   - **swipe the card to the left** to take it out of the pack (wrong match, or a card
     you don't want to count); the same card isn't taken again until you show another
   - a session bar with card count and total value
+  - **+1** (next to ⚙) puts the shown card into the pack once more: two of the same card
+    in a row are otherwise counted once. Each copy is its own entry (own printing; a
+    swipe removes only that copy), and the picture shows ×2, ×3 … when the pack has the
+    card more than once. It also adds a card the scanner wasn't sure enough to count.
   - the **⚙ button** next to the pack value opens the menu: **save pack (CSV)**, new
     pack, remove last card, next card, light, settings, exit
   - *Save pack* writes one row per card (name, English name, set, number, language,

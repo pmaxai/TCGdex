@@ -174,6 +174,8 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
             state.settings.youtube -> YouTubeScreen(state, vm)
             else -> Scanner(state, vm)
         }
+        // after a double tap: the most likely cards to pick from
+        state.picks?.let { PickList(it, state.shown, onPick = vm::pick, onClose = vm::closePicks) }
     }
 }
 
@@ -309,7 +311,7 @@ private fun ResultCard(s: Shown, settings: Settings, vm: ScannerViewModel) {
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(c.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text("${c.setName} · ${c.numberText} · ${c.lang.uppercase()}", color = Muted, fontSize = 13.sp)
+            Text(c.setLine(), color = Muted, fontSize = 13.sp)
             s.english?.let { e -> Text("English: ${e.name} · ${e.setName} ${e.numberText}", color = Color.White, fontSize = 13.sp) }
             c.rarity?.let { Text(it, color = Muted, fontSize = 12.sp) }
             Spacer(Modifier.height(4.dp))
@@ -357,7 +359,7 @@ private fun ResultCard(s: Shown, settings: Settings, vm: ScannerViewModel) {
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             others.forEach { v ->
                 val label = if (v.id == s.version.id) "${LANG_NAMES[v.lang] ?: v.lang}: ${v.name}"
-                            else "${v.setName} ${v.numberText} · ${v.lang.uppercase()}"
+                            else v.setLine()
                 FilterChip(selected = false, onClick = { vm.chooseVersion(v) }, label = { Text(label, fontSize = 12.sp) })
             }
         }
@@ -698,6 +700,11 @@ fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, zoom: 
 
 /** Labels shared by both screens. */
 fun printingPrice(p: Printing): String = if (p.eur != null) eur(p.eur) else usd(p.usd)
+
+/** "Twilight Masquerade · 034/167 · DE · 2024" */
+fun CardInfo.setLine(withLang: Boolean = true): String =
+    listOfNotNull(setName.takeIf { it.isNotBlank() }, numberText.takeIf { it.isNotBlank() },
+        lang.uppercase().takeIf { withLang }, year).joinToString(" · ")
 
 @Suppress("unused")
 private fun CardInfo.title(): String = "$name · $setName $numberText"

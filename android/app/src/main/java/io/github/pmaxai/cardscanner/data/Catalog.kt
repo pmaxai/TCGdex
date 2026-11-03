@@ -55,7 +55,11 @@ data class CardInfo(
     val population: Map<Printing.Kind?, Population> = emptyMap(),
     /** 'Pokemon', 'Trainer' or 'Energy' (null in older packs) */
     val category: String? = null,
+    /** release date of the card's set in its language, "1999-01-09" */
+    val releaseDate: String? = null,
 ) {
+    /** release year, "1999" */
+    val year: String? get() = releaseDate?.take(4)?.takeIf { it.length == 4 && it.all(Char::isDigit) }
     val numberText: String get() = if (setTotal != null && setTotal > 0) "$number/$setTotal" else number
     val thumbnailUrl: String? get() = imageUrl?.let { "$it/low.webp" }
     /** the large image (fullscreen view) */
@@ -83,6 +87,7 @@ class Catalog(private val db: SQLiteDatabase) {
     private val hasPopulation = tableExists("population")
     /** the data pack knows each card's category (for skipping energy cards) */
     val hasCategory = hasInfo && columns("card_info").contains("category")
+    private val hasReleaseDate = columns("sets").contains("release_date")
 
     /** The card in exactly this language, or null. */
     fun cardExact(id: String, lang: String): CardInfo? = synchronized(cache) {
@@ -125,7 +130,8 @@ class Catalog(private val db: SQLiteDatabase) {
             SELECT c.id, c.lang, c.name, c.local_id, c.image_url, ${if (hasInfo) "i.rarity" else "c.rarity"},
                    s.name, s.official, s.serie_name,
                    p.updated, p.trend, p.avg, p.low, p.avg30, p.trend_holo, p.avg_holo, p.low_holo, p.avg30_holo,
-                   ${if (hasInfo) "i.variants" else "NULL"}, ${if (hasCategory) "i.category" else "NULL"}
+                   ${if (hasInfo) "i.variants" else "NULL"}, ${if (hasCategory) "i.category" else "NULL"},
+                   ${if (hasReleaseDate) "s.release_date" else "NULL"}
             FROM cards c
             LEFT JOIN sets s ON s.id = c.set_id AND s.lang = c.lang
             LEFT JOIN prices p ON p.id = c.id
@@ -153,6 +159,7 @@ class Catalog(private val db: SQLiteDatabase) {
                 graded = graded(cardId),
                 population = population(cardId),
                 category = c.getString(19),
+                releaseDate = c.getString(20)?.takeIf { it.isNotBlank() },
             )
         }
     }

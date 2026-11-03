@@ -43,8 +43,8 @@ import kotlin.math.roundToInt
 
 enum class Confidence { SURE, LIKELY, UNSURE }
 
-/** Another artwork the scanner considered. */
-data class Candidate(val group: String, val info: CardInfo, val score: Float, val reading: String)
+/** Another artwork the scanner considered. [image]: thumbnail of it (this version or another one with a picture). */
+data class Candidate(val group: String, val info: CardInfo, val score: Float, val reading: String, val image: String? = null)
 
 /** The card in the result panel. */
 data class Shown(
@@ -153,6 +153,8 @@ data class UiState(
     val message: String? = null,
     /** the camera's largest zoom (as far as the app uses it) */
     val maxZoom: Float = ScannerViewModel.MAX_ZOOM,
+    /** after a double tap: the most likely cards to pick from (null: no list open) */
+    val picks: List<Candidate>? = null,
 ) {
     val sessionValue: Double get() = session.sumOf { it.value ?: 0.0 }
 }
@@ -324,9 +326,29 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             }
             tracker.lock(best.group)
             showNew(best.group, r, rgb, fromPhoto = false, conf = Confidence.LIKELY)
+            // the most likely cards to pick from, the shown one first
+            val picks = r.candidates.mapNotNull { candidateOf(it) }
+            if (picks.size > 1) _state.update { it.copy(picks = picks) }
         }
         publishLive(r, rgb.cols(), rgb.rows(), confidenceOf(r))
     }
+
+    /** A hit as a card to pick: the version the scanner would show for it, with a picture. */
+    private fun candidateOf(h: Hit): Candidate? {
+        val cat = catalog ?: return null
+        val p = pack ?: return null
+        val info = resolveVersion(h.group, h.entry, null) ?: cat.card(p.entryCard[h.entry], p.entryLang[h.entry]) ?: return null
+        val image = info.thumbnailUrl ?: cat.versions(h.group).firstNotNullOfOrNull { (id, l) -> cat.cardExact(id, l)?.thumbnailUrl }
+        return Candidate(h.group, info, h.score, Recognizer.READINGS[h.reading], image)
+    }
+
+    /** Picked from the list after a double tap (the shown card: just close it). */
+    fun pick(c: Candidate) {
+        _state.update { it.copy(picks = null) }
+        if (c.group != _state.value.shown?.group) choose(c)
+    }
+
+    fun closePicks() = _state.update { it.copy(picks = null) }
 
     fun messageShown() = _state.update { it.copy(message = null) }
 
@@ -593,6 +615,20 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         session.map { if (it.serial == oldSerial) it.copy(serial = sh.serial, shown = sh.copy(preview = null, scan = null)) else it }
 
     fun resetSession() = _state.update { it.copy(session = emptyList()) }
+
+    /**
+     * +1: the shown card goes into the pack once more (two of the same card in a row are
+     * otherwise counted once). The copy is a card of its own: its printing can differ, and
+     * swiping it away leaves the first one in the pack. Also adds a card the scanner wasn't
+     * sure enough about to count.
+     */
+    fun addAgain() = synchronized(lock) {
+        _state.update { st ->
+            val s = st.shown ?: return@update st
+            val copy = s.copy(serial = ++serial)
+            st.copy(shown = copy, session = st.session + SessionItem(copy.serial, System.currentTimeMillis(), copy.copy(preview = null, scan = null)))
+        }
+    }
     fun undoLast() = _state.update { it.copy(session = it.session.dropLast(1)) }
 
     /** Swiped away: the card leaves the pack. It is not taken again until another card was in front of the camera. */

@@ -119,7 +119,7 @@ fun YouTubeScreen(state: UiState, vm: ScannerViewModel) {
                 Column(Modifier.weight(1f).fillMaxHeight().padding(horizontal = 16.dp, vertical = 10.dp)) {
                     TitleLine(state.settings.title)
                     Reveal(state, vm, Modifier.weight(1f).fillMaxWidth())
-                    SessionBar(state, menu)
+                    SessionBar(state, menu, vm::addAgain)
                 }
             }
         } else {
@@ -128,7 +128,7 @@ fun YouTubeScreen(state: UiState, vm: ScannerViewModel) {
                 CameraArea(state, vm, torch, video = true, modifier = Modifier.fillMaxWidth().weight(1f))
                 Column(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Reveal(state, vm, Modifier.weight(1f).fillMaxWidth())
-                    SessionBar(state, menu)
+                    SessionBar(state, menu, vm::addAgain)
                 }
             }
         }
@@ -159,8 +159,9 @@ private fun Reveal(state: UiState, vm: ScannerViewModel, modifier: Modifier) {
             ) { serial ->
                 FitInside {
                     SwipeToRemove(serial, onRemove = vm::dismissShown) {
-                        RevealCard(state.shown ?: shown, state.settings, vm::choosePrinting, vm::stepVersion,
-                            vm::chooseVersion, vm::choose)
+                        val s = state.shown ?: shown
+                        RevealCard(s, state.settings, state.session.count { it.group == s.group }, vm::choosePrinting,
+                            vm::stepVersion, vm::chooseVersion, vm::choose)
                     }
                 }
             }
@@ -169,7 +170,7 @@ private fun Reveal(state: UiState, vm: ScannerViewModel, modifier: Modifier) {
 }
 
 @Composable
-private fun RevealCard(s: Shown, settings: Settings, onPrinting: (Printing.Kind) -> Unit, onStep: (Int) -> Unit,
+private fun RevealCard(s: Shown, settings: Settings, copies: Int, onPrinting: (Printing.Kind) -> Unit, onStep: (Int) -> Unit,
                        onVersion: (CardInfo) -> Unit, onOther: (Candidate) -> Unit) {
     val value = s.value
     val hit = settings.threshold > 0 && (value ?: 0.0) >= settings.threshold
@@ -186,12 +187,18 @@ private fun RevealCard(s: Shown, settings: Settings, onPrinting: (Printing.Kind)
         .padding(14.dp)) {
         Column {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                CardImage(s, Modifier.width(120.dp).aspectRatio(63f / 88f))
+                Box {
+                    CardImage(s, Modifier.width(120.dp).aspectRatio(63f / 88f))
+                    // the same card more than once in this pack (+1)
+                    if (copies > 1) Text("×$copies", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Black, maxLines = 1,
+                        modifier = Modifier.align(Alignment.TopStart).padding(4.dp)
+                            .background(Gold, RoundedCornerShape(8.dp)).padding(horizontal = 7.dp))
+                }
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     FitText(s.version.name, 30.sp, Color.White, weight = FontWeight.Black, minSize = 16.sp)
                     s.english?.let { FitText(it.name, 16.sp, Color.White.copy(alpha = 0.8f)) }
-                    FitText("${s.version.setName} · ${s.version.numberText}", 15.sp, Muted)
+                    FitText(s.version.setLine(withLang = false), 15.sp, Muted)
                     VersionSwitcher(s, onStep, onVersion, onOther)
                     if (s.priceCard.printings.size <= 1) s.selected?.let {
                         FitText(it.kind.label, 15.sp, Gold, weight = FontWeight.Bold)
@@ -298,7 +305,7 @@ private fun VersionSwitcher(s: Shown, onStep: (Int) -> Unit, onVersion: (CardInf
                     val current = v.id == s.version.id && v.lang == s.version.lang
                     DropdownMenuItem(
                         text = {
-                            Text("${if (current) "✓ " else ""}${v.name} · ${v.setName} · ${v.numberText} · " +
+                            Text("${if (current) "✓ " else ""}${v.name} · ${v.setLine(withLang = false)} · " +
                                 "${LANG_NAMES[v.lang] ?: v.lang}  ${v.bestValue?.let { eur(it) } ?: "–"}", fontSize = 14.sp)
                         },
                         onClick = { open = false; if (!current) onVersion(v) })
@@ -307,7 +314,7 @@ private fun VersionSwitcher(s: Shown, onStep: (Int) -> Unit, onVersion: (CardInf
                     if (n > 0) HorizontalDivider()
                     Text("Not this card?", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
                     s.alternatives.forEach { c ->
-                        DropdownMenuItem(text = { Text("${c.info.name} · ${c.info.setName} · ${c.info.numberText}", fontSize = 14.sp) },
+                        DropdownMenuItem(text = { Text("${c.info.name} · ${c.info.setLine(withLang = false)}", fontSize = 14.sp) },
                             onClick = { open = false; onOther(c) })
                     }
                 }
@@ -374,7 +381,7 @@ private fun BoxScope.Burst(key: Int) {
 }
 
 @Composable
-private fun SessionBar(state: UiState, menu: @Composable () -> Unit) {
+private fun SessionBar(state: UiState, menu: @Composable () -> Unit, onPlusOne: () -> Unit) {
     val items = state.session
     val threshold = state.settings.threshold
     Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
@@ -384,6 +391,12 @@ private fun SessionBar(state: UiState, menu: @Composable () -> Unit) {
                 withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.Bold)) { append(eur(state.sessionValue)) }
             }
             FitText(line, 22.sp, Color.White, Modifier.weight(1f))
+            // +1: the shown card once more (two of the same in a row)
+            val can = state.shown != null
+            Box(Modifier.padding(end = 8.dp).size(44.dp).border(2.dp, if (can) Gold else Muted.copy(alpha = 0.4f), CircleShape)
+                .clickable(enabled = can, onClick = onPlusOne), contentAlignment = Alignment.Center) {
+                Text("+1", color = if (can) Gold else Muted.copy(alpha = 0.4f), fontSize = 17.sp, fontWeight = FontWeight.Black)
+            }
             menu()
         }
         if (items.isNotEmpty()) {
