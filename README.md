@@ -28,9 +28,12 @@ downgrades), or restore the code from the tag.
 
 ## Using it
 
-- **Scan:** hold one card inside the frame. A card is shown once it has won a few
-  frames in a row, and the result then stays put: another card only replaces it after
-  it has clearly won several frames. No more flickering between two candidates.
+- **Scan:** hold one card inside the frame. When the frame turns green the app is sure;
+  it takes the card once the frame has stayed green for the time set in ⚙ (*Wait before
+  taking the card*: instant, 0.3 s … 2 s; a green bar under the frame fills up while
+  you hold still). The result then stays put until another card is taken, so it doesn't
+  flicker. The language and set number are read from the card a moment later and
+  refine the result.
 - **The exact version:** the artwork finds the card; the printed text then decides
   which one it is:
   - **language:** the card is shown in the language it is printed in (English, German,
@@ -51,8 +54,9 @@ downgrades), or restore the code from the tag.
   are what it needs.
 - **Prices:** Cardmarket trend, 30-day average and lowest price (EUR) for the chosen
   printing, plus TCGplayer (USD) where Cardmarket has none.
-- **PSA 10 / 9 / 8:** recent eBay sold prices for graded copies (USD), if the data
-  pack has them (see *PSA prices* below). Switch them on or off in ⚙.
+- **PSA 10 / 9 / 8:** recent eBay sold prices for graded copies (USD) of the printing
+  you selected: a graded reverse holo has its own prices. If only another printing has
+  sales, the app says so instead of showing the wrong price. Switch them on or off in ⚙.
 - **Not this card?** The other candidates are listed under it; tap the right one. It
   then stays pinned (📌) until you tap **Next card**.
 - **Alert:** set a price (e.g. 5 €). The phone vibrates when a card worth at least
@@ -63,8 +67,15 @@ downgrades), or restore the code from the tag.
   - big card name and price with a count-up, and a "HIT" burst for cards above your
     alert price
   - the printings as chips under the price: tap the right one if the app got it wrong
+  - **swipe the card to the left** to take it out of the pack (wrong match, or a card
+    you don't want to count); the same card isn't taken again until you show another
   - a session bar with card count and total value
-  - tap the panel for controls: new pack, remove last card, next card, light, exit
+  - tap the panel for controls: **save pack (CSV)**, new pack, remove last card, next
+    card, light, exit
+  - *Save pack* writes one row per card (name, English name, set, number, language,
+    printing, Cardmarket and TCGplayer prices, PSA 10/9/8 with sale counts, hit, all
+    printings) plus the pack total. On a German phone it uses `;` and decimal commas,
+    so Excel opens it directly.
   - optional title (e.g. your channel name) at the top; no vibration while recording
 - **Light** turns on the torch. **Photo** recognises a picture from the gallery.
   **Details** (in ⚙) shows what the scanner saw: the straightened card, the top 5

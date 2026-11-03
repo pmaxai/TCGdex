@@ -60,7 +60,20 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.offset
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.IntOffset
 import coil.compose.AsyncImage
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import io.github.pmaxai.cardscanner.data.Printing
 import io.github.pmaxai.cardscanner.vision.FoilEstimate
 import kotlinx.coroutines.delay
@@ -76,6 +89,13 @@ import kotlin.random.Random
 @Composable
 fun YouTubeScreen(state: UiState, vm: ScannerViewModel) {
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val ctx = LocalContext.current
+    val savePack = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
+        if (uri != null) {
+            val r = vm.savePack(ctx.contentResolver, uri)
+            Toast.makeText(ctx, r.fold({ "Pack saved: $it cards" }, { "Could not save: ${it.message}" }), Toast.LENGTH_LONG).show()
+        }
+    }
     var controls by remember { mutableStateOf(false) }
     var settings by remember { mutableStateOf(false) }
     var torch by remember { mutableStateOf(false) }
@@ -102,7 +122,8 @@ fun YouTubeScreen(state: UiState, vm: ScannerViewModel) {
                 }
             }
         }
-        if (controls) Controls(state, vm, torch, onTorch = { torch = it }, onSettings = { settings = true; controls = false })
+        if (controls) Controls(state, vm, torch, onTorch = { torch = it }, onSettings = { settings = true; controls = false },
+            onSave = { controls = false; savePack.launch(PackCsv.fileName(state.settings)) })
     }
     if (settings) SettingsDialog(state, vm) { settings = false }
 }
@@ -136,7 +157,11 @@ private fun Reveal(state: UiState, vm: ScannerViewModel, modifier: Modifier) {
                         fadeIn(tween(120))) togetherWith fadeOut(tween(120))
                 },
                 label = "reveal",
-            ) { _ -> RevealCard(state.shown ?: shown, state.settings, vm::choosePrinting) }
+            ) { serial ->
+                SwipeToRemove(serial, onRemove = vm::dismissShown) {
+                    RevealCard(state.shown ?: shown, state.settings, vm::choosePrinting)
+                }
+            }
         }
     }
 }
@@ -175,7 +200,7 @@ private fun RevealCard(s: Shown, settings: Settings, onPrinting: (Printing.Kind)
                     Spacer(Modifier.height(4.dp))
                     Text(if (value == null) "–" else eur(count.value.toDouble()), color = if (hit) Gold else Color.White,
                         fontSize = 46.sp, fontWeight = FontWeight.Black)
-                    if (settings.showPsa) s.priceCard.graded?.let { PsaLine(it, big = true) }
+                    if (settings.showPsa) s.graded?.let { PsaLine(it, big = true) }
                 }
             }
             if (s.priceCard.printings.size > 1) PrintingChips(s, onPrinting, Modifier.padding(top = 8.dp))
@@ -186,6 +211,45 @@ private fun RevealCard(s: Shown, settings: Settings, onPrinting: (Printing.Kind)
         }
     }
 }
+
+/** Swipe the card to the left to take it out of the pack (a wrong match, or a card you don't count). */
+@Composable
+private fun SwipeToRemove(key: Int, onRemove: () -> Unit, content: @Composable () -> Unit) {
+    val offset = remember(key) { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    var width by remember { mutableStateOf(1f) }
+    Box(Modifier.fillMaxWidth().onSizeChanged { width = it.width.toFloat().coerceAtLeast(1f) }) {
+        if (offset.value < -8f) {
+            // what letting go will do
+            Box(Modifier.matchParentSize().background(Color(0xFF7A1F1F), RoundedCornerShape(20.dp)).padding(end = 24.dp),
+                contentAlignment = Alignment.CenterEnd) {
+                Text(if (offset.value < -width * REMOVE_AT) "Release to remove" else "Remove from pack",
+                    color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        Box(Modifier
+            .offset { IntOffset(offset.value.roundToInt(), 0) }
+            .graphicsLayer { alpha = 1f - (-offset.value / width).coerceIn(0f, 0.6f) }
+            .pointerInput(key) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        scope.launch {
+                            if (offset.value < -width * REMOVE_AT) {
+                                offset.animateTo(-width * 1.1f, tween(160))
+                                onRemove()
+                            } else offset.animateTo(0f, spring(dampingRatio = 0.6f))
+                        }
+                    },
+                    onDragCancel = { scope.launch { offset.animateTo(0f) } },
+                ) { change, drag ->
+                    change.consume()
+                    scope.launch { offset.snapTo((offset.value + drag).coerceIn(-width * 1.1f, 0f)) }
+                }
+            }) { content() }
+    }
+}
+
+private const val REMOVE_AT = 0.3f
 
 /** Every printing of the card with its price; tap to say which one is in front of the camera. */
 @Composable
@@ -244,6 +308,7 @@ private fun BoxScope.Burst(key: Int) {
 @Composable
 private fun SessionBar(state: UiState) {
     val items = state.session
+    val threshold = state.settings.threshold
     Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
         Row(verticalAlignment = Alignment.Bottom) {
             Text("${items.size} cards", color = Muted, fontSize = 15.sp)
@@ -255,8 +320,9 @@ private fun SessionBar(state: UiState) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 items.asReversed().take(12).forEach { item ->
-                    Text("${item.name} ${eur(item.value)}", color = if (item.hit) Ink else Color.White, fontSize = 13.sp,
-                        modifier = Modifier.background(if (item.hit) Gold else Panel, RoundedCornerShape(10.dp))
+                    val hit = threshold > 0 && (item.value ?: 0.0) >= threshold
+                    Text("${item.name} ${eur(item.value)}", color = if (hit) Ink else Color.White, fontSize = 13.sp,
+                        modifier = Modifier.background(if (hit) Gold else Panel, RoundedCornerShape(10.dp))
                             .padding(horizontal = 10.dp, vertical = 4.dp))
                 }
             }
@@ -265,10 +331,12 @@ private fun SessionBar(state: UiState) {
 }
 
 @Composable
-private fun Controls(state: UiState, vm: ScannerViewModel, torch: Boolean, onTorch: (Boolean) -> Unit, onSettings: () -> Unit) {
+private fun Controls(state: UiState, vm: ScannerViewModel, torch: Boolean, onTorch: (Boolean) -> Unit, onSettings: () -> Unit,
+                     onSave: () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopEnd) {
         Column(Modifier.padding(12.dp).background(Color(0xE61A1C21), RoundedCornerShape(14.dp)).padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilledTonalButton(onSave, enabled = state.session.isNotEmpty()) { Text("Save pack (CSV)") }
             FilledTonalButton({ vm.resetSession() }) { Text("New pack (reset value)") }
             FilledTonalButton({ vm.undoLast() }, enabled = state.session.isNotEmpty()) { Text("Remove last card") }
             FilledTonalButton({ vm.next() }) { Text("Next card") }

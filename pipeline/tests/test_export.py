@@ -90,13 +90,18 @@ def test_graded_table_matches_by_number(tmp_path):
     con.commit(); con.close()
     cache = tmp_path / "graded"; cache.mkdir()
     (cache / "sv06.json").write_text(json.dumps({"set": "Twilight Masquerade", "fetched": 0, "cards": [
-        {"name": "Dragapult ex", "cardNumber": "130/167", "ebay": {"salesByGrade": {
+        {"name": "Dragapult ex", "cardNumber": "130/167", "prices": {"primaryPrinting": "Holofoil"}, "ebay": {"salesByGrade": {
             "psa10": {"count": 84, "medianPrice": 186.75, "smartMarketPrice": {"price": 362.5, "confidence": "low"}},
             "psa9": {"count": 60, "medianPrice": 29.97}}}},
-        {"name": "Lampent", "cardNumber": "37", "ebay": {"salesByGrade": {}}}]}))
+        {"name": "Lampent", "cardNumber": "37", "prices": {"primaryPrinting": "Normal"}, "ebay": {
+            "salesByGrade": {"psa10": {"count": 3, "medianPrice": 12.0}},
+            "salesByPrinting": {"Reverse Holofoil": {"salesByGrade": {"psa10": {"count": 2, "medianPrice": 40.0},
+                                                                      "cgc10": {"count": 1, "medianPrice": 30.0}}}}}}]}))
     graded.build_table(db, cache)
-    rows = sqlite3.connect(db).execute("SELECT id, psa10, psa10_n, psa9, psa8 FROM graded").fetchall()
-    assert rows == [("sv06-130", 362.5, 84, 29.97, None)]
+    rows = sqlite3.connect(db).execute("SELECT id, printing, psa10, psa10_n, psa9, psa8 FROM graded ORDER BY id, printing").fetchall()
+    assert rows == [("sv06-037", "normal", 12.0, 3, None, None), ("sv06-037", "reverse", 40.0, 2, None, None),
+                    ("sv06-130", "holo", 362.5, 84, 29.97, None)]
+    assert graded.printing_kind("Unlimited Holofoil") == "holo" and graded.printing_kind("1st Edition") == "1st"
     assert graded.norm_number("037/167") == "37" and graded.norm_number("TG05") == "TG5"
 
 

@@ -110,8 +110,8 @@ def write_catalog(src_db: Path, dst_db: Path, entries, meta: dict, groups: list[
         CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
         INSERT INTO cards SELECT c.id, c.lang, c.set_id, c.local_id, c.name, c.image_url FROM src.cards c;
         CREATE TABLE tcgplayer(id TEXT PRIMARY KEY, updated TEXT, data TEXT);
-        CREATE TABLE graded(id TEXT PRIMARY KEY, currency TEXT, updated TEXT, psa10 REAL, psa10_n INTEGER,
-                            psa9 REAL, psa9_n INTEGER, psa8 REAL, psa8_n INTEGER, source TEXT);
+        CREATE TABLE graded(id TEXT, printing TEXT, currency TEXT, updated TEXT, psa10 REAL, psa10_n INTEGER,
+                            psa9 REAL, psa9_n INTEGER, psa8 REAL, psa8_n INTEGER, source TEXT, PRIMARY KEY(id, printing));
         INSERT INTO sets(id, lang, name, serie_id, serie_name, official, total, release_date)
             SELECT id, lang, name, serie_id, serie_name, official, total, release_date FROM src.sets;
         INSERT INTO prices SELECT id, updated, trend, avg, low, avg1, avg7, avg30, trend_holo, avg_holo, low_holo,
@@ -143,7 +143,13 @@ def write_catalog(src_db: Path, dst_db: Path, entries, meta: dict, groups: list[
             tp_rows.append((cid, updated, json.dumps(m, separators=(",", ":"))))
     con.executemany("INSERT OR REPLACE INTO tcgplayer VALUES (?,?,?)", tp_rows)
     if con.execute("SELECT 1 FROM src.sqlite_master WHERE name = 'graded'").fetchone():
-        con.execute("INSERT INTO graded SELECT * FROM src.graded")
+        cols = [r[1] for r in con.execute("PRAGMA src.table_info(graded)")]
+        if "printing" in cols:
+            con.execute("INSERT INTO graded SELECT id, printing, currency, updated, psa10, psa10_n, psa9, psa9_n, "
+                        "psa8, psa8_n, source FROM src.graded")
+        else:   # older catalog: printing not known
+            con.execute("INSERT INTO graded SELECT id, '', currency, updated, psa10, psa10_n, psa9, psa9_n, "
+                        "psa8, psa8_n, source FROM src.graded")
     groups = groups or [e.card_id for e in entries]
     con.executemany("INSERT INTO entries VALUES (?,?,?,?)",
                     [(i, e.card_id, e.lang, g) for i, (e, g) in enumerate(zip(entries, groups))])

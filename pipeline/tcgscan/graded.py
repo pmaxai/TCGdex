@@ -27,11 +27,28 @@ log = logging.getLogger(__name__)
 API = "https://www.pokemonpricetracker.com/api/v2"
 GRADES = ("psa10", "psa9", "psa8")
 
+# one row per card and printing ('normal', 'holo', 'reverse', '1st'; '' = not stated)
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS graded(
-  id TEXT PRIMARY KEY, currency TEXT, updated TEXT,
-  psa10 REAL, psa10_n INTEGER, psa9 REAL, psa9_n INTEGER, psa8 REAL, psa8_n INTEGER, source TEXT);
+  id TEXT, printing TEXT, currency TEXT, updated TEXT,
+  psa10 REAL, psa10_n INTEGER, psa9 REAL, psa9_n INTEGER, psa8 REAL, psa8_n INTEGER, source TEXT,
+  PRIMARY KEY(id, printing));
 """
+
+
+def printing_kind(name) -> str:
+    """PokemonPriceTracker / TCGplayer printing name -> our printing code."""
+    n = str(name or "").lower()
+    if not n:
+        return ""
+    if "1st" in n or "first" in n:
+        return "1st"
+    if "reverse" in n:
+        return "reverse"
+    if "holo" in n:
+        return "holo"
+    return "normal"          # 'Normal', 'Unlimited'
+
 
 
 def norm(s: str) -> str:
@@ -311,15 +328,28 @@ def build_table(db: Path, cache_dir: Path) -> None:
                 cands = [x for x in cands if x[1] and (x[1] in cname or cname in x[1])] or cands[:1]
             if not cands:
                 continue
-            grades = ((c.get("ebay") or {}).get("salesByGrade")) or c.get("gradedPrices") or {}
-            vals = [grade_price(grades.get(g)) for g in GRADES]
-            if all(v[0] is None for v in vals):
-                continue
-            rows.append((cands[0][0], "USD", updated, vals[0][0], vals[0][1], vals[1][0], vals[1][1],
-                         vals[2][0], vals[2][1], "PokemonPriceTracker (eBay sold)"))
-    con.executemany("INSERT OR REPLACE INTO graded VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
+            ebay = c.get("ebay") or {}
+            # salesByGrade: the card's primary printing; salesByPrinting: every other printing
+            per_printing = [(printing_kind((c.get("prices") or {}).get("primaryPrinting")),
+                             ebay.get("salesByGrade") or c.get("gradedPrices") or {})]
+            for name, block in (ebay.get("salesByPrinting") or {}).items():
+                if isinstance(block, dict):
+                    per_printing.append((printing_kind(name), block.get("salesByGrade") or {}))
+            seen = set()
+            for printing, grades in per_printing:
+                vals = [grade_price(grades.get(g)) for g in GRADES]
+                if all(v[0] is None for v in vals) or printing in seen:
+                    continue
+                seen.add(printing)
+                rows.append((cands[0][0], printing, "USD", updated, vals[0][0], vals[0][1], vals[1][0], vals[1][1],
+                             vals[2][0], vals[2][1], "PokemonPriceTracker (eBay sold)"))
+    con.executemany("INSERT OR REPLACE INTO graded VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)
     con.commit()
-    log.info("PSA prices: %d cards with graded prices in the catalog", len(rows))
+    by_printing: dict[str, int] = {}
+    for r in rows:
+        by_printing[r[1] or "?"] = by_printing.get(r[1] or "?", 0) + 1
+    log.info("PSA prices: %d cards with graded prices in the catalog (%d rows by printing: %s)",
+             len({r[0] for r in rows}), len(rows), by_printing)
     con.close()
 
 

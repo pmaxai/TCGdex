@@ -12,6 +12,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.pmaxai.cardscanner.data.CardInfo
 import io.github.pmaxai.cardscanner.data.Catalog
+import io.github.pmaxai.cardscanner.data.Graded
 import io.github.pmaxai.cardscanner.data.Pack
 import io.github.pmaxai.cardscanner.data.Printing
 import io.github.pmaxai.cardscanner.vision.CardText
@@ -24,6 +25,7 @@ import io.github.pmaxai.cardscanner.vision.Recognizer
 import io.github.pmaxai.cardscanner.vision.ScanTracker
 import io.github.pmaxai.cardscanner.vision.VersionResolver
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -63,6 +65,8 @@ data class Shown(
     val preview: Bitmap?,
     /** grows with every new card (the YouTube reveal animates on it) */
     val serial: Int,
+    /** the user picked this card or language: the printed text must not change it */
+    val versionByUser: Boolean = false,
 ) {
     val selected: Printing? get() = priceCard.printing(printing)
     val value: Double? get() = selected?.value ?: priceCard.bestValue
@@ -70,10 +74,18 @@ data class Shown(
     val richerPrinting: Printing? get() = priceCard.printings
         .filter { it.kind != selected?.kind && (it.value ?: 0.0) > (value ?: 0.0) }.maxByOrNull { it.value ?: 0.0 }
     val pricedFromEnglish: Boolean get() = priceCard.id != version.id || priceCard.lang != version.lang
+    /** PSA prices of the selected printing (eBay sales are kept apart per printing) */
+    val graded: Graded? get() = priceCard.gradedFor(selected?.kind)
+    /** the card has PSA sales, just not for the selected printing */
+    val gradedOnlyOtherPrintings: Boolean get() = graded == null && priceCard.graded.isNotEmpty()
 }
 
-data class SessionItem(val group: String, val name: String, val number: String, val value: Double?,
-                       val hit: Boolean, val thumbnail: String?)
+/** One card of the pack (YouTube mode): the card as shown, without the debug picture. */
+data class SessionItem(val serial: Int, val time: Long, val shown: Shown) {
+    val group: String get() = shown.group
+    val name: String get() = shown.version.name
+    val value: Double? get() = shown.value
+}
 
 data class Settings(
     val threshold: Double = 5.0,
@@ -81,6 +93,8 @@ data class Settings(
     val showDebug: Boolean = false,
     val youtube: Boolean = false,
     val title: String = "",
+    /** how long the frame must stay green before the card is taken (0 = at once) */
+    val triggerDelayMs: Int = 300,
 )
 
 data class DebugInfo(val preview: Bitmap?, val lines: List<String>)
@@ -94,6 +108,8 @@ data class UiState(
     val liveQuad: FloatArray? = null,
     val liveFrame: Pair<Int, Int>? = null,
     val liveConfidence: Confidence? = null,
+    /** 0..1 while the frame is green and the card is about to be taken (null otherwise) */
+    val liveProgress: Float? = null,
     val debug: DebugInfo? = null,
     val paused: Boolean = false,
     val settings: Settings = Settings(),
@@ -101,7 +117,6 @@ data class UiState(
     val hasPsaData: Boolean = false,
 ) {
     val sessionValue: Double get() = session.sumOf { it.value ?: 0.0 }
-    val bestPull: SessionItem? get() = session.maxByOrNull { it.value ?: 0.0 }
 }
 
 class ScannerViewModel(app: Application) : AndroidViewModel(app) {
@@ -125,6 +140,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     private var serial = 0
     private var lastAlerted: String? = null
     private var lastText: CardText? = null
+    /** text recognition runs here, one card at a time, so a card shows up without waiting for it */
+    private val textDispatcher = java.util.concurrent.Executors.newSingleThreadExecutor().asCoroutineDispatcher()
 
     init {
         _state.update {
@@ -134,6 +151,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                 showDebug = prefs.getBoolean("debug", false),
                 youtube = prefs.getBoolean("youtube", false),
                 title = prefs.getString("title", "") ?: "",
+                triggerDelayMs = prefs.getInt("trigger_delay", 300),
             ))
         }
         viewModelScope.launch(Dispatchers.IO) {
@@ -150,7 +168,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                 marginSure = p.metaFloat("margin_99", marginSure)
                 marginLikely = p.metaFloat("margin_90", marginLikely)
                 foilThreshold = p.metaFloat("foil_reverse", 0.2f).toDouble()
-                tracker = ScanTracker(marginSure, marginLikely)
+                tracker = ScanTracker(marginSure, marginLikely).also { it.delayMs = _state.value.settings.triggerDelayMs.toLong() }
                 val psa = runCatching {
                     p.db.rawQuery("SELECT COUNT(*) FROM graded", null).use { c -> c.moveToFirst() && c.getInt(0) > 0 }
                 }.getOrDefault(false)
@@ -310,19 +328,47 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val p = pack ?: return
         val hit = r.hits.firstOrNull { it.group == group }
         val versions = cat.versions(group)
-        val text = hit?.let { readText(rgb, r, it, tryJapanese = versions.any { v -> v.second in ASIAN }) }
-        lastText = text
-        val version = resolveVersion(group, hit?.entry, text) ?: return
+        // shown at once from the picture; the printed text (language, set number) refines it a moment later
+        val version = resolveVersion(group, hit?.entry, null) ?: return
         val alternatives = r.hits.filter { it.group != group }.take(3).mapNotNull { h ->
             cat.card(p.entryCard[h.entry], p.entryLang[h.entry])?.let { Candidate(h.group, it, h.score, Recognizer.READINGS[h.reading]) }
         }
         foil?.reset()
         foilSum = 0.0
         foilN = 0
-        var shown = build(group, version, text, conf, alternatives, locked = false, fromPhoto = fromPhoto, preview = r.preview)
+        lastText = null
+        var shown = build(group, version, null, conf, alternatives, locked = false, fromPhoto = fromPhoto, preview = r.preview)
         if (hit != null) staticFoil(rgb, r, hit, shown)?.let { est -> shown = shown.copy(foil = est) }
-        _state.update { s -> s.copy(shown = shown, session = if (s.settings.youtube && !fromPhoto) addToSession(s, shown) else s.session) }
-        maybeAlert(shown)
+        val first = shown
+        _state.update { s -> s.copy(shown = first, session = if (s.settings.youtube && !fromPhoto) addToSession(s, first) else s.session) }
+        if (hit == null) { maybeAlert(first); return }
+        val frame = rgb.clone()
+        viewModelScope.launch(textDispatcher) {
+            val text = try {
+                readText(frame, r, hit, tryJapanese = versions.any { v -> v.second in ASIAN })
+            } finally {
+                frame.release()
+            }
+            synchronized(lock) { refine(first.serial, group, hit, text) }
+        }
+    }
+
+    /** The printed text has been read: switch to the exact version (language, set) if it differs. */
+    private fun refine(serialShown: Int, group: String, hit: Hit, text: CardText?) {
+        val cur = _state.value.shown?.takeIf { it.serial == serialShown } ?: return
+        lastText = text
+        if (cur.versionByUser) return
+        val version = resolveVersion(group, hit.entry, text)
+        val updated = if (version == null || (version.id == cur.version.id && version.lang == cur.version.lang)) {
+            cur.copy(text = text)
+        } else {
+            val b = build(group, version, text, cur.confidence, cur.alternatives, locked = cur.locked, fromPhoto = cur.fromPhoto,
+                preview = cur.preview)
+            val keep = cur.printing.takeIf { cur.printingByUser && b.priceCard.printings.any { it.kind == cur.printing } }
+            b.copy(serial = cur.serial, foil = cur.foil, printing = keep ?: b.printing, printingByUser = keep != null)
+        }
+        _state.update { s -> s.copy(shown = updated, session = replaceInSession(s.session, updated)) }
+        maybeAlert(updated)
     }
 
     /** pack entry of each (card id, language), to compare with the scan of the version shown */
@@ -373,7 +419,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { s ->
             val sh = s.shown?.takeIf { it.serial == current.serial } ?: return@update s
             val updated = sh.copy(foil = est, printing = printing)
-            s.copy(shown = updated, session = if (s.settings.youtube) updateSessionValue(s.session, updated) else s.session)
+            s.copy(shown = updated, session = replaceInSession(s.session, updated))
         }
     }
 
@@ -400,29 +446,39 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                     if (f.frames > 0) " – shimmer: artwork %.2f, card %.2f, %d frames".format(f.art, f.body, f.frames) else "")
             }
         }) else null
-        _state.update { it.copy(liveQuad = quad, liveFrame = w to h, liveConfidence = conf, debug = debug ?: it.debug) }
+        val delay = st.settings.triggerDelayMs
+        val progress = if (delay > 0) tracker.streakMillis()?.let { (it.toFloat() / delay).coerceIn(0f, 1f) } else null
+        _state.update { it.copy(liveQuad = quad, liveFrame = w to h, liveConfidence = conf, liveProgress = progress,
+            debug = debug ?: it.debug) }
     }
 
     // ------------------------------------------------------------------ session (YouTube mode)
-    private fun sessionItem(s: UiState, sh: Shown) = SessionItem(
-        sh.group, sh.version.name, sh.version.numberText, sh.value,
-        (sh.value ?: 0.0) >= s.settings.threshold && s.settings.threshold > 0, sh.priceCard.thumbnailUrl ?: sh.version.thumbnailUrl,
-    )
-
     private fun addToSession(s: UiState, sh: Shown): List<SessionItem> {
         if (sh.confidence == Confidence.UNSURE) return s.session
         if (s.session.lastOrNull()?.group == sh.group) return s.session
-        return s.session + sessionItem(s, sh)
+        return s.session + SessionItem(sh.serial, System.currentTimeMillis(), sh.copy(preview = null))
     }
 
-    private fun updateSessionValue(session: List<SessionItem>, sh: Shown): List<SessionItem> {
-        val last = session.lastOrNull() ?: return session
-        if (last.group != sh.group) return session
-        return session.dropLast(1) + last.copy(value = sh.value, hit = (sh.value ?: 0.0) >= _state.value.settings.threshold)
-    }
+    /** The pack entry of a card that changed (printing, language, text read, or another card chosen). */
+    private fun replaceInSession(session: List<SessionItem>, sh: Shown, oldSerial: Int = sh.serial): List<SessionItem> =
+        session.map { if (it.serial == oldSerial) it.copy(serial = sh.serial, shown = sh.copy(preview = null)) else it }
 
     fun resetSession() = _state.update { it.copy(session = emptyList()) }
     fun undoLast() = _state.update { it.copy(session = it.session.dropLast(1)) }
+
+    /** Swiped away: the card leaves the pack. It is not taken again until another card was in front of the camera. */
+    fun dismissShown() = _state.update { st ->
+        val s = st.shown ?: return@update st
+        st.copy(shown = null, session = st.session.filter { it.serial != s.serial })
+    }
+
+    /** Writes the pack as CSV; returns the number of cards. */
+    fun savePack(resolver: android.content.ContentResolver, uri: android.net.Uri): Result<Int> = runCatching {
+        val st = _state.value
+        val csv = PackCsv.build(st.session, st.settings, java.util.Locale.getDefault())
+        resolver.openOutputStream(uri, "wt")?.use { it.write(csv.toByteArray(Charsets.UTF_8)) } ?: error("cannot write the file")
+        st.session.size
+    }.onFailure { Log.e(TAG, "saving the pack failed", it) }
 
     // ------------------------------------------------------------------ user choices
     /** The user says it is this other card: show it and keep it. */
@@ -437,28 +493,25 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val version = resolveVersion(c.group, null, lastText) ?: c.info
         val alternatives = (listOf(Candidate(s.group, s.version, 0f, "")) + s.alternatives).filter { it.group != c.group }
         val shown = build(c.group, version, lastText, Confidence.SURE, alternatives, locked = true, fromPhoto = s.fromPhoto,
-            preview = s.preview)
-        _state.update { st ->
-            val session = if (st.settings.youtube && st.session.lastOrNull()?.group == s.group)
-                st.session.dropLast(1) + sessionItem(st, shown) else st.session
-            st.copy(shown = shown, session = session)
-        }
+            preview = s.preview).copy(versionByUser = true)
+        _state.update { st -> st.copy(shown = shown, session = replaceInSession(st.session, shown, oldSerial = s.serial)) }
         maybeAlert(shown)
     }
 
     fun chooseLanguage(info: CardInfo) = _state.update { st ->
         val s = st.shown ?: return@update st
-        st.copy(shown = build(s.group, info, s.text, s.confidence, s.alternatives, true, s.fromPhoto, s.preview)
-            .copy(serial = s.serial, printing = s.printing, printingByUser = s.printingByUser, foil = s.foil)
-            .let { if (it.priceCard.printing(s.printing)?.kind != s.printing) it.copy(printing = it.priceCard.printings.firstOrNull()?.kind) else it })
-            .also { tracker.lock(s.group) }
+        val shown = build(s.group, info, s.text, s.confidence, s.alternatives, true, s.fromPhoto, s.preview)
+            .copy(serial = s.serial, printing = s.printing, printingByUser = s.printingByUser, foil = s.foil, versionByUser = true)
+            .let { if (it.priceCard.printing(s.printing)?.kind != s.printing) it.copy(printing = it.priceCard.printings.firstOrNull()?.kind) else it }
+        tracker.lock(s.group)
+        st.copy(shown = shown, session = replaceInSession(st.session, shown))
     }
 
     fun choosePrinting(kind: Printing.Kind) = _state.update { st ->
         val s = st.shown ?: return@update st
         val updated = s.copy(printing = kind, printingByUser = true, locked = true)
         tracker.lock(s.group)
-        st.copy(shown = updated, session = if (st.settings.youtube) updateSessionValue(st.session, updated) else st.session)
+        st.copy(shown = updated, session = replaceInSession(st.session, updated))
     }
 
     /** Forget the current card and look for the next one. */
@@ -483,7 +536,9 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit()
             .putFloat("threshold", new.threshold.toFloat()).putBoolean("psa", new.showPsa)
             .putBoolean("debug", new.showDebug).putBoolean("youtube", new.youtube).putString("title", new.title)
+            .putInt("trigger_delay", new.triggerDelayMs)
             .apply()
+        tracker.delayMs = new.triggerDelayMs.toLong()
         if (new.threshold != _state.value.settings.threshold) lastAlerted = null
         _state.update { it.copy(settings = new) }
     }
@@ -512,6 +567,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     override fun onCleared() {
         recognizer?.close()
         resolver?.close()
+        textDispatcher.close()
         foil?.reset()
     }
 

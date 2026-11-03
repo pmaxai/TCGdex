@@ -45,12 +45,20 @@ data class CardInfo(
     val imageUrl: String?,
     val prices: Prices?,
     val printings: List<Printing>,
-    val graded: Graded?,
+    /** PSA prices per printing (eBay sales are split by printing); key null = printing not stated */
+    val graded: Map<Printing.Kind?, Graded>,
 ) {
     val numberText: String get() = if (setTotal != null && setTotal > 0) "$number/$setTotal" else number
     val thumbnailUrl: String? get() = imageUrl?.let { "$it/low.webp" }
     val bestValue: Double? get() = printings.mapNotNull { it.value }.maxOrNull()
     fun printing(kind: Printing.Kind?): Printing? = printings.firstOrNull { it.kind == kind } ?: printings.firstOrNull()
+
+    /** PSA prices of this printing only; a row without a stated printing counts for the card's main printing */
+    fun gradedFor(kind: Printing.Kind?): Graded? =
+        graded[kind] ?: graded[null]?.takeIf { kind == null || kind == printings.firstOrNull()?.kind }
+
+    /** printings with PSA sales, for "no PSA sales for this printing" hints */
+    val gradedPrintings: Set<Printing.Kind?> get() = graded.keys
 }
 
 class Catalog(private val db: SQLiteDatabase) {
@@ -151,14 +159,27 @@ class Catalog(private val db: SQLiteDatabase) {
         return out
     }
 
-    private fun graded(id: String): Graded? {
-        if (!hasGraded) return null
-        return db.rawQuery("SELECT psa10, psa10_n, psa9, psa9_n, psa8, psa8_n, updated FROM graded WHERE id = ?",
-            arrayOf(id)).use { c ->
-            if (!c.moveToFirst()) null
-            else Graded(c.doubleOrNull(0), c.intOrNull(1), c.doubleOrNull(2), c.intOrNull(3),
-                c.doubleOrNull(4), c.intOrNull(5), c.getString(6))
+    private val gradedByPrinting = hasGraded && columns("graded").contains("printing")
+
+    private fun graded(id: String): Map<Printing.Kind?, Graded> {
+        if (!hasGraded) return emptyMap()
+        val sql = "SELECT ${if (gradedByPrinting) "printing" else "''"}, psa10, psa10_n, psa9, psa9_n, psa8, psa8_n, updated " +
+            "FROM graded WHERE id = ?"
+        val out = LinkedHashMap<Printing.Kind?, Graded>()
+        db.rawQuery(sql, arrayOf(id)).use { c ->
+            while (c.moveToNext()) {
+                val kind = when (c.getString(0)) {
+                    "normal" -> Printing.Kind.NORMAL
+                    "holo" -> Printing.Kind.HOLO
+                    "reverse" -> Printing.Kind.REVERSE
+                    "1st" -> Printing.Kind.FIRST_EDITION
+                    else -> null
+                }
+                out[kind] = Graded(c.doubleOrNull(1), c.intOrNull(2), c.doubleOrNull(3), c.intOrNull(4),
+                    c.doubleOrNull(5), c.intOrNull(6), c.getString(7))
+            }
         }
+        return out
     }
 
     /**

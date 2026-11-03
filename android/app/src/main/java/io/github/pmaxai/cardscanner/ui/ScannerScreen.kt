@@ -277,7 +277,13 @@ private fun ResultCard(s: Shown, settings: Settings, vm: ScannerViewModel) {
 
     Spacer(Modifier.height(8.dp))
     PriceBlock(s)
-    if (settings.showPsa) s.priceCard.graded?.let { PsaLine(it) }
+    if (settings.showPsa) {
+        val printing = s.selected?.kind?.takeIf { s.priceCard.printings.size > 1 }
+        s.graded?.let { PsaLine(it, printing = printing) }
+        if (s.gradedOnlyOtherPrintings && printing != null)
+            Text("No PSA sales for the ${printing.label.lowercase()} yet", color = Muted, fontSize = 12.sp,
+                modifier = Modifier.padding(top = 4.dp))
+    }
 
     if (s.languages.isNotEmpty()) {
         Spacer(Modifier.height(8.dp))
@@ -349,7 +355,7 @@ private fun PriceBlock(s: Shown) {
 }
 
 @Composable
-fun PsaLine(g: Graded, big: Boolean = false) {
+fun PsaLine(g: Graded, big: Boolean = false, printing: Printing.Kind? = null) {
     if (g.psa10 == null && g.psa9 == null && g.psa8 == null) return
     val size = if (big) 18.sp else 14.sp
     Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -360,7 +366,8 @@ fun PsaLine(g: Graded, big: Boolean = false) {
             }
         }
     }
-    if (!big) Text("eBay sold averages (PokemonPriceTracker)${g.updated?.let { ", $it" } ?: ""}", color = Muted, fontSize = 11.sp)
+    if (!big) Text("eBay sold${printing?.let { " · ${it.label}" } ?: ""} (PokemonPriceTracker)${g.updated?.let { ", $it" } ?: ""}",
+        color = Muted, fontSize = 11.sp)
 }
 
 @Composable
@@ -390,6 +397,16 @@ fun SettingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) {
                         row.forEach { v ->
                             FilterChip(selected = v == s.threshold, onClick = { vm.updateSettings { it.copy(threshold = v) } },
                                 label = { Text(if (v == 0.0) "off" else "${v.toInt()} €") })
+                        }
+                    }
+                }
+                Text("Wait before taking the card (frame green)", color = Muted, fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 10.dp))
+                listOf(0, 300, 600, 1000, 1500, 2000).chunked(3).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        row.forEach { v ->
+                            FilterChip(selected = v == s.triggerDelayMs, onClick = { vm.updateSettings { it.copy(triggerDelayMs = v) } },
+                                label = { Text(if (v == 0) "instant" else if (v < 1000) "0.${v / 100} s" else "${v / 1000}${if (v % 1000 != 0) ".${v % 1000 / 100}" else ""} s") })
                         }
                     }
                 }
@@ -441,6 +458,12 @@ fun GuideOverlay(state: UiState, modifier: Modifier, dim: Boolean) {
             }
             corner(tl.x, tl.y, 1f, 1f); corner(tl.x + gw, tl.y, -1f, 1f)
             corner(tl.x, tl.y + gh, 1f, -1f); corner(tl.x + gw, tl.y + gh, -1f, -1f)
+        }
+        // hold still: the green bar under the frame fills up until the card is taken
+        state.liveProgress?.takeIf { it > 0f && state.liveConfidence == Confidence.SURE }?.let { p ->
+            val y = tl.y + gh + 14f
+            drawLine(Color.White.copy(alpha = 0.25f), Offset(tl.x, y), Offset(tl.x + gw, y), 8f, StrokeCap.Round)
+            drawLine(Sure, Offset(tl.x, y), Offset(tl.x + gw * p, y), 8f, StrokeCap.Round)
         }
         val q = state.liveQuad
         val f = state.liveFrame
