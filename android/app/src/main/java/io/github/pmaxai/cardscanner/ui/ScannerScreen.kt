@@ -89,6 +89,7 @@ import io.github.pmaxai.cardscanner.camera.FrameAnalyzer
 import io.github.pmaxai.cardscanner.camera.loadPhoto
 import io.github.pmaxai.cardscanner.data.CardInfo
 import io.github.pmaxai.cardscanner.data.Graded
+import io.github.pmaxai.cardscanner.data.Population
 import io.github.pmaxai.cardscanner.data.Printing
 import io.github.pmaxai.cardscanner.vision.FoilEstimate
 import io.github.pmaxai.cardscanner.vision.Readings
@@ -280,6 +281,7 @@ private fun ResultCard(s: Shown, settings: Settings, vm: ScannerViewModel) {
     if (settings.showPsa) {
         val printing = s.selected?.kind?.takeIf { s.priceCard.printings.size > 1 }
         s.graded?.let { PsaLine(it, printing = printing) }
+        s.population?.let { GemLine(it) }
         if (s.gradedOnlyOtherPrintings && printing != null)
             Text("No PSA sales for the ${printing.label.lowercase()} yet", color = Muted, fontSize = 12.sp,
                 modifier = Modifier.padding(top = 4.dp))
@@ -370,6 +372,19 @@ fun PsaLine(g: Graded, big: Boolean = false, printing: Printing.Kind? = null) {
         color = Muted, fontSize = 11.sp)
 }
 
+/** "Gem rate 11.3% · PSA 10: 340 of 3,000 graded" (PSA population report) */
+@Composable
+fun GemLine(p: Population, big: Boolean = false) {
+    val rate = p.gemRate ?: p.psa10?.let { it.toDouble() / p.psaTotal } ?: return
+    Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.Bottom) {
+        Text("Gem rate ", color = Muted, fontSize = if (big) 14.sp else 12.sp)
+        Text(String.format(Locale.getDefault(), "%.1f%%", rate * 100), color = Color.White,
+            fontSize = if (big) 18.sp else 14.sp, fontWeight = FontWeight.Bold)
+        Text(String.format(Locale.getDefault(), "  · PSA 10: %,d of %,d graded", p.psa10 ?: 0, p.psaTotal),
+            color = Muted, fontSize = if (big) 14.sp else 12.sp)
+    }
+}
+
 @Composable
 private fun DebugPanel(d: DebugInfo) {
     Spacer(Modifier.height(12.dp))
@@ -410,6 +425,24 @@ fun SettingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) {
                         }
                     }
                 }
+                Text("Energy cards", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(0 to "recognise", 1 to "skip common", 2 to "skip all").forEach { (v, label) ->
+                        FilterChip(selected = v == s.energyFilter, enabled = v == 0 || state.hasCategories,
+                            onClick = { vm.updateSettings { it.copy(energyFilter = v) } }, label = { Text(label) })
+                    }
+                }
+                Text(if (state.hasCategories) "\"skip common\" still recognises gold and secret rare energies"
+                     else "needs the next data pack", color = Muted, fontSize = 12.sp)
+                Text("Card must fill the frame at least", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(0, 30, 50, 70, 85).forEach { v ->
+                        FilterChip(selected = v == s.minFillPercent, onClick = { vm.updateSettings { it.copy(minFillPercent = v) } },
+                            label = { Text(if (v == 0) "off" else "$v%") })
+                    }
+                }
+                Text("against \"ghost\" cards: smaller or off-centre cards, and the frame without a card outline, are ignored",
+                    color = Muted, fontSize = 12.sp)
                 SettingSwitch("PSA 10 / 9 / 8 prices", if (state.hasPsaData) "eBay sold averages, USD" else "not in this data pack yet",
                     s.showPsa) { v -> vm.updateSettings { it.copy(showPsa = v) } }
                 SettingSwitch("YouTube mode", "full screen, price reveal, pack value; follows the phone's orientation",

@@ -19,6 +19,7 @@ object PackCsv {
         "No", "Scanned", "Name", "English name", "Set", "Number", "Language", "Card ID", "Printing",
         "Value", "Currency", "Cardmarket trend EUR", "Cardmarket 30-day avg EUR", "Cardmarket lowest EUR",
         "TCGplayer USD", "PSA 10 USD", "PSA 10 sales", "PSA 9 USD", "PSA 9 sales", "PSA 8 USD", "PSA 8 sales",
+        "PSA gem rate %", "PSA graded",
         "Hit", "All printings", "Rarity", "Series", "Prices from", "Cardmarket search",
     )
 
@@ -54,6 +55,8 @@ object PackCsv {
                 v.setName, v.numberText, v.lang, v.id, p?.kind?.label,
                 num(p?.eur ?: p?.usd), currency, num(p?.eur), num(p?.eur30), num(p?.eurLow), num(p?.usd),
                 num(g?.psa10), g?.psa10n, num(g?.psa9), g?.psa9n, num(g?.psa8), g?.psa8n,
+                num(s.population?.let { pop -> (pop.gemRate ?: pop.psa10?.let { it.toDouble() / pop.psaTotal })?.times(100) }),
+                s.population?.psaTotal,
                 if (hit) "yes" else "",
                 s.priceCard.printings.joinToString(" | ") { pr -> "${pr.kind.label} ${printingValue(pr, ::num)}" },
                 s.priceCard.rarity, s.priceCard.series, s.priceCard.prices?.updated?.take(10),

@@ -13,6 +13,7 @@ import androidx.lifecycle.viewModelScope
 import io.github.pmaxai.cardscanner.data.CardInfo
 import io.github.pmaxai.cardscanner.data.Catalog
 import io.github.pmaxai.cardscanner.data.Graded
+import io.github.pmaxai.cardscanner.data.Population
 import io.github.pmaxai.cardscanner.data.Pack
 import io.github.pmaxai.cardscanner.data.Printing
 import io.github.pmaxai.cardscanner.vision.CardText
@@ -76,6 +77,8 @@ data class Shown(
     val pricedFromEnglish: Boolean get() = priceCard.id != version.id || priceCard.lang != version.lang
     /** PSA prices of the selected printing (eBay sales are kept apart per printing) */
     val graded: Graded? get() = priceCard.gradedFor(selected?.kind)
+    /** PSA population (gem rate) of the selected printing, if known */
+    val population: Population? get() = priceCard.populationFor(selected?.kind)
     /** the card has PSA sales, just not for the selected printing */
     val gradedOnlyOtherPrintings: Boolean get() = graded == null && priceCard.graded.isNotEmpty()
 }
@@ -95,6 +98,10 @@ data class Settings(
     val title: String = "",
     /** how long the frame must stay green before the card is taken (0 = at once) */
     val triggerDelayMs: Int = 300,
+    /** energy cards: 0 = recognise, 1 = skip common energy (packs' fillers), 2 = skip all energy */
+    val energyFilter: Int = 0,
+    /** a card must cover at least this share of the guide frame (percent, 0 = off): no "ghost" cards */
+    val minFillPercent: Int = 0,
 )
 
 data class DebugInfo(val preview: Bitmap?, val lines: List<String>)
@@ -115,6 +122,8 @@ data class UiState(
     val settings: Settings = Settings(),
     val session: List<SessionItem> = emptyList(),
     val hasPsaData: Boolean = false,
+    /** the data pack knows card categories (needed to skip energy cards) */
+    val hasCategories: Boolean = false,
 ) {
     val sessionValue: Double get() = session.sumOf { it.value ?: 0.0 }
 }
@@ -140,6 +149,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     private var serial = 0
     private var lastAlerted: String? = null
     private var lastText: CardText? = null
+    @Volatile private var lastFill: Double? = null
     /** text recognition runs here, one card at a time, so a card shows up without waiting for it */
     private val textDispatcher = java.util.concurrent.Executors.newSingleThreadExecutor().asCoroutineDispatcher()
 
@@ -152,6 +162,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                 youtube = prefs.getBoolean("youtube", false),
                 title = prefs.getString("title", "") ?: "",
                 triggerDelayMs = prefs.getInt("trigger_delay", 300),
+                energyFilter = prefs.getInt("energy_filter", 0),
+                minFillPercent = prefs.getInt("min_fill", 0),
             ))
         }
         viewModelScope.launch(Dispatchers.IO) {
@@ -173,7 +185,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                     p.db.rawQuery("SELECT COUNT(*) FROM graded", null).use { c -> c.moveToFirst() && c.getInt(0) > 0 }
                 }.getOrDefault(false)
                 val info = "${p.n} card images · data ${p.version.take(10)}" + if (psa) " · PSA prices" else ""
-                _state.update { it.copy(loading = false, packInfo = info, hasPsaData = psa) }
+                _state.update { it.copy(loading = false, packInfo = info, hasPsaData = psa, hasCategories = cat.hasCategory) }
+                applyEnergyFilter(_state.value.settings.energyFilter)
             } catch (t: Throwable) {
                 Log.e(TAG, "loading failed", t)
                 _state.update { it.copy(loading = false, error = t.message ?: t.toString()) }
@@ -188,7 +201,12 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         if (_state.value.paused || !busy.compareAndSet(false, true)) return
         try {
             val prior = Readings.guidePrior(rgb.cols(), rgb.rows())
-            val r = rec.recognise(rgb, prior, withPreview = _state.value.settings.showDebug)
+            val r0 = rec.recognise(rgb, prior, withPreview = _state.value.settings.showDebug)
+            // too little of the frame covered by a card: treat as "no card" (no ghost cards)
+            val minFill = _state.value.settings.minFillPercent
+            val fill = r0.best?.let { rec.guideFill(r0, it, rgb.cols(), rgb.rows(), prior) }
+            lastFill = fill
+            val r = if (minFill > 0 && (fill ?: 0.0) * 100 < minFill) r0.withoutCard() else r0
             val conf = confidenceOf(r)
             synchronized(lock) {
                 val changed = tracker.update(r.best?.group, r.margin)
@@ -429,7 +447,9 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val quad = r.quad?.flatMap { listOf(it.x.toFloat(), it.y.toFloat()) }?.toFloatArray()
         val st = _state.value
         val debug = if (st.settings.showDebug || st.shown?.fromPhoto == true) DebugInfo(r.preview ?: st.shown?.preview, buildList {
-            add("card found: ${r.detected}   margin %.3f (%s)".format(r.margin, conf))
+            add("card found: ${r.detected}   margin %.3f (%s)".format(r.margin, conf) +
+                (lastFill?.let { "   fills %d%% of the frame".format((it * 100).toInt()) } ?: "") +
+                (st.settings.minFillPercent.takeIf { it > 0 }?.let { " (needs $it%)" } ?: ""))
             add(r.timings.entries.joinToString("  ") { "${it.key} ${it.value} ms" })
             r.hits.take(5).forEachIndexed { i, hit ->
                 val name = cat.card(p.entryCard[hit.entry], "en")?.name ?: hit.group
@@ -537,10 +557,26 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             .putFloat("threshold", new.threshold.toFloat()).putBoolean("psa", new.showPsa)
             .putBoolean("debug", new.showDebug).putBoolean("youtube", new.youtube).putString("title", new.title)
             .putInt("trigger_delay", new.triggerDelayMs)
+            .putInt("energy_filter", new.energyFilter).putInt("min_fill", new.minFillPercent)
             .apply()
         tracker.delayMs = new.triggerDelayMs.toLong()
+        if (new.energyFilter != _state.value.settings.energyFilter) applyEnergyFilter(new.energyFilter)
         if (new.threshold != _state.value.settings.threshold) lastAlerted = null
         _state.update { it.copy(settings = new) }
+    }
+
+    /** Energy cards the user switched off are never matched (so they can't be shown either). */
+    private fun applyEnergyFilter(mode: Int) {
+        viewModelScope.launch(Dispatchers.Default) {
+            val p = pack ?: return@launch
+            val cat = catalog ?: return@launch
+            val rec = recognizer ?: return@launch
+            if (mode == 0) { rec.setExcluded(null); return@launch }
+            val ids = cat.energyIds(commonOnly = mode == 1)
+            val mask = BooleanArray(p.n) { p.entryCard[it] in ids }
+            rec.setExcluded(mask)
+            Log.i(TAG, "energy filter $mode: ${mask.count { it }} of ${p.n} card images skipped")
+        }
     }
 
     private fun maybeAlert(sh: Shown) {

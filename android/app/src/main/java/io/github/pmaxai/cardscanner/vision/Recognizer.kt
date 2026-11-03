@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import io.github.pmaxai.cardscanner.data.Pack
 import org.opencv.android.Utils
 import org.opencv.core.Mat
+import org.opencv.core.MatOfPoint2f
 import org.opencv.core.Point
 import org.opencv.imgproc.Imgproc
 
@@ -20,6 +21,9 @@ class Recognition(
     val timings: Map<String, Long>,
 ) {
     val best: Hit? get() = hits.firstOrNull()
+
+    /** The same frame, as if no card was in it (it covered too little of the guide frame). */
+    fun withoutCard() = Recognition(quad, false, emptyList(), 0f, preview, timings)
 }
 
 class Recognizer(pack: Pack) : AutoCloseable {
@@ -73,6 +77,26 @@ class Recognizer(pack: Pack) : AutoCloseable {
 
         val margin = if (hits.size > 1) hits[0].score - hits[1].score else hits.firstOrNull()?.score ?: 0f
         return Recognition(quad, dets.isNotEmpty(), hits, margin, preview, t)
+    }
+
+    /** Entries the search must skip (null: none). */
+    fun setExcluded(mask: BooleanArray?) { matcher.excluded = mask }
+
+    /**
+     * How much of the guide frame (0..1) the card covers, using the card outline of the
+     * best reading. 0 when no card outline was found (the guide frame itself was read).
+     */
+    fun guideFill(r: Recognition, hit: Hit, w: Int, h: Int, prior: Prior): Double {
+        if (!r.detected) return 0.0
+        val card = cardQuad(r, hit, margin = 0.0) ?: return 0.0
+        val guide = Readings.guideQuad(w, h, prior)
+        val a = MatOfPoint2f(*CardDetector.orderQuad(card))
+        val b = MatOfPoint2f(*guide)
+        val inter = MatOfPoint2f()
+        val area = runCatching { Imgproc.intersectConvexConvex(a, b, inter, true).toDouble() }.getOrDefault(0.0)
+        listOf(a, b, inter).forEach { it.release() }
+        val guideArea = (guide[1].x - guide[0].x) * (guide[3].y - guide[0].y)
+        return if (guideArea > 0) (area / guideArea).coerceIn(0.0, 1.0) else 0.0
     }
 
     override fun close() {

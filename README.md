@@ -57,6 +57,15 @@ downgrades), or restore the code from the tag.
 - **PSA 10 / 9 / 8:** recent eBay sold prices for graded copies (USD) of the printing
   you selected: a graded reverse holo has its own prices. If only another printing has
   sales, the app says so instead of showing the wrong price. Switch them on or off in ⚙.
+- **Gem rate:** the share of PSA-graded copies that got a PSA 10, with the population
+  ("PSA 10: 340 of 3,000 graded"), per printing. It needs PokemonPriceTracker's Business
+  plan; with the API plan the line simply doesn't appear (the pipeline checks each day).
+- **Energy cards** (⚙): *skip common* ignores the energy cards that come in every pack
+  but still recognises gold and secret rare energies; *skip all* ignores every energy.
+- **Card must fill the frame** (⚙, off / 30–85 %): a card only counts if it covers that
+  much of the guide frame. Against "ghost" cards: a card lying further away, one at the
+  edge, or the frame without any card outline in it. Details shows how much the current
+  card fills.
 - **Not this card?** The other candidates are listed under it; tap the right one. It
   then stays pinned (📌) until you tap **Next card**.
 - **Alert:** set a price (e.g. 5 €). The phone vibrates when a card worth at least

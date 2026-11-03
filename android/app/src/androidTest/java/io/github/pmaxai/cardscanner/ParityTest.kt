@@ -166,6 +166,29 @@ class ParityTest {
     }
 
     @Test
+    fun excludedCardsAreNeverMatched() {
+        val m = io.github.pmaxai.cardscanner.vision.Matcher(pack.index, pack.n, pack.dim, pack.entryGroup)
+        val rnd = java.util.Random(11)
+        repeat(10) {
+            val base = rnd.nextInt(pack.n)
+            val q = FloatArray(pack.dim) { pack.index[base * pack.dim + it] }
+            val g = pack.entryGroup[base]
+            assertTrue(m.search(listOf(q)).first().group == g)
+            m.excluded = BooleanArray(pack.n) { pack.entryGroup[it] == g }
+            assertTrue("excluded card $g was still matched", m.search(listOf(q)).none { it.group == g })
+            m.excluded = null
+        }
+        val cat = Catalog(pack.db)
+        if (cat.hasCategory) {
+            val all = cat.energyIds(commonOnly = false)
+            val common = cat.energyIds(commonOnly = true)
+            Log.i(TAG, "energy cards: ${all.size} in all, ${common.size} common ones")
+            assertTrue("energy filter: all=${all.size} common=${common.size}",
+                all.isNotEmpty() && common.isNotEmpty() && common.size < all.size && all.containsAll(common))
+        } else Log.i(TAG, "energy cards: this pack has no categories yet")
+    }
+
+    @Test
     fun foilCheckMatchesPipeline() {
         val texture = pack.texture
         if (texture == null) { Log.i(TAG, "foil check: this pack has no texture grids, skipped"); return }

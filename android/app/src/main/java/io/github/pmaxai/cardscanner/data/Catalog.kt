@@ -29,6 +29,10 @@ data class Printing(
     val value: Double? get() = eur ?: usd
 }
 
+/** PSA population of one printing: how many copies were graded, how many got a 10 (gem rate). */
+data class Population(val psaTotal: Int, val psa10: Int?, val psa9: Int?, val psa8: Int?, val gemRate: Double?,
+                      val updated: String?)
+
 /** PSA prices: eBay sold averages via PokemonPriceTracker, USD. */
 data class Graded(val psa10: Double?, val psa10n: Int?, val psa9: Double?, val psa9n: Int?,
                   val psa8: Double?, val psa8n: Int?, val updated: String?)
@@ -47,6 +51,10 @@ data class CardInfo(
     val printings: List<Printing>,
     /** PSA prices per printing (eBay sales are split by printing); key null = printing not stated */
     val graded: Map<Printing.Kind?, Graded>,
+    /** PSA population (gem rate) per printing, if the data pack has it */
+    val population: Map<Printing.Kind?, Population> = emptyMap(),
+    /** 'Pokemon', 'Trainer' or 'Energy' (null in older packs) */
+    val category: String? = null,
 ) {
     val numberText: String get() = if (setTotal != null && setTotal > 0) "$number/$setTotal" else number
     val thumbnailUrl: String? get() = imageUrl?.let { "$it/low.webp" }
@@ -56,6 +64,9 @@ data class CardInfo(
     /** PSA prices of this printing only; a row without a stated printing counts for the card's main printing */
     fun gradedFor(kind: Printing.Kind?): Graded? =
         graded[kind] ?: graded[null]?.takeIf { kind == null || kind == printings.firstOrNull()?.kind }
+
+    fun populationFor(kind: Printing.Kind?): Population? =
+        population[kind] ?: population[null]?.takeIf { kind == null || kind == printings.firstOrNull()?.kind }
 
     /** printings with PSA sales, for "no PSA sales for this printing" hints */
     val gradedPrintings: Set<Printing.Kind?> get() = graded.keys
@@ -67,6 +78,9 @@ class Catalog(private val db: SQLiteDatabase) {
     private val hasInfo = tableExists("card_info")
     private val hasTcg = tableExists("tcgplayer")
     private val hasGraded = tableExists("graded")
+    private val hasPopulation = tableExists("population")
+    /** the data pack knows each card's category (for skipping energy cards) */
+    val hasCategory = hasInfo && columns("card_info").contains("category")
 
     /** The card in exactly this language, or null. */
     fun cardExact(id: String, lang: String): CardInfo? = synchronized(cache) {
@@ -109,7 +123,7 @@ class Catalog(private val db: SQLiteDatabase) {
             SELECT c.id, c.lang, c.name, c.local_id, c.image_url, ${if (hasInfo) "i.rarity" else "c.rarity"},
                    s.name, s.official, s.serie_name,
                    p.updated, p.trend, p.avg, p.low, p.avg30, p.trend_holo, p.avg_holo, p.low_holo, p.avg30_holo,
-                   ${if (hasInfo) "i.variants" else "NULL"}
+                   ${if (hasInfo) "i.variants" else "NULL"}, ${if (hasCategory) "i.category" else "NULL"}
             FROM cards c
             LEFT JOIN sets s ON s.id = c.set_id AND s.lang = c.lang
             LEFT JOIN prices p ON p.id = c.id
@@ -135,6 +149,8 @@ class Catalog(private val db: SQLiteDatabase) {
                 prices = prices,
                 printings = printings(c.getString(18), rarity, prices, tcgplayer(cardId)),
                 graded = graded(cardId),
+                population = population(cardId),
+                category = c.getString(19),
             )
         }
     }
@@ -160,6 +176,44 @@ class Catalog(private val db: SQLiteDatabase) {
     }
 
     private val gradedByPrinting = hasGraded && columns("graded").contains("printing")
+
+    private fun kindOf(code: String?): Printing.Kind? = when (code) {
+        "normal" -> Printing.Kind.NORMAL
+        "holo" -> Printing.Kind.HOLO
+        "reverse" -> Printing.Kind.REVERSE
+        "1st" -> Printing.Kind.FIRST_EDITION
+        else -> null
+    }
+
+    private fun population(id: String): Map<Printing.Kind?, Population> {
+        if (!hasPopulation) return emptyMap()
+        val out = LinkedHashMap<Printing.Kind?, Population>()
+        db.rawQuery("SELECT printing, psa_total, psa10, psa9, psa8, gem_rate, updated FROM population WHERE id = ?",
+            arrayOf(id)).use { c ->
+            while (c.moveToNext()) {
+                val total = c.intOrNull(1) ?: continue
+                out[kindOf(c.getString(0))] = Population(total, c.intOrNull(2), c.intOrNull(3), c.intOrNull(4),
+                    c.doubleOrNull(5), c.getString(6))
+            }
+        }
+        return out
+    }
+
+    /**
+     * Card ids that are energy cards. commonOnly: just the cheap ones from booster packs
+     * (rarity Common / None), so gold and secret rare energies are still recognised.
+     */
+    fun energyIds(commonOnly: Boolean): Set<String> {
+        if (!hasCategory) return emptySet()
+        val out = HashSet<String>()
+        db.rawQuery("SELECT id, rarity FROM card_info WHERE category = 'Energy'", null).use { c ->
+            while (c.moveToNext()) {
+                val r = c.getString(1)?.trim()?.lowercase()
+                if (!commonOnly || r == null || r.isEmpty() || r == "common" || r == "none" || r == "c") out.add(c.getString(0))
+            }
+        }
+        return out
+    }
 
     private fun graded(id: String): Map<Printing.Kind?, Graded> {
         if (!hasGraded) return emptyMap()

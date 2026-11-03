@@ -201,6 +201,7 @@ private fun RevealCard(s: Shown, settings: Settings, onPrinting: (Printing.Kind)
                     Text(if (value == null) "–" else eur(count.value.toDouble()), color = if (hit) Gold else Color.White,
                         fontSize = 46.sp, fontWeight = FontWeight.Black)
                     if (settings.showPsa) s.graded?.let { PsaLine(it, big = true) }
+                    if (settings.showPsa) s.population?.let { GemLine(it, big = true) }
                 }
             }
             if (s.priceCard.printings.size > 1) PrintingChips(s, onPrinting, Modifier.padding(top = 8.dp))

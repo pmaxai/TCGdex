@@ -25,6 +25,9 @@ class Matcher(private val index: FloatArray, private val n: Int, private val dim
 
     private val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
 
+    /** entries never to return (e.g. energy cards when the user switched them off) */
+    @Volatile var excluded: BooleanArray? = null
+
     private fun parallel(count: Int, body: (from: Int, to: Int) -> Unit) {
         val chunk = (count + threads - 1) / threads
         runBlocking(Dispatchers.Default) {
@@ -54,12 +57,17 @@ class Matcher(private val index: FloatArray, private val n: Int, private val dim
         val which = IntArray(n)
         val cd = minOf(coarseDim, dim)
         val candidates: IntArray
+        val ex = excluded?.takeIf { it.size == n }
         if (n <= shortlist || cd == dim) {
-            parallel(n) { from, to -> for (i in from until to) best[i] = score(i, readings, dim, which) }
+            parallel(n) { from, to ->
+                for (i in from until to) best[i] = if (ex != null && ex[i]) Float.NEGATIVE_INFINITY else score(i, readings, dim, which)
+            }
             candidates = IntArray(n) { it }
         } else {
             val rough = FloatArray(n)
-            parallel(n) { from, to -> for (i in from until to) rough[i] = score(i, readings, cd, null) }
+            parallel(n) { from, to ->
+                for (i in from until to) rough[i] = if (ex != null && ex[i]) Float.NEGATIVE_INFINITY else score(i, readings, cd, null)
+            }
             candidates = topIndices(rough, shortlist)
             parallel(candidates.size) { from, to ->
                 for (j in from until to) { val i = candidates[j]; best[i] = score(i, readings, dim, which) }
@@ -70,6 +78,7 @@ class Matcher(private val index: FloatArray, private val n: Int, private val dim
         val seen = HashSet<String>()
         val out = ArrayList<Hit>()
         for (i in top) {
+            if (best[i] == Float.NEGATIVE_INFINITY) continue
             val g = groupOf[i]
             if (!seen.add(g)) continue
             out.add(Hit(g, best[i], i, which[i]))
