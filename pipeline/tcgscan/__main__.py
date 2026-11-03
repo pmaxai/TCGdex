@@ -54,6 +54,7 @@ def main(argv: list[str] | None = None) -> None:
     g.add_argument("--budget", type=int, default=18000, help="max credits to spend in this run")
     g.add_argument("--max-age-days", type=float, default=7)
     g.add_argument("--inspect", action="store_true", help="only print the cached data's structure")
+    g.add_argument("--probe-population", action="store_true", help="one call: does the plan include gem rates?")
 
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
@@ -67,8 +68,10 @@ def main(argv: list[str] | None = None) -> None:
                       exclude_series=tuple(x.strip() for x in a.exclude_series.split(",") if x.strip()),
                       image_langs=[x.strip() for x in a.image_langs.split(",") if x.strip()])
     elif a.cmd == "graded":
-        from .graded import fetch as graded_fetch, inspect as graded_inspect
-        if a.inspect:
+        from .graded import fetch as graded_fetch, inspect as graded_inspect, probe_population
+        if a.probe_population:
+            probe_population()
+        elif a.inspect:
             graded_inspect(a.cache)
         else:
             graded_fetch(a.db, a.cache, a.budget, a.max_age_days)

@@ -24,3 +24,8 @@ jobs:
       - name: Inspect
         working-directory: pipeline
         run: python -c "import logging,sys; logging.basicConfig(level=logging.INFO, format='%(message)s'); from tcgscan.graded import inspect; inspect('../.cache/graded')"
+      - name: Does the plan include gem rates (PSA population)?
+        working-directory: pipeline
+        env:
+          POKEMONPRICETRACKER_API_KEY: ${{ secrets.POKEMONPRICETRACKER_API_KEY }}
+        run: python -m tcgscan graded --probe-population

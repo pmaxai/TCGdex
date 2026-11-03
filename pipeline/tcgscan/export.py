@@ -93,6 +93,22 @@ class OnnxFingerprints:
 
 
 # ---------------------------------------------------------------- catalog
+ENERGY_WORDS = {"energy", "energie", "énergie", "energia", "energía", "エネルギー", "能量", "에너지", "พลังงาน"}
+
+
+def card_category(category) -> str | None:
+    """TCGdex's category in any language -> 'Pokemon', 'Trainer' or 'Energy'."""
+    c = str(category or "").strip()
+    if not c:
+        return None
+    low = c.lower()
+    if low in ENERGY_WORDS or "energ" in low:
+        return "Energy"
+    if low.startswith(("pok", "ポケモン", "寶可夢", "宝可梦")):
+        return "Pokemon"
+    return "Trainer" if low.startswith(("trainer", "dresseur", "entrenador", "allenatore", "treinador", "トレーナー", "訓練家", "训练家")) else c
+
+
 def write_catalog(src_db: Path, dst_db: Path, entries, meta: dict, groups: list[str] | None = None) -> None:
     if dst_db.exists():
         dst_db.unlink()
@@ -102,7 +118,7 @@ def write_catalog(src_db: Path, dst_db: Path, entries, meta: dict, groups: list[
         CREATE TABLE entries(idx INTEGER PRIMARY KEY, card_id TEXT NOT NULL, lang TEXT NOT NULL, grp TEXT NOT NULL);
         CREATE TABLE cards(id TEXT, lang TEXT, set_id TEXT, local_id TEXT, name TEXT, image_url TEXT,
                            PRIMARY KEY(id, lang));
-        CREATE TABLE card_info(id TEXT PRIMARY KEY, rarity TEXT, variants TEXT);
+        CREATE TABLE card_info(id TEXT PRIMARY KEY, rarity TEXT, variants TEXT, category TEXT);
         CREATE TABLE sets(id TEXT, lang TEXT, name TEXT, serie_id TEXT, serie_name TEXT, official INTEGER,
                           total INTEGER, release_date TEXT, PRIMARY KEY(id, lang));
         CREATE TABLE prices(id TEXT PRIMARY KEY, updated TEXT, trend REAL, avg REAL, low REAL, avg1 REAL,
@@ -120,7 +136,7 @@ def write_catalog(src_db: Path, dst_db: Path, entries, meta: dict, groups: list[
     """)
     # printings as compact flags; TCGplayer reduced to the market price per printing
     info_rows = []
-    for cid, rarity, variants in con.execute("SELECT id, rarity, variants FROM src.card_details").fetchall():
+    for cid, rarity, variants, category in con.execute("SELECT id, rarity, variants, category FROM src.card_details").fetchall():
         v = json.loads(variants) if variants else {}
         if isinstance(v, list):    # older catalogs stored the detailed list
             kinds = {x.get("type") for x in v if isinstance(x, dict)}
@@ -128,8 +144,15 @@ def write_catalog(src_db: Path, dst_db: Path, entries, meta: dict, groups: list[
                  "firstEdition": any("1st" in str(x.get("subtype", "")) or "first" in str(x.get("subtype", "")).lower()
                                      for x in v if isinstance(x, dict))}
         flags = {k: True for k in ("normal", "holo", "reverse", "firstEdition") if v.get(k)}
-        info_rows.append((cid, rarity, json.dumps(flags, separators=(",", ":"))))
-    con.executemany("INSERT OR REPLACE INTO card_info VALUES (?,?,?)", info_rows)
+        info_rows.append((cid, rarity, json.dumps(flags, separators=(",", ":")), card_category(category)))
+    con.executemany("INSERT OR REPLACE INTO card_info VALUES (?,?,?,?)", info_rows)
+    cats: dict[str, int] = {}
+    raw: dict[str, int] = {}
+    for r, (_, _, _, raw_cat) in zip(info_rows, con.execute("SELECT id, rarity, variants, category FROM src.card_details")):
+        cats[str(r[3])] = cats.get(str(r[3]), 0) + 1
+        if r[3] not in ("Pokemon", "Trainer", "Energy"):
+            raw[str(raw_cat)] = raw.get(str(raw_cat), 0) + 1
+    log.info("card categories: %s; unrecognised: %s", cats, dict(sorted(raw.items(), key=lambda t: -t[1])[:10]))
     tp_rows = []
     for cid, updated, data in con.execute("SELECT id, updated, data FROM src.prices_tcgplayer").fetchall():
         d = json.loads(data) if data else {}
@@ -142,6 +165,10 @@ def write_catalog(src_db: Path, dst_db: Path, entries, meta: dict, groups: list[
         if m:
             tp_rows.append((cid, updated, json.dumps(m, separators=(",", ":"))))
     con.executemany("INSERT OR REPLACE INTO tcgplayer VALUES (?,?,?)", tp_rows)
+    con.execute("""CREATE TABLE population(id TEXT, printing TEXT, updated TEXT, psa_total INTEGER, psa10 INTEGER,
+                   psa9 INTEGER, psa8 INTEGER, gem_rate REAL, PRIMARY KEY(id, printing))""")
+    if con.execute("SELECT 1 FROM src.sqlite_master WHERE name = 'population'").fetchone():
+        con.execute("INSERT INTO population SELECT id, printing, updated, psa_total, psa10, psa9, psa8, gem_rate FROM src.population")
     if con.execute("SELECT 1 FROM src.sqlite_master WHERE name = 'graded'").fetchone():
         cols = [r[1] for r in con.execute("PRAGMA src.table_info(graded)")]
         if "printing" in cols:

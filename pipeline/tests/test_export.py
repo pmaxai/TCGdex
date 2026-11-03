@@ -169,3 +169,22 @@ def test_foil_lab_runs_on_fake_catalog(tmp_path):
     thr = foil_lab(entries, tex, real, db, tmp_path / "foil-lab.md", n_synthetic=20)
     md = (tmp_path / "foil-lab.md").read_text()
     assert foil.REVERSE_THRESHOLD <= thr < 0.9 and "x__reverse.jpg" in md and "synthetic normal" in md
+
+
+def test_population_gem_rate_per_printing(tmp_path):
+    import json, sqlite3
+    from tcgscan import graded
+    db = tmp_path / "c.sqlite"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE cards(lang TEXT, id TEXT, set_id TEXT, local_id TEXT, name TEXT, image_url TEXT, image_file TEXT)")
+    con.execute("INSERT INTO cards VALUES ('en', 'sv03.5-094', 'sv03.5', '094', 'Gengar', NULL, NULL)")
+    con.commit()
+    cache = tmp_path / "graded"; (cache / "population").mkdir(parents=True)
+    (cache / "sv03.5.json").write_text(json.dumps({"set": "151", "fetched": 0, "cards": [
+        {"name": "Gengar", "cardNumber": "094/165", "tcgPlayerId": "502", "prices": {"primaryPrinting": "Holofoil"}}]}))
+    (cache / "population" / "sv03.5.json").write_text(json.dumps({"fetched": 0, "items": [
+        {"tcgPlayerId": "502", "populationByGrader": {"PSA": {"g10": 340, "g9": 2000, "g8": 500, "g7": 160, "totalPopulation": 3000}},
+         "populationByPrinting": {"Reverse Holofoil": {"populationByGrader": {"PSA": {"g10": 50, "g9": 150}}}}}]}))
+    graded.build_table(db, cache)
+    rows = sqlite3.connect(db).execute("SELECT id, printing, psa_total, psa10, gem_rate FROM population ORDER BY printing").fetchall()
+    assert rows == [("sv03.5-094", "holo", 3000, 340, 0.1133), ("sv03.5-094", "reverse", 200, 50, 0.25)]

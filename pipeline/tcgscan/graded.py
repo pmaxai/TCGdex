@@ -134,6 +134,10 @@ class RateLimited(RuntimeError):
     pass
 
 
+class NotInPlan(RateLimited):
+    """The API key's plan doesn't include this endpoint (e.g. population needs the Business plan)."""
+
+
 def credits_spent_today(cache_dir: Path) -> int:
     """Credits used since midnight UTC, from the cached downloads (2 credits per card)."""
     today = time.strftime("%Y-%m-%d", time.gmtime())
@@ -187,10 +191,14 @@ class Client:
         self.credits_used = 0
         self.first = True
         self.started = time.time()
+        self.daily_remaining: int | None = None
 
     def get(self, path: str, params: dict) -> dict:
         for attempt in range(5):
             r = self.s.get(f"{API}/{path}", params=params, timeout=90)
+            rem = r.headers.get("x-ratelimit-daily-remaining")
+            if rem and rem.isdigit():
+                self.daily_remaining = int(rem)
             if self.first:
                 self.first = False
                 log.info("PokemonPriceTracker rate-limit headers: %s",
@@ -207,7 +215,9 @@ class Client:
                 log.warning("PokemonPriceTracker %s -> HTTP %d, waiting %.0fs %s", path, r.status_code, wait, limits)
                 time.sleep(wait)
                 continue
-            if r.status_code in (401, 402, 403):
+            if r.status_code == 403:
+                raise NotInPlan(f"PokemonPriceTracker: {path} is not included in this plan (HTTP 403): {r.text[:200]}")
+            if r.status_code in (401, 402):
                 raise RateLimited(f"PokemonPriceTracker refused the request (HTTP {r.status_code}): {r.text[:200]}")
             r.raise_for_status()
             used = r.headers.get("X-API-Calls-Consumed") or r.headers.get("x-credits-used")
@@ -251,6 +261,8 @@ def _download(db: Path, cache_dir: Path, budget: int, max_age_days: float, key: 
         return
     client = Client(key, cache_dir)
     sets_resp = client.get("sets", {"limit": 500})
+    if client.daily_remaining is not None:      # the API says what is left today: trust it over our count
+        budget = min(budget, client.daily_remaining - 300)
     ppt_sets = _items(sets_resp)
     if ppt_sets:
         log.info("PokemonPriceTracker: %d sets; first set fields: %s", len(ppt_sets), sorted(ppt_sets[0]))
@@ -304,6 +316,155 @@ def _download(db: Path, cache_dir: Path, budget: int, max_age_days: float, key: 
         spent += cost
         log.info("PSA prices: %s (%d cards) fetched, ~%d credits used so far", name, len(cards), spent)
         time.sleep(max(1.0, len(cards) / 10 * 1.1))       # stay under 60 calls/minute
+    left = budget - spent
+    if time.time() - client.started < max_minutes * 60 and left > 200:
+        _download_population(client, cache_dir, left, deadline=client.started + max_minutes * 60)
+
+
+def _matched_cards(con, sid: str, cards: list[dict]) -> list[tuple[str, dict]]:
+    """(our card id, PokemonPriceTracker card) for one set, matched by number (and name if needed)."""
+    ours = con.execute("SELECT id, local_id, name FROM cards WHERE set_id = ? AND lang = 'en'", (sid,)).fetchall()
+    by_num: dict[str, list[tuple[str, str]]] = {}
+    for cid, local, name in ours:
+        by_num.setdefault(norm_number(local), []).append((cid, norm(name)))
+    out = []
+    for c in cards:
+        num = norm_number(_first(c, "cardNumber", "number", "localId", default=""))
+        cands = by_num.get(num, [])
+        if len(cands) > 1:   # same number twice (rare): use the name
+            cname = norm(_first(c, "name", "cleanName", default=""))
+            cands = [x for x in cands if x[1] and (x[1] in cname or cname in x[1])] or cands[:1]
+        if cands:
+            out.append((cands[0][0], c))
+    return out
+
+
+# ---------------------------------------------------------------- population (gem rate)
+POP_SCHEMA = """
+CREATE TABLE IF NOT EXISTS population(
+  id TEXT, printing TEXT, updated TEXT, psa_total INTEGER, psa10 INTEGER, psa9 INTEGER, psa8 INTEGER,
+  gem_rate REAL, PRIMARY KEY(id, printing));
+"""
+
+
+def _download_population(client: Client, cache_dir: Path, budget: int, deadline: float, max_age_days: float = 14) -> None:
+    """PSA population per card from PokemonPriceTracker's /population (Business plan; 2 credits per
+    card). On a plan without it the API answers 403: logged once, nothing else happens."""
+    pop_dir = Path(cache_dir) / "population"
+    pop_dir.mkdir(parents=True, exist_ok=True)
+    todo = []
+    for f in sorted(Path(cache_dir).glob("*.json")):
+        pf = pop_dir / f.name
+        age = (time.time() - pf.stat().st_mtime) / 86400 if pf.exists() else 1e9
+        if age > max_age_days:
+            todo.append((age, f))
+    todo.sort(key=lambda t: -t[0])
+    spent = 0
+    for _, f in todo:
+        cards = json.loads(f.read_text()).get("cards", [])
+        ids = [str(c["tcgPlayerId"]) for c in cards if c.get("tcgPlayerId")]
+        if not ids:
+            continue
+        if spent + 2 * len(ids) > budget or time.time() > deadline:
+            break
+        items = []
+        try:
+            for i in range(0, len(ids), 50):
+                chunk = ids[i:i + 50]
+                resp = client.get("population", {"tcgPlayerIds": ",".join(chunk), "limit": 100})
+                got = _items(resp) or ([resp["data"]] if isinstance(resp, dict) and isinstance(resp.get("data"), dict) else [])
+                if not items and got:
+                    log.info("PSA population probe: fields %s; PSA block %s", sorted(got[0]),
+                             json.dumps(_skeleton(((got[0].get("populationByGrader") or {}).get("PSA"))))[:400])
+                items += got
+                spent += 2 * len(chunk)
+                time.sleep(1.1)
+        except NotInPlan as ex:
+            log.info("Gem rates: PSA population is not part of this PokemonPriceTracker plan (it needs the "
+                     "Business plan) - skipped. %s", str(ex)[:120])
+            return
+        except RateLimited as ex:
+            log.warning("PSA population: stopping for today: %s", ex)
+            break
+        (pop_dir / f.name).write_text(json.dumps({"fetched": time.time(), "items": items}))
+        log.info("PSA population: %s (%d cards) fetched, ~%d credits", f.stem, len(items), spent)
+
+
+def _grade(d: dict, n: int):
+    for k in (f"g{n}", str(n), f"psa{n}", f"grade{n}", f"psa_{n}"):
+        v = d.get(k) if isinstance(d, dict) else None
+        if isinstance(v, (int, float)):
+            return int(v)
+        if isinstance(v, dict) and isinstance(v.get("count"), (int, float)):
+            return int(v["count"])
+    return None
+
+
+def population_values(block: dict) -> tuple | None:
+    """(psa total, psa10, psa9, psa8, gem rate 0..1) from a population block (a card, or one printing)."""
+    if not isinstance(block, dict):
+        return None
+    psa = (block.get("populationByGrader") or {}).get("PSA") or block.get("PSA") or block.get("psa")
+    if not isinstance(psa, dict):
+        return None
+    g10, g9, g8 = _grade(psa, 10), _grade(psa, 9), _grade(psa, 8)
+    total = psa.get("totalPopulation") or psa.get("total")
+    if not isinstance(total, (int, float)) or total <= 0:
+        grades = [v for k, v in psa.items() if isinstance(v, (int, float)) and re.fullmatch(r"g\d+(_5)?", k)]
+        total = sum(grades) if grades else 0
+    if not total:
+        return None
+    gem = (g10 or 0) / total
+    return int(total), g10, g9, g8, round(gem, 4)
+
+
+def build_population(con, cache_dir: Path) -> int:
+    con.executescript(POP_SCHEMA)
+    con.execute("DELETE FROM population")
+    pop_dir = Path(cache_dir) / "population"
+    rows = []
+    for pf in sorted(pop_dir.glob("*.json")) if pop_dir.exists() else []:
+        price_file = Path(cache_dir) / pf.name
+        if not price_file.exists():
+            continue
+        cards = json.loads(price_file.read_text()).get("cards", [])
+        ours = {str(c.get("tcgPlayerId")): (cid, c) for cid, c in _matched_cards(con, pf.stem, cards)}
+        data = json.loads(pf.read_text())
+        updated = time.strftime("%Y-%m-%d", time.gmtime(data.get("fetched", time.time())))
+        for item in data.get("items", []):
+            hit = ours.get(str(item.get("tcgPlayerId")))
+            if not hit:
+                continue
+            cid, c = hit
+            blocks = [(printing_kind((c.get("prices") or {}).get("primaryPrinting")), item)]
+            for name, b in (item.get("populationByPrinting") or {}).items():
+                blocks.append((printing_kind(name), b))
+            seen = set()
+            for printing, b in blocks:
+                v = population_values(b)
+                if v and printing not in seen:
+                    seen.add(printing)
+                    rows.append((cid, printing, updated, *v))
+    con.executemany("INSERT OR REPLACE INTO population VALUES (?,?,?,?,?,?,?,?)", rows)
+    if rows:
+        log.info("Gem rates: %d cards with PSA population", len({r[0] for r in rows}))
+    return len(rows)
+
+
+def probe_population(key: str | None = None) -> None:
+    """One /population call to see whether the plan includes it (free when it doesn't)."""
+    key = key or os.environ.get("POKEMONPRICETRACKER_API_KEY", "").strip()
+    if not key:
+        log.info("no API key")
+        return
+    client = Client(key, Path(".cache/graded"))
+    try:
+        resp = client.get("population", {"tcgPlayerId": "45167"})
+        log.info("population: available. Response: %s", json.dumps(_skeleton(resp), ensure_ascii=False)[:3000])
+    except NotInPlan as ex:
+        log.info("population: NOT in this plan. %s", ex)
+    except Exception as ex:   # noqa: BLE001
+        log.info("population: failed: %s", ex)
 
 
 def build_table(db: Path, cache_dir: Path) -> None:
@@ -315,19 +476,8 @@ def build_table(db: Path, cache_dir: Path) -> None:
     for f in sorted(Path(cache_dir).glob("*.json")) if Path(cache_dir).exists() else []:
         sid = f.stem
         data = json.loads(f.read_text())
-        ours = con.execute("SELECT id, local_id, name FROM cards WHERE set_id = ? AND lang = 'en'", (sid,)).fetchall()
-        by_num: dict[str, list[tuple[str, str]]] = {}
-        for cid, local, name in ours:
-            by_num.setdefault(norm_number(local), []).append((cid, norm(name)))
         updated = time.strftime("%Y-%m-%d", time.gmtime(data.get("fetched", time.time())))
-        for c in data.get("cards", []):
-            num = norm_number(_first(c, "cardNumber", "number", "localId", default=""))
-            cands = by_num.get(num, [])
-            if len(cands) > 1:   # same number twice (rare): use the name
-                cname = norm(_first(c, "name", "cleanName", default=""))
-                cands = [x for x in cands if x[1] and (x[1] in cname or cname in x[1])] or cands[:1]
-            if not cands:
-                continue
+        for cid, c in _matched_cards(con, sid, data.get("cards", [])):
             ebay = c.get("ebay") or {}
             # salesByGrade: the card's primary printing; salesByPrinting: every other printing
             per_printing = [(printing_kind((c.get("prices") or {}).get("primaryPrinting")),
@@ -341,7 +491,7 @@ def build_table(db: Path, cache_dir: Path) -> None:
                 if all(v[0] is None for v in vals) or printing in seen:
                     continue
                 seen.add(printing)
-                rows.append((cands[0][0], printing, "USD", updated, vals[0][0], vals[0][1], vals[1][0], vals[1][1],
+                rows.append((cid, printing, "USD", updated, vals[0][0], vals[0][1], vals[1][0], vals[1][1],
                              vals[2][0], vals[2][1], "PokemonPriceTracker (eBay sold)"))
     con.executemany("INSERT OR REPLACE INTO graded VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)
     con.commit()
@@ -350,6 +500,8 @@ def build_table(db: Path, cache_dir: Path) -> None:
         by_printing[r[1] or "?"] = by_printing.get(r[1] or "?", 0) + 1
     log.info("PSA prices: %d cards with graded prices in the catalog (%d rows by printing: %s)",
              len({r[0] for r in rows}), len(rows), by_printing)
+    build_population(con, cache_dir)
+    con.commit()
     con.close()
 
 
