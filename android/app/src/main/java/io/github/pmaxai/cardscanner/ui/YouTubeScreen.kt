@@ -74,6 +74,10 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import io.github.pmaxai.cardscanner.data.CardInfo
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -136,6 +140,7 @@ private fun CameraBox(state: UiState, vm: ScannerViewModel, torch: Boolean, modi
     Box(modifier.background(Color.Black)) {
         CameraPreview(onFrame = vm::onFrame, torch = torch, modifier = Modifier.fillMaxSize())
         GuideOverlay(state, Modifier.fillMaxSize(), dim = false)
+        ManualTrigger(state, vm)
     }
 }
 
@@ -163,7 +168,8 @@ private fun Reveal(state: UiState, vm: ScannerViewModel, modifier: Modifier) {
             ) { serial ->
                 FitInside {
                     SwipeToRemove(serial, onRemove = vm::dismissShown) {
-                        RevealCard(state.shown ?: shown, state.settings, vm::choosePrinting)
+                        RevealCard(state.shown ?: shown, state.settings, vm::choosePrinting, vm::stepVersion,
+                            vm::chooseVersion, vm::choose)
                     }
                 }
             }
@@ -172,7 +178,8 @@ private fun Reveal(state: UiState, vm: ScannerViewModel, modifier: Modifier) {
 }
 
 @Composable
-private fun RevealCard(s: Shown, settings: Settings, onPrinting: (Printing.Kind) -> Unit) {
+private fun RevealCard(s: Shown, settings: Settings, onPrinting: (Printing.Kind) -> Unit, onStep: (Int) -> Unit,
+                       onVersion: (CardInfo) -> Unit, onOther: (Candidate) -> Unit) {
     val value = s.value
     val hit = settings.threshold > 0 && (value ?: 0.0) >= settings.threshold
     val count = remember(s.serial) { Animatable(0f) }
@@ -199,6 +206,7 @@ private fun RevealCard(s: Shown, settings: Settings, onPrinting: (Printing.Kind)
                     s.english?.let { Text(it.name, color = Color.White.copy(alpha = 0.8f), fontSize = 16.sp) }
                     Text("${s.version.setName} · ${s.version.numberText}", color = Muted, fontSize = 15.sp, maxLines = 1,
                         overflow = TextOverflow.Ellipsis)
+                    VersionSwitcher(s, onStep, onVersion, onOther)
                     if (s.priceCard.printings.size <= 1) s.selected?.let {
                         Text(it.kind.label, color = Gold, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     }
@@ -276,6 +284,48 @@ private fun SwipeToRemove(key: Int, onRemove: () -> Unit, content: @Composable (
 }
 
 private const val REMOVE_AT = 0.3f
+
+/**
+ * Other versions of the same artwork (sets, languages): ‹ › step through them, the middle
+ * opens the list, with the other candidate cards below it ("not this card?").
+ */
+@Composable
+private fun VersionSwitcher(s: Shown, onStep: (Int) -> Unit, onVersion: (CardInfo) -> Unit, onOther: (Candidate) -> Unit) {
+    val n = s.versions.size
+    if (n < 2 && s.alternatives.isEmpty()) return
+    var open by remember { mutableStateOf(false) }
+    val chip = Modifier.background(Color(0xFF2A2D34), RoundedCornerShape(8.dp))
+    Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (n > 1) Text(" ‹ ", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold,
+            modifier = chip.clickable { onStep(-1) }.padding(horizontal = 8.dp, vertical = 1.dp))
+        Box {
+            Text(if (n > 1) "Version ${s.versionIndex + 1}/$n · ${s.version.lang.uppercase()} ▾" else "Other card ▾",
+                color = Color.White, fontSize = 14.sp, maxLines = 1,
+                modifier = chip.clickable { open = true }.padding(horizontal = 10.dp, vertical = 4.dp))
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                s.versions.forEach { v ->
+                    val current = v.id == s.version.id && v.lang == s.version.lang
+                    DropdownMenuItem(
+                        text = {
+                            Text("${if (current) "✓ " else ""}${v.name} · ${v.setName} · ${v.numberText} · " +
+                                "${LANG_NAMES[v.lang] ?: v.lang}  ${v.bestValue?.let { eur(it) } ?: "–"}", fontSize = 14.sp)
+                        },
+                        onClick = { open = false; if (!current) onVersion(v) })
+                }
+                if (s.alternatives.isNotEmpty()) {
+                    if (n > 0) HorizontalDivider()
+                    Text("Not this card?", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+                    s.alternatives.forEach { c ->
+                        DropdownMenuItem(text = { Text("${c.info.name} · ${c.info.setName} · ${c.info.numberText}", fontSize = 14.sp) },
+                            onClick = { open = false; onOther(c) })
+                    }
+                }
+            }
+        }
+        if (n > 1) Text(" › ", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold,
+            modifier = chip.clickable { onStep(+1) }.padding(horizontal = 8.dp, vertical = 1.dp))
+    }
+}
 
 /** Every printing of the card with its price; tap to say which one is in front of the camera. */
 @Composable

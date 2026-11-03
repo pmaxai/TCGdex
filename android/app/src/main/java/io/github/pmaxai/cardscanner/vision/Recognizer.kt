@@ -50,29 +50,32 @@ class Recognizer(pack: Pack) : AutoCloseable {
      * (another outline, e.g. from straight lines when fingers or a shiny border break the
      * card's contour) is read too, and the better match wins (export.app_recognise).
      */
-    fun recognise(rgb: Mat, prior: Prior? = null, withPreview: Boolean = false): Recognition {
+    fun recognise(rgb: Mat, prior: Prior? = null, withPreview: Boolean = false, manual: Boolean = false): Recognition {
         val t = LinkedHashMap<String, Long>()
         var t0 = System.nanoTime()
         fun lap(name: String) { val now = System.nanoTime(); t[name] = (t[name] ?: 0L) + (now - t0) / 1_000_000; t0 = now }
 
         val dets = detector.hypotheses(rgb, k = HYPOTHESES, prior = prior)
         lap("detect")
-        val quads = dets.map { it.quad }.ifEmpty {
-            listOfNotNull(prior?.let { Readings.guideQuad(rgb.cols(), rgb.rows(), it) })
-        }
+        // taken by hand: the guide frame itself is one more guess (the user put the card there)
+        val guide = prior?.let { Readings.guideQuad(rgb.cols(), rgb.rows(), it) }
+        val quads = if (manual) dets.map { it.quad } + listOfNotNull(guide)
+                    else dets.map { it.quad }.ifEmpty { listOfNotNull(guide) }
         if (quads.isEmpty()) return Recognition(null, false, emptyList(), 0f, null, t)
 
         var best: Read? = null
-        for (q in quads) {
+        var bestIsOutline = false
+        for ((i, q) in quads.withIndex()) {
             val r = read(rgb, q, withPreview, ::lap)
             if (best == null || (r.hits.firstOrNull()?.score ?: -1f) > (best.hits.firstOrNull()?.score ?: -1f)) {
                 best?.preview?.recycle()
                 best = r
+                bestIsOutline = i < dets.size
             } else r.preview?.recycle()
-            if (r.margin >= sureMargin) break
+            if (!manual && r.margin >= sureMargin) break
         }
         val b = best!!
-        return Recognition(b.quad, dets.isNotEmpty(), b.hits, b.margin, b.preview, t)
+        return Recognition(b.quad, bestIsOutline, b.hits, b.margin, b.preview, t)
     }
 
     private class Read(val quad: Array<Point>, val hits: List<Hit>, val margin: Float, val preview: Bitmap?)

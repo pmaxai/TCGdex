@@ -88,6 +88,11 @@ import coil.compose.AsyncImage
 import io.github.pmaxai.cardscanner.camera.FrameAnalyzer
 import io.github.pmaxai.cardscanner.camera.loadPhoto
 import io.github.pmaxai.cardscanner.data.CardInfo
+import android.widget.Toast
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import io.github.pmaxai.cardscanner.data.Graded
 import io.github.pmaxai.cardscanner.data.Population
 import io.github.pmaxai.cardscanner.data.Printing
@@ -128,6 +133,9 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
     LaunchedEffect(Unit) { if (!granted) ask.launch(Manifest.permission.CAMERA) }
     val state by vm.state.collectAsStateWithLifecycle()
+    LaunchedEffect(state.message) {
+        state.message?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show(); vm.messageShown() }
+    }
 
     // YouTube mode: follow the phone's orientation (tripod), hide the system bars
     val activity = ctx as? Activity
@@ -202,6 +210,7 @@ private fun Scanner(state: UiState, vm: ScannerViewModel) {
         Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f).background(Color.Black)) {
             CameraPreview(onFrame = vm::onFrame, torch = torch, modifier = Modifier.fillMaxSize())
             GuideOverlay(state, Modifier.fillMaxSize(), dim = true)
+            ManualTrigger(state, vm)
             if (state.paused) {
                 Box(Modifier.fillMaxSize().background(Color(0xAA000000)).clickable { vm.resume() },
                     contentAlignment = Alignment.Center) {
@@ -224,7 +233,8 @@ private fun Scanner(state: UiState, vm: ScannerViewModel) {
             val s = state.shown
             if (s == null) {
                 Text("Hold a card inside the frame. Its name and Cardmarket price appear here; " +
-                        "the phone vibrates when any printing of it is worth at least your alert price.", color = Muted)
+                        "the phone vibrates when any printing of it is worth at least your alert price. " +
+                        "Not recognised? Double-tap the picture to take it anyway.", color = Muted)
             } else {
                 ResultCard(s, state.settings, vm)
             }
@@ -287,13 +297,15 @@ private fun ResultCard(s: Shown, settings: Settings, vm: ScannerViewModel) {
                 modifier = Modifier.padding(top = 4.dp))
     }
 
-    if (s.languages.isNotEmpty()) {
+    val others = s.versions.filter { it.id != s.version.id || it.lang != s.version.lang }
+    if (others.isNotEmpty()) {
         Spacer(Modifier.height(8.dp))
-        Text("Other language?", color = Muted, fontSize = 12.sp)
+        Text("Other version or language?", color = Muted, fontSize = 12.sp)
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            s.languages.forEach { l ->
-                FilterChip(selected = false, onClick = { vm.chooseLanguage(l) },
-                    label = { Text("${LANG_NAMES[l.lang] ?: l.lang}: ${l.name}", fontSize = 12.sp) })
+            others.forEach { v ->
+                val label = if (v.id == s.version.id) "${LANG_NAMES[v.lang] ?: v.lang}: ${v.name}"
+                            else "${v.setName} ${v.numberText} · ${v.lang.uppercase()}"
+                FilterChip(selected = false, onClick = { vm.chooseVersion(v) }, label = { Text(label, fontSize = 12.sp) })
             }
         }
     }
@@ -467,6 +479,24 @@ private fun SettingSwitch(label: String, sub: String, value: Boolean, onChange: 
         }
         Switch(checked = value, onCheckedChange = onChange)
     }
+}
+
+/**
+ * Double tap on the camera picture: take the card in the frame now (cards the scanner isn't
+ * sure about). A short white flash, like a camera shutter, confirms it.
+ */
+@Composable
+fun ManualTrigger(state: UiState, vm: ScannerViewModel) {
+    val flash = remember { Animatable(0f) }
+    LaunchedEffect(state.flash) {
+        if (state.flash > 0) {
+            flash.snapTo(0.75f)
+            flash.animateTo(0f, tween(380))
+        }
+    }
+    Box(Modifier.fillMaxSize()
+        .background(Color.White.copy(alpha = flash.value))
+        .pointerInput(Unit) { detectTapGestures(onDoubleTap = { vm.manualTrigger() }) })
 }
 
 @Composable

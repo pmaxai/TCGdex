@@ -20,6 +20,7 @@ import io.github.pmaxai.cardscanner.vision.CardText
 import io.github.pmaxai.cardscanner.vision.FoilEstimate
 import io.github.pmaxai.cardscanner.vision.FoilMeter
 import io.github.pmaxai.cardscanner.vision.Hit
+import io.github.pmaxai.cardscanner.vision.Prior
 import io.github.pmaxai.cardscanner.vision.Readings
 import io.github.pmaxai.cardscanner.vision.Recognition
 import io.github.pmaxai.cardscanner.vision.Recognizer
@@ -68,7 +69,11 @@ data class Shown(
     val serial: Int,
     /** the user picked this card or language: the printed text must not change it */
     val versionByUser: Boolean = false,
+    /** every version of this artwork (sets, languages), the shown one included, for switching */
+    val versions: List<CardInfo> = emptyList(),
 ) {
+    /** position of the shown version in [versions] */
+    val versionIndex: Int get() = versions.indexOfFirst { it.id == version.id && it.lang == version.lang }
     val selected: Printing? get() = priceCard.printing(printing)
     val value: Double? get() = selected?.value ?: priceCard.bestValue
     /** the most valuable other printing, if it is worth more than the selected one */
@@ -124,6 +129,10 @@ data class UiState(
     val hasPsaData: Boolean = false,
     /** the data pack knows card categories (needed to skip energy cards) */
     val hasCategories: Boolean = false,
+    /** grows with every double tap on the camera (shutter flash) */
+    val flash: Int = 0,
+    /** a short message for the user (toast), null when there is none */
+    val message: String? = null,
 ) {
     val sessionValue: Double get() = session.sumOf { it.value ?: 0.0 }
 }
@@ -144,6 +153,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     private var marginSure = 0.055f
     private var marginLikely = 0.02f
     private val busy = AtomicBoolean(false)
+    /** double tap on the camera: take the card in the frame with the next frame, whatever the confidence */
+    private val manualRequest = AtomicBoolean(false)
     private val lock = Any()
     private val prefs = app.getSharedPreferences("settings", Context.MODE_PRIVATE)
     private var serial = 0
@@ -201,6 +212,10 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         if (_state.value.paused || !busy.compareAndSet(false, true)) return
         try {
             val prior = Readings.guidePrior(rgb.cols(), rgb.rows())
+            if (manualRequest.getAndSet(false)) {
+                takeByHand(rec, rgb, prior)
+                return
+            }
             val r0 = rec.recognise(rgb, prior, withPreview = _state.value.settings.showDebug)
             // too little of the frame covered by a card: treat as "no card" (no ghost cards)
             val minFill = _state.value.settings.minFillPercent
@@ -224,6 +239,34 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             busy.set(false)
         }
     }
+
+    /** Double tap on the camera: the next frame is taken by hand. */
+    fun manualTrigger() {
+        if (_state.value.paused) return
+        manualRequest.set(true)
+        _state.update { it.copy(flash = it.flash + 1) }
+    }
+
+    /**
+     * Take the card in the frame now: every outline the detector has plus the guide frame
+     * itself are read, the best match is shown and kept, however unsure it is. The frame-fill
+     * rule doesn't apply - the user says there is a card.
+     */
+    private fun takeByHand(rec: Recognizer, rgb: Mat, prior: Prior) {
+        val r = rec.recognise(rgb, prior, withPreview = _state.value.settings.showDebug, manual = true)
+        val best = r.best
+        synchronized(lock) {
+            if (best == null) {
+                _state.update { it.copy(message = "No card found in the frame") }
+                return@synchronized
+            }
+            tracker.lock(best.group)
+            showNew(best.group, r, rgb, fromPhoto = false, conf = Confidence.LIKELY)
+        }
+        publishLive(r, rgb.cols(), rgb.rows(), confidenceOf(r))
+    }
+
+    fun messageShown() = _state.update { it.copy(message = null) }
 
     /** A picked photo: no guide frame, shown immediately and the camera pauses. */
     fun onPhoto(rgb: Mat) {
@@ -335,10 +378,12 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val english = if (version.lang == "en") null else cat.cardExact(version.id, "en") ?: cat.englishOf(group)
         val hasOwnPrice = version.printings.any { it.value != null }
         val priceCard = if (hasOwnPrice || english == null) version else english
-        val langs = cat.versions(group).filter { it.first == version.id || it.second in ASIAN }
-            .mapNotNull { (id, l) -> cat.cardExact(id, l) }.filter { it.lang != version.lang || it.id != version.id }
+        val all = cat.versions(group).sortedBy { if (it.second in ASIAN) 1 else 0 }
+            .mapNotNull { (id, l) -> cat.cardExact(id, l) }
+            .let { v -> if (v.none { it.id == version.id && it.lang == version.lang }) listOf(version) + v else v }
+        val langs = all.filter { (it.id == version.id || it.lang in ASIAN) && (it.lang != version.lang || it.id != version.id) }
         return Shown(group, version, english, priceCard, priceCard.printings.firstOrNull()?.kind, false, null, conf,
-            alternatives, langs, text, locked, fromPhoto, preview, ++serial)
+            alternatives, langs, text, locked, fromPhoto, preview, ++serial, versions = all)
     }
 
     private fun showNew(group: String, r: Recognition, rgb: Mat, fromPhoto: Boolean, conf: Confidence) {
@@ -516,6 +561,17 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             preview = s.preview).copy(versionByUser = true)
         _state.update { st -> st.copy(shown = shown, session = replaceInSession(st.session, shown, oldSerial = s.serial)) }
         maybeAlert(shown)
+    }
+
+    /** Another version of the same artwork (set, language): same card, its own prices. */
+    fun chooseVersion(info: CardInfo) = chooseLanguage(info)
+
+    /** Step through the versions of the shown card (+1 next, -1 previous). */
+    fun stepVersion(step: Int) {
+        val s = _state.value.shown ?: return
+        if (s.versions.size < 2) return
+        val i = s.versionIndex.coerceAtLeast(0)
+        chooseVersion(s.versions[((i + step) % s.versions.size + s.versions.size) % s.versions.size])
     }
 
     fun chooseLanguage(info: CardInfo) = _state.update { st ->

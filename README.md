@@ -66,6 +66,12 @@ downgrades), or restore the code from the tag.
   much of the guide frame. Against "ghost" cards: a card lying further away, one at the
   edge, or the frame without any card outline in it. Details shows how much the current
   card fills.
+- **Double tap** on the camera picture takes the card in the frame right away, for cards
+  the scanner isn't sure about: it reads every outline it found plus the frame itself
+  and shows the best match (a white flash confirms it). The frame-fill setting doesn't
+  apply to it.
+- **Other versions:** the same picture printed in other sets or languages is listed
+  under the card (*Other version or language?*); tap one to switch, prices follow.
 - **Not this card?** The other candidates are listed under it; tap the right one. It
   then stays pinned (📌) until you tap **Next card**.
 - **Alert:** set a price (e.g. 5 €). The phone vibrates when a card worth at least
@@ -76,6 +82,9 @@ downgrades), or restore the code from the tag.
   - big card name and price with a count-up, and a "HIT" burst for cards above your
     alert price
   - the printings as chips under the price: tap the right one if the app got it wrong
+  - **‹ Version 2/4 ›** under the set: step through other sets and languages of the
+    same picture, or tap the middle for the list (with "Not this card?" candidates)
+  - **double tap** the camera picture to take a card the scanner doesn't recognise
   - **swipe the card to the left** to take it out of the pack (wrong match, or a card
     you don't want to count); the same card isn't taken again until you show another
   - a session bar with card count and total value
