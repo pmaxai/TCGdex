@@ -336,7 +336,7 @@ def _skeleton(v, depth: int = 0, max_items: int = 4):
     return v
 
 
-def inspect(cache_dir: Path, n: int = 3) -> None:
+def inspect(cache_dir: Path, n: int = 4) -> None:
     """Print how cached PokemonPriceTracker cards describe graded sales per printing."""
     files = sorted(Path(cache_dir).glob("*.json"))
     log.info("PSA cache: %d sets", len(files))
@@ -355,10 +355,20 @@ def inspect(cache_dir: Path, n: int = 3) -> None:
                 stats["with_salesByPrinting"] += 1
                 for k in (sbp if isinstance(sbp, dict) else [x.get("printing", "?") for x in sbp if isinstance(x, dict)]):
                     printings[str(k)] = printings.get(str(k), 0) + 1
-                if shown < n:
+                modern = f.stem.startswith(("sv", "swsh", "sm"))
+                if shown < n and (modern or shown < 1):
                     shown += 1
-                    top = {k: _skeleton(v) for k, v in c.items() if k not in ("attacks", "flavorText", "weakness",
-                                                                                "resistance", "retreatCost")}
-                    log.info("PSA card with salesByPrinting (%s): %s", f.stem, json.dumps(top, ensure_ascii=False)[:6000])
+                    keep = ("count", "medianPrice", "averagePrice", "smartMarketPrice", "lastSaleDate")
+                    def slim(x):
+                        if isinstance(x, dict):
+                            return {k: (slim(v) if k not in keep else v) for k, v in x.items()
+                                    if k in keep or k.startswith(("psa", "printing", "grade")) or isinstance(v, (dict, list))
+                                    and k not in ("labels", "salesBySource")}
+                        if isinstance(x, list):
+                            return [slim(v) for v in x[:3]]
+                        return x
+                    log.info("PSA card %s %s %s: primaryPrinting=%s ebay keys=%s salesByPrinting=%s", f.stem, c.get("name"),
+                             c.get("cardNumber"), (c.get("prices") or {}).get("primaryPrinting"), sorted(eb),
+                             json.dumps(slim(sbp), ensure_ascii=False)[:2500])
     log.info("PSA cache stats: %s", stats)
     log.info("PSA printings in salesByPrinting: %s", dict(sorted(printings.items(), key=lambda t: -t[1])[:30]))
