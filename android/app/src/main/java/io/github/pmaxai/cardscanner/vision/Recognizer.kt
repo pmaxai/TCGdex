@@ -39,20 +39,45 @@ class Recognizer(pack: Pack) : AutoCloseable {
     private val fingerprinter = Fingerprinter(pack.modelPath, geometry.input)
     private val matcher = Matcher(pack.index, pack.n, pack.dim, pack.entryGroup)
 
+    /** matches with at least this margin are sure: no second guess at the outline needed */
+    private val sureMargin = pack.metaFloat("margin_99", 0.085f)
+
     /**
      * @param rgb photo as RGB CV_8UC3
      * @param prior where the guide frame expects the card (live camera); null for photos
+     *
+     * The detector's outline is read first. If that gives no sure match, its second guess
+     * (another outline, e.g. from straight lines when fingers or a shiny border break the
+     * card's contour) is read too, and the better match wins (export.app_recognise).
      */
     fun recognise(rgb: Mat, prior: Prior? = null, withPreview: Boolean = false): Recognition {
         val t = LinkedHashMap<String, Long>()
         var t0 = System.nanoTime()
-        fun lap(name: String) { val now = System.nanoTime(); t[name] = (now - t0) / 1_000_000; t0 = now }
+        fun lap(name: String) { val now = System.nanoTime(); t[name] = (t[name] ?: 0L) + (now - t0) / 1_000_000; t0 = now }
 
-        val dets = detector.detect(rgb, maxCards = 1, prior = prior)
+        val dets = detector.hypotheses(rgb, k = HYPOTHESES, prior = prior)
         lap("detect")
-        val quad = dets.firstOrNull()?.quad ?: prior?.let { Readings.guideQuad(rgb.cols(), rgb.rows(), it) }
-            ?: return Recognition(null, false, emptyList(), 0f, null, t)
+        val quads = dets.map { it.quad }.ifEmpty {
+            listOfNotNull(prior?.let { Readings.guideQuad(rgb.cols(), rgb.rows(), it) })
+        }
+        if (quads.isEmpty()) return Recognition(null, false, emptyList(), 0f, null, t)
 
+        var best: Read? = null
+        for (q in quads) {
+            val r = read(rgb, q, withPreview, ::lap)
+            if (best == null || (r.hits.firstOrNull()?.score ?: -1f) > (best.hits.firstOrNull()?.score ?: -1f)) {
+                best?.preview?.recycle()
+                best = r
+            } else r.preview?.recycle()
+            if (r.margin >= sureMargin) break
+        }
+        val b = best!!
+        return Recognition(b.quad, dets.isNotEmpty(), b.hits, b.margin, b.preview, t)
+    }
+
+    private class Read(val quad: Array<Point>, val hits: List<Hit>, val margin: Float, val preview: Bitmap?)
+
+    private fun read(rgb: Mat, quad: Array<Point>, withPreview: Boolean, lap: (String) -> Unit): Read {
         val g = geometry
         val card = Readings.toCard(rgb, quad, g)
         val card180 = Readings.rot180(card)
@@ -63,7 +88,6 @@ class Recognizer(pack: Pack) : AutoCloseable {
         lap("model")
         val hits = matcher.search(fps)
         lap("search")
-
         val preview = if (withPreview) {
             Bitmap.createBitmap(card.cols(), card.rows(), Bitmap.Config.ARGB_8888).also {
                 val rgba = Mat()
@@ -74,57 +98,8 @@ class Recognizer(pack: Pack) : AutoCloseable {
         } else null
         listOf(card, card180, artA, artB).forEach { it.release() }
         inputs.forEach { it.release() }
-
         val margin = if (hits.size > 1) hits[0].score - hits[1].score else hits.firstOrNull()?.score ?: 0f
-        return Recognition(quad, dets.isNotEmpty(), hits, margin, preview, t)
-    }
-
-    /** Entries the search must skip (null: none). */
-    fun setExcluded(mask: BooleanArray?) { matcher.excluded = mask }
-
-    /**
-     * How much of the guide frame (0..1) the card covers, using the card outline of the
-     * best reading. 0 when no card outline was found (the guide frame itself was read).
-     */
-    fun guideFill(r: Recognition, hit: Hit, w: Int, h: Int, prior: Prior): Double {
-        if (!r.detected) return 0.0
-        val card = cardQuad(r, hit, margin = 0.0) ?: return 0.0
-        val guide = Readings.guideQuad(w, h, prior)
-        val a = MatOfPoint2f(*CardDetector.orderQuad(card))
-        val b = MatOfPoint2f(*guide)
-        val inter = MatOfPoint2f()
-        val area = runCatching { Imgproc.intersectConvexConvex(a, b, inter, true).toDouble() }.getOrDefault(0.0)
-        listOf(a, b, inter).forEach { it.release() }
-        val guideArea = (guide[1].x - guide[0].x) * (guide[3].y - guide[0].y)
-        return if (guideArea > 0) (area / guideArea).coerceIn(0.0, 1.0) else 0.0
-    }
-
-    override fun close() {
-        fingerprinter.close()
-    }
-
-    /** The card's corners in its own order (rectify -> upright card), whichever reading won. */
-    /** The upright card's outline for this reading. margin: extra room around a card rebuilt from its artwork box. */
-    fun cardQuad(r: Recognition, hit: Hit, margin: Double = 0.06): Array<Point>? {
-        val q = r.quad ?: return null
-        return when (hit.reading) {
-            0 -> q
-            1 -> arrayOf(q[2], q[3], q[0], q[1])
-            2 -> Readings.cardQuadFromArtwork(q, false, geometry, margin)
-            else -> Readings.cardQuadFromArtwork(q, true, geometry, margin)
-        }
-    }
-
-    /**
-     * Single-frame reverse holo score of the card in this frame, against the scan of pack
-     * entry [refEntry] (the version shown). Null: no texture data in the pack, or no score.
-     */
-    fun foilScore(rgb: Mat, r: Recognition, hit: Hit, texture: ByteArray?, refEntry: Int): FoilCheck.Result? {
-        if (texture == null) return null
-        val quad = cardQuad(r, hit, margin = 0.0) ?: return null
-        val ref = FoilCheck.reference(texture, refEntry)
-        val grids = FoilCheck.photoGrids(rgb, quad, ref, geometry.rectW, geometry.rectH)
-        return FoilCheck.scores(grids, ref).takeIf { !it.score.isNaN() }
+        return Read(quad, hits, margin, preview)
     }
 
     /**
@@ -152,6 +127,8 @@ class Recognizer(pack: Pack) : AutoCloseable {
     }
 
     companion object {
+        /** outlines tried per frame at most (the detector's answer + second guesses) */
+        const val HYPOTHESES = 2
         val READINGS = listOf("card", "card upside down", "artwork", "artwork upside down")
 
         /** Android bitmap -> RGB Mat. */

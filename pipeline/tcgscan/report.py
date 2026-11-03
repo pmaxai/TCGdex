@@ -89,6 +89,11 @@ def write_report(path: Path, s: dict, per_query: dict, entries) -> None:
     if ar.get("share"):
         w(f"**Artwork reading** (the detector outlined the artwork box, not the card): used for {_pct(ar['share'])} "
           f"of photos, right in {_pct(ar['right'])} of those ({best}).\n")
+    d2 = s["models"][best].get("detector2")
+    if d2:
+        w(f"**Second outline** ({best}): when the first outline gives no sure match the app also reads the "
+          f"detector's second guess. Top-1 full pipeline with it: **{d2['top1'] * 100:.1f}%** "
+          f"(without: {s['models'][best]['detector']['top1'] * 100:.1f}%).\n")
     w(f"### What goes wrong ({best}, full pipeline)\n")
     errs = s["models"][best]["detector"]["errors"]
     n = s["n_queries"]

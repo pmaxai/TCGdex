@@ -29,7 +29,7 @@ from PIL import Image, ImageOps
 
 from .augment import flatten, guide_prior, load_rgba, oracle_crop, synth_photo
 from .catalog import Entry, load_entries
-from .detect import RECT_H, RECT_W, as_artwork, detect_cards, draw_quad, quad_iou, rectify
+from .detect import RECT_H, RECT_W, as_artwork, detect_cards, detect_hypotheses, draw_quad, quad_iou, rectify
 from .embedders import CARD_H, CARD_W, PREP_VERSION, REGIONS, Embedder, get_embedder, timed_embed, to_card, view
 from .labels import LabelResolver
 from .report import has_tag, write_report
@@ -132,6 +132,8 @@ class Query:
     det_crop: np.ndarray | None
     det_art: tuple | None            # artwork-box readings of the same quad
     oracle: np.ndarray
+    det2_crop: np.ndarray | None = None     # the detector's second guess (another outline), if any
+    det2_art: tuple | None = None
 
 
 def _generate(entries: list[Entry], qi: int, ei: int, seed: int):
@@ -146,7 +148,7 @@ def _generate(entries: list[Entry], qi: int, ei: int, seed: int):
                 distract.append(load_rgba(entries[j].path))
     guided = qi % 2 == 1          # half the photos: card lined up with the app's guide frame
     photo, quad, meta = synth_photo(card, r, distract, guided=guided)
-    dets = detect_cards(photo, max_cards=1, prior=guide_prior(photo.shape) if guided else None)
+    dets = detect_hypotheses(photo, k=2, prior=guide_prior(photo.shape) if guided else None)
     if guided:
         meta.tags.append("guided")
     return r, photo, quad, meta, dets
@@ -170,12 +172,16 @@ def make_queries(entries: list[Entry], n: int, seed: int, debug_dir: Path | None
             det_crop = to_card(rectify(photo, used))
             det_art = as_artwork(photo, used, (CARD_W, CARD_H), REGIONS["art"])
         orc = to_card(oracle_crop(photo, quad, r))
+        det2_crop = det2_art = None
+        if len(dets) > 1:
+            det2_crop = to_card(rectify(photo, dets[1].quad))
+            det2_art = as_artwork(photo, dets[1].quad, (CARD_W, CARD_H), REGIONS["art"])
         if debug_dir is not None and qi < n_examples:
             vis = draw_quad(photo, quad, (0, 120, 255), 3)
             if dets:
                 vis = draw_quad(vis, dets[0].quad, (0, 255, 0), 3)
             _save(debug_dir / "synthetic_examples" / f"{qi:03d}_{entries[ei].card_id}.jpg", vis)
-        return Query(qi, int(ei), meta.tags, meta.card_frac, bool(dets), iou, det_crop, det_art, orc)
+        return Query(qi, int(ei), meta.tags, meta.card_frac, bool(dets), iou, det_crop, det_art, orc, det2_crop, det2_art)
 
     t0 = time.time()
     with ThreadPoolExecutor(WORKERS) as ex:
@@ -217,6 +223,17 @@ def embed_queries(model: Embedder, queries: list[Query]) -> tuple[dict, float]:
         else:
             readings = [np.zeros((0, model.dim), np.float32)] * 2
         out[mode] = (sel, readings)
+    # the app reads the detector's second guess too when the first gives no sure match: the
+    # better match wins (here: always both, best over all eight readings)
+    sel, base = out["detector"]
+    if sel:
+        def alt(i, which):
+            q = queries[i]
+            if q.det2_crop is None:
+                return q.det_crop if which == 0 else (_rot180(q.det_crop[None])[0] if which == 1 else q.det_art[which - 2])
+            return q.det2_crop if which == 0 else (_rot180(q.det2_crop[None])[0] if which == 1 else q.det2_art[which - 2])
+        extra = [model.embed(np.stack([alt(i, w) for i in sel])) for w in range(4)]
+        out["detector2"] = (sel, base + extra)
     return out, ms
 
 
@@ -258,6 +275,7 @@ def score_view(ref_t: np.ndarray, qemb: dict, tf, entries: list[Entry], queries:
             else:
                 top_ids = [c for c, _, _, _ in res[:5]]
                 pred, score, pj, reading = res[0]
+                reading %= len(READINGS)
                 margin = score - (res[1][1] if len(res) > 1 else 0.0)
                 ok = pred == want
                 row.update(pred=pred, pred_entry=pj, reading=READINGS[reading], score=round(score, 4),
@@ -460,8 +478,8 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, models: list[str], n_queries
             s["artwork_reading"] = {"share": len(art) / max(1, len(res["detector"])),
                                     "right": float(np.mean([r["top1"] for r in art])) if art else None}
             summary["models"][label] = s
-            log.info("[%s] top-1 full pipeline %.1f%%, perfect detection %.1f%%", label,
-                     100 * s["detector"]["top1"], 100 * s["oracle"]["top1"])
+            log.info("[%s] top-1 full pipeline %.1f%% (with second outline %.1f%%), perfect detection %.1f%%", label,
+                     100 * s["detector"]["top1"], 100 * s.get("detector2", s["detector"])["top1"], 100 * s["oracle"]["top1"])
             if pca is None:
                 np.save(pack_dir / f"{label}_embeddings.f16.npy", ref_t.astype(np.float16))
             if real:

@@ -40,11 +40,13 @@ class CardDetector(
     private val expand: Boolean = true,
     private val useHull: Boolean = true,
 ) {
-    private class Cand(val score: Double, val quad: Array<Point>, val support: Double, val si: Int)
+    private class Cand(val score: Double, val quad: Array<Point>, val support: Double, val si: Int,
+                       val fromLines: Boolean = false)
     private class Kept(var quad: Array<Point>, val score: Double, val si: Int)
 
     private class Ctx(val scale: Double, val small: Mat, val gray: Mat, val union: Mat) {
         val unionBytes: ByteArray by lazy { bytes(union) }
+        var rawEdges: EdgePoints? = null
         fun release() {
             if (scale < 1.0) small.release()
             gray.release(); union.release()
@@ -55,41 +57,67 @@ class CardDetector(
         val cands = ArrayList<Cand>()
         val ctx = ArrayList<Ctx>()
         try {
-            for ((si, ws) in workSizes.withIndex()) {
-                val x = scaleCandidates(rgb, ws, minAreaFrac, prior, si, cands)
-                ctx.add(x)
-            }
+            for ((si, ws) in workSizes.withIndex()) ctx.add(scaleCandidates(rgb, ws, minAreaFrac, prior, si, cands, lines = false))
             val sorted = cands.sortedByDescending { it.score }        // stable, like Python's sort
-            val kept = ArrayList<Kept>()
-            for (c in sorted) {
-                val cen = centroid(c.quad)
-                val clash = kept.any { k -> inside(cen, k.quad) || inside(centroid(k.quad), c.quad) }
-                if (!clash) kept.add(Kept(c.quad, c.score, c.si))
-            }
-            val result = ArrayList<Detection>()
-            for (k in kept.take(maxCards)) {
-                var q = k.quad
-                val si = k.si
-                if (refine) {
-                    val x = ctx[si]
-                    val raw = rawEdgePoints(x.gray)
-                    val sc = x.scale
-                    var qs = q.map { Point(it.x * sc, it.y * sc) }.toTypedArray()
-                    qs = refineQuad(qs, raw)
-                    if (expand) qs = refineQuad(expandToBorder(qs, x.unionBytes, x.union.cols(), x.union.rows(), x.small), raw)
-                    q = qs.map { Point(it.x / sc, it.y / sc) }.toTypedArray()
-                }
-                result.add(Detection(orderQuad(q), k.score))
-            }
-            return result
+            return pick(sorted).take(maxCards).map { k -> Detection(orderQuad(finish(k, ctx)), k.score) }
         } finally {
             ctx.forEach { it.release() }
         }
     }
 
+    /**
+     * detect.detect_hypotheses: the detector's answer first (exactly detect()'s best), then up
+     * to k-1 other guesses - the best candidates, outlines built from straight lines included,
+     * that differ clearly from those before. Read only when the first gives no sure match.
+     */
+    fun hypotheses(rgb: Mat, k: Int = 2, minAreaFrac: Double = 0.03, prior: Prior? = null): List<Detection> {
+        val cands = ArrayList<Cand>()
+        val ctx = ArrayList<Ctx>()
+        try {
+            for ((si, ws) in workSizes.withIndex()) ctx.add(scaleCandidates(rgb, ws, minAreaFrac, prior, si, cands, lines = ALT_LINES))
+            val sorted = cands.sortedByDescending { it.score }
+            val chosen = ArrayList<Detection>()
+            pick(sorted.filter { !it.fromLines }).firstOrNull()?.let { chosen.add(Detection(orderQuad(finish(it, ctx)), it.score)) }
+            for (c in sorted) {
+                if (chosen.size >= k) break
+                if (chosen.any { quadIou(c.quad, it.quad) >= 0.95 }) continue      // cheap test before snapping it
+                val q = finish(Kept(c.quad, c.score, c.si), ctx)
+                if (chosen.all { quadIou(q, it.quad) < ALT_MAX_IOU }) chosen.add(Detection(orderQuad(q), c.score))
+            }
+            return chosen
+        } finally {
+            ctx.forEach { it.release() }
+        }
+    }
+
+    private fun pick(sorted: List<Cand>): List<Kept> {
+        val kept = ArrayList<Kept>()
+        for (c in sorted) {
+            val cen = centroid(c.quad)
+            val clash = kept.any { k -> inside(cen, k.quad) || inside(centroid(k.quad), c.quad) }
+            if (!clash) kept.add(Kept(c.quad, c.score, c.si))
+        }
+        return kept
+    }
+
+    /** Snap the outline to the edges and grow an inner panel to the card's border. */
+    private fun finish(k: Kept, ctx: List<Ctx>): Array<Point> {
+        var q = k.quad
+        if (refine) {
+            val x = ctx[k.si]
+            val raw = x.rawEdges ?: rawEdgePoints(x.gray).also { x.rawEdges = it }
+            val sc = x.scale
+            var qs = q.map { Point(it.x * sc, it.y * sc) }.toTypedArray()
+            qs = refineQuad(qs, raw)
+            if (expand) qs = refineQuad(expandToBorder(qs, x.unionBytes, x.union.cols(), x.union.rows(), x.small), raw)
+            q = qs.map { Point(it.x / sc, it.y / sc) }.toTypedArray()
+        }
+        return q
+    }
+
     // ------------------------------------------------------------ one scale
     private fun scaleCandidates(img: Mat, workSize: Int, minAreaFrac: Double, prior: Prior?, si: Int,
-                                out: MutableList<Cand>): Ctx {
+                                out: MutableList<Cand>, lines: Boolean): Ctx {
         val scale = min(1.0, workSize.toDouble() / min(img.rows(), img.cols()))
         val small = if (scale < 1.0) Mat().also { Imgproc.resize(img, it, Size(), scale, scale, Imgproc.INTER_AREA) } else img
         val gray = Mat()
@@ -108,7 +136,7 @@ class CardDetector(
         val uw = union.cols()
         val uh = union.rows()
 
-        fun consider(quad: Array<Point>) {
+        fun consider(quad: Array<Point>, fromLines: Boolean = false) {
             var s = quadScore(quad, imgArea)
             if (s <= 0) return
             val (supMean, supMin) = edgeSupport(quad, ub, uw, uh)
@@ -116,7 +144,7 @@ class CardDetector(
             if (prior != null) s *= priorWeight(quad, prior, uh, uw)
             var pw = 1.0
             repeat(supportPow) { pw *= supMean }
-            out.add(Cand(s * pw, quad.map { Point(it.x / scale, it.y / scale) }.toTypedArray(), supMean, si))
+            out.add(Cand(s * pw, quad.map { Point(it.x / scale, it.y / scale) }.toTypedArray(), supMean, si, fromLines))
         }
 
         for (edges in maps) {
@@ -164,6 +192,7 @@ class CardDetector(
                 for (q in quads) consider(q)
             }
         }
+        if (lines) for (edges in maps.take(2)) for (q in lineQuads(edges)) consider(q, fromLines = true)
         maps.forEach { it.release() }
         return x
     }
@@ -198,6 +227,85 @@ class CardDetector(
         Imgproc.morphologyEx(th, th, Imgproc.MORPH_CLOSE, k5)
         k5.release(); k3.release()
         out.add(th)
+        return out
+    }
+
+    /**
+     * detect._line_quads: card-shaped quads assembled from straight edge lines. Works where
+     * contours fail: when the outline runs into fingers or a sleeve, no closed contour exists,
+     * but the four straight sides are still there.
+     */
+    private fun lineQuads(edges: Mat, maxLines: Int = 18): List<Array<Point>> {
+        val h = edges.rows()
+        val w = edges.cols()
+        val md = min(h, w).toDouble()
+        val segMat = Mat()
+        Imgproc.HoughLinesP(edges, segMat, 1.0, Math.PI / 180, 40, 0.12 * md, 0.02 * max(h, w))
+        val nSeg = segMat.rows()
+        if (nSeg == 0) { segMat.release(); return emptyList() }
+        val raw = IntArray(nSeg * 4)
+        segMat.get(0, 0, raw)
+        segMat.release()
+        val phi = DoubleArray(nSeg)
+        val rho = DoubleArray(nSeg)
+        val length = DoubleArray(nSeg)
+        for (i in 0 until nSeg) {
+            val x1 = raw[4 * i].toDouble(); val y1 = raw[4 * i + 1].toDouble()
+            val x2 = raw[4 * i + 2].toDouble(); val y2 = raw[4 * i + 3].toDouble()
+            length[i] = hypot(x2 - x1, y2 - y1)
+            var p = (atan2(y2 - y1, x2 - x1) + Math.PI / 2) % Math.PI
+            if (p < 0) p += Math.PI
+            phi[i] = p
+            rho[i] = x1 * kotlin.math.cos(p) + y1 * kotlin.math.sin(p)
+        }
+        // merge collinear segments into lines, strongest first (stable order, like the pipeline)
+        val lns = ArrayList<DoubleArray>()        // [phi, rho, support]
+        for (i in (0 until nSeg).sortedByDescending { length[it] }) {
+            var merged = false
+            for (ln in lns) {
+                var dphi = abs(phi[i] - ln[0])
+                var r = rho[i]
+                if (dphi > Math.PI / 2) { dphi = Math.PI - dphi; r = -r }
+                if (dphi < Math.toRadians(3.0) && abs(r - ln[1]) < 0.015 * md) { ln[2] += length[i]; merged = true; break }
+            }
+            if (!merged) lns.add(doubleArrayOf(phi[i], rho[i], length[i]))
+        }
+        val lines = lns.sortedByDescending { it[2] }.take(maxLines)
+        fun angdiff(a: Double, b: Double): Double { val d = abs(a - b) % Math.PI; return min(d, Math.PI - d) }
+        fun sameDirRho(a: DoubleArray, b: DoubleArray) = if (abs(a[0] - b[0]) < Math.PI / 2) b[1] else -b[1]
+        class Pair2(val a: DoubleArray, val b: DoubleArray, val d: Double)
+        val pairs = ArrayList<Pair2>()
+        for (i in lines.indices) for (j in i + 1 until lines.size) {
+            val a = lines[i]; val b = lines[j]
+            if (angdiff(a[0], b[0]) < Math.toRadians(12.0)) {
+                val d = abs(a[1] - sameDirRho(a, b))
+                if (d > 0.12 * md) pairs.add(Pair2(a, b, d))
+            }
+        }
+        val out = ArrayList<Array<Point>>()
+        for (p in pairs.indices) for (q in p + 1 until pairs.size) {
+            val (a, b, d1) = Triple(pairs[p].a, pairs[p].b, pairs[p].d)
+            val (c, e, d2) = Triple(pairs[q].a, pairs[q].b, pairs[q].d)
+            val ad = angdiff(a[0], c[0])
+            if (!(ad > Math.toRadians(65.0) && ad < Math.toRadians(115.0))) continue
+            val ratio = min(d1, d2) / max(d1, d2)
+            if (!(ratio > 0.6 && ratio < 0.85)) continue
+            val pts = ArrayList<Point>(4)
+            for ((l1, l2) in listOf(a to c, c to b, b to e, e to a)) {
+                val m00 = kotlin.math.cos(l1[0]); val m01 = kotlin.math.sin(l1[0])
+                val m10 = kotlin.math.cos(l2[0]); val m11 = kotlin.math.sin(l2[0])
+                val det = m00 * m11 - m01 * m10
+                if (abs(det) < 1e-6) break
+                pts.add(Point((l1[1] * m11 - m01 * l2[1]) / det, (m00 * l2[1] - l1[1] * m10) / det))
+            }
+            if (pts.size < 4) continue
+            if (pts.any { it.x < -0.02 * w || it.x > 1.02 * w || it.y < -0.02 * h || it.y > 1.02 * h }) continue
+            val oq = orderQuad(pts.toTypedArray())
+            val mp = MatOfPoint(*oq.map { Point(it.x.toFloat().toDouble(), it.y.toFloat().toDouble()) }.toTypedArray())
+            val convex = Imgproc.isContourConvex(mp)
+            mp.release()
+            if (convex) out.add(pts.map { Point(it.x.toFloat().toDouble(), it.y.toFloat().toDouble()) }.toTypedArray())
+        }
         return out
     }
 
@@ -341,6 +449,19 @@ class CardDetector(
 
     companion object {
         const val CARD_ASPECT = 63.0 / 88.0
+        /** second guesses also from straight lines of the two grey Canny maps */
+        const val ALT_LINES = true
+        /** a second guess must differ this much from the first */
+        const val ALT_MAX_IOU = 0.85
+
+        fun quadIou(a: Array<Point>, b: Array<Point>): Double {
+            val pa = MatOfPoint2f(*orderQuad(a).map { Point(it.x.toFloat().toDouble(), it.y.toFloat().toDouble()) }.toTypedArray())
+            val pb = MatOfPoint2f(*orderQuad(b).map { Point(it.x.toFloat().toDouble(), it.y.toFloat().toDouble()) }.toTypedArray())
+            val inter = runCatching { Imgproc.intersectConvexConvex(pa, pb, MatOfPoint2f(), true).toDouble() }.getOrDefault(0.0)
+            val union = Imgproc.contourArea(pa) + Imgproc.contourArea(pb) - inter
+            pa.release(); pb.release()
+            return if (union > 0) inter / union else 0.0
+        }
 
         fun orderQuad(p: Array<Point>): Array<Point> {
             val cx = p.sumOf { it.x } / 4

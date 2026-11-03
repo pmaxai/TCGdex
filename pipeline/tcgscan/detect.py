@@ -23,6 +23,11 @@ REFINE = True                  # snap each side to the edge pixels along it
 EXPAND = True                  # grow an inner-panel outline to the card's outer border
 USE_HULL = True                # also build quads from convex hulls (repairs ragged outlines)
 USE_LINES = False              # also assemble quads from straight edge lines (tested: +1%, 4x slower)
+# Second guesses (detect_hypotheses): straight lines of the two grey Canny maps (the colour and
+# threshold maps are full of wood grain and print texture) find a card whose outline runs into
+# fingers or a sleeve, so no closed contour exists (shiny borders, cards held at the edge).
+ALT_LINES = True
+ALT_MAX_IOU = 0.85             # a second guess must differ this much from the first
 WORK_SIZES = (300, 450, 600)   # detection runs on the photo scaled to these SHORT sides
 
 
@@ -285,7 +290,7 @@ def _line_quads(edges: np.ndarray, max_lines: int = 18) -> list[np.ndarray]:
     rho = x1 * np.cos(phi) + y1 * np.sin(phi)
     # merge collinear segments into lines, strongest first
     lines: list[list[float]] = []                                    # [phi, rho, support]
-    for i in np.argsort(-length):
+    for i in np.argsort(-length, kind="stable"):
         for ln in lines:
             dphi = abs(phi[i] - ln[0])
             r = rho[i]
@@ -339,7 +344,8 @@ def _line_quads(edges: np.ndarray, max_lines: int = 18) -> list[np.ndarray]:
     return out
 
 
-def _scale_candidates(img_rgb: np.ndarray, work_size: int, min_area_frac: float, prior, debug, si: int):
+def _scale_candidates(img_rgb: np.ndarray, work_size: int, min_area_frac: float, prior, debug, si: int,
+                      lines: bool = False):
     """Card-shaped candidates at one working resolution, quads in original image coords.
 
     work_size is the short side: phone photos are tall (9:20), and a card fills
@@ -354,7 +360,7 @@ def _scale_candidates(img_rgb: np.ndarray, work_size: int, min_area_frac: float,
     union = cv2.dilate(np.bitwise_or.reduce(maps), np.ones((k, k), np.uint8))
     cands = []
 
-    def consider(quad: np.ndarray) -> None:
+    def consider(quad: np.ndarray, from_lines: bool = False) -> None:
         s = _quad_score(quad, img_area)
         if s <= 0:
             if debug is not None:
@@ -369,11 +375,15 @@ def _scale_candidates(img_rgb: np.ndarray, work_size: int, min_area_frac: float,
             s *= _prior_weight(quad, prior, small.shape)
         if debug is not None:
             debug.append((quad / scale, "candidate"))
-        cands.append((s * sup_mean ** SUPPORT_POW, quad / scale, sup_mean, si))
+        cands.append((s * sup_mean ** SUPPORT_POW, quad / scale, sup_mean, si, from_lines))
 
     if USE_LINES:
         for quad in _line_quads(union):
             consider(quad)
+    if lines:
+        for edges in maps[:2]:
+            for quad in _line_quads(edges):
+                consider(quad, from_lines=True)
     for edges in maps:
         contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
         for c in contours:
@@ -412,15 +422,24 @@ def detect_cards(img_rgb: np.ndarray, max_cards: int = 1, min_area_frac: float =
     debug: if a list is given, every quad considered is appended as
     (quad in image coords, stage) with stage 'shape', 'support' or 'candidate'.
     """
+    cands, ctx = _candidates(img_rgb, min_area_frac, work_sizes, prior, debug, lines=False)
+    kept = _pick(cands)[:max_cards]
+    return [Detection(order_quad(q), sc) for q, sc in _finish(kept, ctx)]
+
+
+def _candidates(img_rgb, min_area_frac, work_sizes, prior, debug, lines: bool):
     cands, ctx = [], []
     for si, ws in enumerate(work_sizes or WORK_SIZES):
-        c, x = _scale_candidates(img_rgb, ws, min_area_frac, prior, debug, si)
+        c, x = _scale_candidates(img_rgb, ws, min_area_frac, prior, debug, si, lines=lines)
         cands += c
         ctx.append(x)
-
     cands.sort(key=lambda t: -t[0])
+    return cands, ctx
+
+
+def _pick(cands) -> list[list]:
     kept: list[list] = []          # [group best score, quad, score of quad, scale index]
-    for s, q, sup, si in cands:
+    for s, q, sup, si, _ in cands:
         clash = [i for i, k in enumerate(kept) if _inside(q.mean(0), k[1]) or _inside(k[1].mean(0), q)]
         if not clash:
             kept.append([s, q, s, si])
@@ -434,10 +453,16 @@ def detect_cards(img_rgb: np.ndarray, max_cards: int = 1, min_area_frac: float =
         if OUTER_MIN_RATIO < ratio < 4.5 and _inside(g[1].mean(0), q) and sup >= OUTER_SUPPORT \
                 and s > OUTER_SCORE_FRAC * g[0]:
             g[1], g[2], g[3] = q, s, si
-    kept = kept[:max_cards]
-    if REFINE and kept:
-        raws: dict[int, np.ndarray] = {}
-        for g in kept:
+    return kept
+
+
+def _finish(kept, ctx) -> list[tuple[np.ndarray, float]]:
+    """Snap each outline to the edges and grow inner panels to the card's border."""
+    out = []
+    raws: dict[int, np.ndarray] = {}
+    for g in kept:
+        q = g[1]
+        if REFINE:
             x = ctx[g[3]]
             if g[3] not in raws:
                 raws[g[3]] = np.bitwise_or.reduce([_auto_canny(x["gray"]), _auto_canny(x["gray"], 0.33, 0.8)])
@@ -445,8 +470,28 @@ def detect_cards(img_rgb: np.ndarray, max_cards: int = 1, min_area_frac: float =
             q = refine_quad(g[1] * sc, raw)
             if EXPAND:
                 q = refine_quad(expand_to_border(q, x["union"], x["small"]), raw)
-            g[1] = q / sc
-    return [Detection(order_quad(g[1]), g[2]) for g in kept]
+            q = q / sc
+        out.append((q, g[2]))
+    return out
+
+
+def detect_hypotheses(img_rgb: np.ndarray, k: int = 2, min_area_frac: float = 0.03,
+                      work_sizes: tuple[int, ...] | None = None, prior=None) -> list[Detection]:
+    """The detector's answer first (exactly detect_cards' best), then up to k-1 other guesses:
+    the best candidates, line-based ones included, whose outline differs clearly from those
+    before. The app reads a second guess only when the first gives no sure match."""
+    cands, ctx = _candidates(img_rgb, min_area_frac, work_sizes, prior, None, lines=ALT_LINES)
+    first = _pick([c for c in cands if not c[4]])[:1]
+    chosen = [(*f, False) for f in _finish(first, ctx)]
+    for s, q, sup, si, from_lines in cands:
+        if len(chosen) >= k:
+            break
+        if any(quad_iou(q, c[0]) >= 0.95 for c in chosen):     # cheap test before snapping it to the edges
+            continue
+        g = _finish([[s, q, s, si]], ctx)[0]
+        if all(quad_iou(g[0], c[0]) < ALT_MAX_IOU for c in chosen):
+            chosen.append((*g, from_lines))
+    return [Detection(order_quad(q), sc) for q, sc, _ in chosen]
 
 
 def as_artwork(img_rgb: np.ndarray, quad: np.ndarray, card_size: tuple[int, int],

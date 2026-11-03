@@ -71,6 +71,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.graphics.TransformOrigin
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -158,8 +161,10 @@ private fun Reveal(state: UiState, vm: ScannerViewModel, modifier: Modifier) {
                 },
                 label = "reveal",
             ) { serial ->
-                SwipeToRemove(serial, onRemove = vm::dismissShown) {
-                    RevealCard(state.shown ?: shown, state.settings, vm::choosePrinting)
+                FitInside {
+                    SwipeToRemove(serial, onRemove = vm::dismissShown) {
+                        RevealCard(state.shown ?: shown, state.settings, vm::choosePrinting)
+                    }
                 }
             }
         }
@@ -209,6 +214,26 @@ private fun RevealCard(s: Shown, settings: Settings, onPrinting: (Printing.Kind)
         if (hit) {
             HitBadge(s.serial, Modifier.align(Alignment.TopEnd))
             Burst(s.serial)
+        }
+    }
+}
+
+/**
+ * Shows the content at its natural size, or scaled down evenly when the space is too small
+ * (a HIT card with English name, PSA prices and printing chips): never cut off or squeezed.
+ */
+@Composable
+private fun FitInside(content: @Composable () -> Unit) {
+    Layout(content) { measurables, constraints ->
+        val p = measurables.first().measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
+        val maxH = if (constraints.hasBoundedHeight) constraints.maxHeight else p.height
+        val scale = if (p.height > maxH && p.height > 0) maxH.toFloat() / p.height else 1f
+        layout(p.width, (p.height * scale).roundToInt()) {
+            p.placeWithLayer(0, 0) {
+                scaleX = scale
+                scaleY = scale
+                transformOrigin = TransformOrigin(0.5f, 0f)
+            }
         }
     }
 }

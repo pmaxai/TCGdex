@@ -31,7 +31,7 @@ import numpy as np
 
 from .augment import load_rgba, synth_photo
 from .catalog import load_entries
-from .detect import RECT_H, RECT_W, as_artwork, detect_cards, quad_iou, rectify
+from .detect import RECT_H, RECT_W, as_artwork, detect_cards, detect_hypotheses, quad_iou, rectify
 from .embedders import CARD_H, CARD_W, INPUT, PREP_VERSION, REGIONS, crop_region, get_embedder, to_card
 from .evaluate import IMG_EXT, READINGS, _labels, _rot180, fit_pca, load_photo, project, ref_embeddings, search
 from . import foil
@@ -189,20 +189,34 @@ def write_catalog(src_db: Path, dst_db: Path, entries, meta: dict, groups: list[
 
 
 # ---------------------------------------------------------------- parity fixtures
-def app_recognise(img: np.ndarray, fp: OnnxFingerprints, index: np.ndarray, ids: list[str]) -> dict:
-    """ids: the artwork group of every index row (the app ranks artworks, then picks the version)."""
-    """The app's recognition, step by step, in Python."""
-    dets = detect_cards(img, max_cards=1)
+HYPOTHESES = 2      # outlines read per photo at most (Recognizer.HYPOTHESES)
+
+
+def app_recognise(img: np.ndarray, fp: OnnxFingerprints, index: np.ndarray, ids: list[str],
+                  sure: float = 0.085) -> dict:
+    """The app's recognition, step by step, in Python (Recognizer.recognise).
+    ids: the artwork group of every index row (the app ranks artworks, then picks the version).
+    The detector's outline is read first; if its match is not sure (margin < sure), the
+    detector's second guess is read too and the better match (top score) wins."""
+    dets = detect_hypotheses(img, k=HYPOTHESES)
     if not dets:
         return {"detected": False}
-    quad = dets[0].quad
-    card = to_card(rectify(img, quad))
-    art_a, art_b = as_artwork(img, quad, (CARD_W, CARD_H), REGIONS["art"])
-    readings = [fp(card[None]), fp(_rot180(card[None])), fp(art_a[None]), fp(art_b[None])]
-    res = search(index, ids, readings)[0]
-    return {"detected": True, "quad": quad.round(2).tolist(),
+    best = None
+    for hi, d in enumerate(dets):
+        quad = d.quad
+        card = to_card(rectify(img, quad))
+        art_a, art_b = as_artwork(img, quad, (CARD_W, CARD_H), REGIONS["art"])
+        readings = [fp(card[None]), fp(_rot180(card[None])), fp(art_a[None]), fp(art_b[None])]
+        res = search(index, ids, readings)[0]
+        margin = res[0][1] - (res[1][1] if len(res) > 1 else 0.0)
+        if best is None or res[0][1] > best[1][0][1]:
+            best = (quad, res, margin, hi)
+        if margin >= sure:
+            break
+    quad, res, margin, hi = best
+    return {"detected": True, "quad": quad.round(2).tolist(), "hypothesis": hi,
             "top": [{"id": c, "score": round(s, 5), "reading": READINGS[r], "entry": j} for c, s, j, r in res[:5]],
-            "margin": round(res[0][1] - (res[1][1] if len(res) > 1 else 0.0), 5)}
+            "margin": round(margin, 5)}
 
 
 def foil_lab(entries, tex: np.ndarray, real: list[dict], db: Path, out_md: Path, n_synthetic: int = 300) -> float:
@@ -357,7 +371,7 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, model_name: str, out_dir: Pa
                 if not p.exists() or p.suffix.lower() not in IMG_EXT:
                     continue
                 img = load_photo(p)
-                rec = app_recognise(img, fp, index32, groups)
+                rec = app_recognise(img, fp, index32, groups, sure=thresholds.get("margin_99", 0.085))
                 truth = resolver.resolve(text).ids or None
                 rec.update(file=fname, truth=truth,
                            truth_groups=sorted({groups[i] for i, e in enumerate(entries) if truth and e.card_id in truth}) or None)

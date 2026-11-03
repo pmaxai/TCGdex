@@ -135,6 +135,11 @@ TCGdex (free card database)                      your photos (testdata/real/)
   - grows an inner-panel outline to the outer border
   - snaps corners to the edges
 
+  When the first outline gives no sure match, the app reads the detector's **second
+  guess** too (another outline, also built from straight edge lines: they find a card
+  whose outline runs into fingers or a sleeve, or whose shiny border breaks the contour),
+  and the better match wins.
+
   Every detection is also read as the card's **artwork box**. That box is often the
   crispest rectangle on a card when the card's own edge is faint or covered by
   fingers. The better match wins.
