@@ -102,6 +102,53 @@ class Recognizer(pack: Pack) : AutoCloseable {
         return Read(quad, hits, margin, preview)
     }
 
+    /** Entries the search must skip (null: none). */
+    fun setExcluded(mask: BooleanArray?) { matcher.excluded = mask }
+
+    /**
+     * How much of the guide frame (0..1) the card covers, using the card outline of the
+     * best reading. 0 when no card outline was found (the guide frame itself was read).
+     */
+    fun guideFill(r: Recognition, hit: Hit, w: Int, h: Int, prior: Prior): Double {
+        if (!r.detected) return 0.0
+        val card = cardQuad(r, hit, margin = 0.0) ?: return 0.0
+        val guide = Readings.guideQuad(w, h, prior)
+        val a = MatOfPoint2f(*CardDetector.orderQuad(card))
+        val b = MatOfPoint2f(*guide)
+        val inter = MatOfPoint2f()
+        val area = runCatching { Imgproc.intersectConvexConvex(a, b, inter, true).toDouble() }.getOrDefault(0.0)
+        listOf(a, b, inter).forEach { it.release() }
+        val guideArea = (guide[1].x - guide[0].x) * (guide[3].y - guide[0].y)
+        return if (guideArea > 0) (area / guideArea).coerceIn(0.0, 1.0) else 0.0
+    }
+
+    override fun close() {
+        fingerprinter.close()
+    }
+
+    /** The upright card's outline for this reading. margin: extra room around a card rebuilt from its artwork box. */
+    fun cardQuad(r: Recognition, hit: Hit, margin: Double = 0.06): Array<Point>? {
+        val q = r.quad ?: return null
+        return when (hit.reading) {
+            0 -> q
+            1 -> arrayOf(q[2], q[3], q[0], q[1])
+            2 -> Readings.cardQuadFromArtwork(q, false, geometry, margin)
+            else -> Readings.cardQuadFromArtwork(q, true, geometry, margin)
+        }
+    }
+
+    /**
+     * Single-frame reverse holo score of the card in this frame, against the scan of pack
+     * entry [refEntry] (the version shown). Null: no texture data in the pack, or no score.
+     */
+    fun foilScore(rgb: Mat, r: Recognition, hit: Hit, texture: ByteArray?, refEntry: Int): FoilCheck.Result? {
+        if (texture == null) return null
+        val quad = cardQuad(r, hit, margin = 0.0) ?: return null
+        val ref = FoilCheck.reference(texture, refEntry)
+        val grids = FoilCheck.photoGrids(rgb, quad, ref, geometry.rectW, geometry.rectH)
+        return FoilCheck.scores(grids, ref).takeIf { !it.score.isNaN() }
+    }
+
     /**
      * Read the card's printed text (number, language). When only the artwork box was
      * found, its orientation is a guess, so the other way round is tried too if the
