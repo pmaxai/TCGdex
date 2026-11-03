@@ -166,6 +166,26 @@ class ParityTest {
     }
 
     @Test
+    fun takingACardByHandFindsAtLeastTheAutomaticMatch() {
+        val items = fixtures.getJSONArray("real")
+        var n = 0
+        for (i in 0 until items.length()) {
+            val file = items.getJSONObject(i).getString("file")
+            val img = loadAsset("real/$file")
+            val prior = io.github.pmaxai.cardscanner.vision.Readings.guidePrior(img.cols(), img.rows())
+            val auto = recognizer.recognise(img, prior)
+            val manual = recognizer.recognise(img, prior, manual = true)
+            img.release()
+            val a = auto.best?.score ?: 0f
+            val m = manual.best?.score ?: -1f
+            Log.i(TAG, "by hand $file: ${manual.best?.group} %.3f (automatic ${auto.best?.group} %.3f)".format(m, a))
+            assertTrue("$file: taking it by hand found a worse match (%.3f < %.3f)".format(m, a), m >= a - 1e-4f)
+            n++
+        }
+        assertTrue(n > 0)
+    }
+
+    @Test
     fun excludedCardsAreNeverMatched() {
         val m = io.github.pmaxai.cardscanner.vision.Matcher(pack.index, pack.n, pack.dim, pack.entryGroup)
         val rnd = java.util.Random(11)
