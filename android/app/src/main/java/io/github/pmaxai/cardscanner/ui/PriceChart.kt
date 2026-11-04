@@ -205,27 +205,35 @@ private fun ChartBody(h: PriceHistory, from: Int, cm: FloatArray?, tp: FloatArra
     val hi = hi0 + pad
     val gridColor = Color(0xFF2A2D34)
     Canvas(Modifier.fillMaxWidth().height(240.dp).padding(top = 10.dp)) {
-        val axis = 46.dp.toPx()
+        val label = TextStyle(color = Muted, fontSize = 10.sp)
+        // three gridlines with their prices on the right, the axis as wide as its widest price
+        val ticks = (0..2).map { k -> lo + (hi - lo) * k / 2f }
+        val tickText = ticks.map { axisPrice(it) }
+        val axis = tickText.maxOf { measurer.measure(it, label).size.width } + 6.dp.toPx()
         val bottomPad = 18.dp.toPx()
         val plotR = size.width - axis
         val plotB = size.height - bottomPad
-        val label = TextStyle(color = Muted, fontSize = 10.sp)
-        // three gridlines with their prices on the right
-        for (k in 0..2) {
-            val v = lo + (hi - lo) * k / 2f
+        ticks.forEachIndexed { k, v ->
             val y = plotB - (v - lo) / (hi - lo) * plotB
             drawLine(gridColor, Offset(0f, y), Offset(plotR, y), 1.dp.toPx())
-            drawText(measurer, eur(v.toDouble()), Offset(plotR + 4.dp.toPx(), (y - 7.dp.toPx()).coerceIn(0f, plotB - 12.dp.toPx())), label)
+            drawText(measurer, tickText[k], Offset(plotR + 4.dp.toPx(), (y - 7.dp.toPx()).coerceIn(0f, plotB - 12.dp.toPx())), label)
         }
-        // first, middle and last date under the plot
+        // first, middle and last date under the plot (the middle one only where it fits)
         val d0 = h.dates[from].toEpochDay()
         val span = (h.dates.last().toEpochDay() - d0).coerceAtLeast(1).toFloat()
-        val mid = (from + h.dates.size - 1) / 2
-        listOf(from, mid, h.dates.size - 1).forEachIndexed { k, i ->
+        val midDay = d0 + span.toLong() / 2
+        val mid = (from until h.dates.size).minBy { abs(h.dates[it].toEpochDay() - midDay) }
+        val gap = 8.dp.toPx()
+        val placed = mutableListOf<Pair<Float, Float>>()
+        listOf(from, h.dates.size - 1, mid).forEachIndexed { k, i ->
             val x = (h.dates[i].toEpochDay() - d0) / span * plotR
             val text = fmt.format(h.dates[i])
-            val w = measurer.measure(text, label).size.width
-            drawText(measurer, text, Offset(when (k) { 0 -> 0f; 1 -> x - w / 2f; else -> plotR - w }, plotB + 4.dp.toPx()), label)
+            val w = measurer.measure(text, label).size.width.toFloat()
+            val left = when (k) { 0 -> 0f; 1 -> plotR - w; else -> (x - w / 2f).coerceIn(0f, plotR - w) }
+            if (placed.none { (l, r) -> left < r + gap && left + w > l - gap }) {
+                placed += left to left + w
+                drawText(measurer, text, Offset(left, plotB + 4.dp.toPx()), label)
+            }
         }
         tp?.let { drawSeries(h, it, from, lo, hi, UsdLine, dashed = true, width = 2.dp.toPx(), right = plotR, bottom = plotB) }
         cm?.let { drawSeries(h, it, from, lo, hi, Gold, dashed = false, width = 2.5.dp.toPx(), right = plotR, bottom = plotB) }
@@ -243,7 +251,7 @@ private fun ChartBody(h: PriceHistory, from: Int, cm: FloatArray?, tp: FloatArra
         }
         if (tp != null) {
             Box(Modifier.width(16.dp).height(3.dp).background(UsdLine))
-            Text(" TCGplayer (USD, in €)", color = Muted, fontSize = 11.sp)
+            Text(" TCGplayer (in €)", color = Muted, fontSize = 11.sp)
         }
     }
     val start = listOfNotNull(cm, tp).mapNotNull { a -> a.finite(from).firstOrNull() }.minOrNull()
@@ -254,6 +262,14 @@ private fun ChartBody(h: PriceHistory, from: Int, cm: FloatArray?, tp: FloatArra
     if (tp != null) Text("TCGplayer converted at each day's ECB rate" + (h.lastRate?.let { " (now 1 € = ${String.format(Locale.getDefault(), "%.4f", it)} \$)" } ?: ""),
         color = Muted, fontSize = 11.sp)
     if (abs(c?.pct ?: 0.0) >= 0.5) Text("Big swings often mean few sales: check Cardmarket.", color = Warn, fontSize = 11.sp)
+}
+
+/** A price for the chart's axis, short enough to fit: 3,635 € · 389 € · 21.5 € · 0.17 € */
+private fun axisPrice(v: Float): String = when {
+    v >= 1000f -> String.format(Locale.getDefault(), "%,.0f €", v)
+    v >= 100f -> String.format(Locale.getDefault(), "%.0f €", v)
+    v >= 10f -> String.format(Locale.getDefault(), "%.1f €", v)
+    else -> String.format(Locale.getDefault(), "%.2f €", v)
 }
 
 /** The 90-day line for a shown card, opening its full chart. */
