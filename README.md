@@ -76,7 +76,10 @@ downgrades), or restore the code from the tag.
   and shows the best match (a white flash confirms it). The frame-fill setting doesn't
   apply to it. A small window then lists the **10 most likely cards** (picture, set,
   number, year, price; a bar shows how close each came): tap the right one, or ✕ to keep
-  the one shown.
+  the one shown. While the list is open nothing else is taken. A card taken by hand (or
+  picked from a list) stays while it is in front of the camera: the scanner keeps reading
+  every outline like the double tap did, and only a card it is sure is a different one
+  replaces it.
 - **Release year:** the year the card's set came out (in its language) is shown next to
   the set and number, also in the version lists, and goes into the pack CSV.
 - **Camera and card, half and half:** the camera picture takes one half of the screen and

@@ -12,7 +12,11 @@ import androidx.test.platform.app.InstrumentationRegistry
 import io.github.pmaxai.cardscanner.data.Catalog
 import io.github.pmaxai.cardscanner.data.Pack
 import io.github.pmaxai.cardscanner.vision.CardDetector
+import io.github.pmaxai.cardscanner.vision.Readings
 import io.github.pmaxai.cardscanner.vision.Recognizer
+import io.github.pmaxai.cardscanner.vision.ScanTracker
+import org.opencv.core.Rect
+import org.opencv.core.Size
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -189,6 +193,53 @@ class ParityTest {
             assertTrue("$file: best first", c.zipWithNext().all { (x, y) -> x.score >= y.score })
             n++
         }
+        assertTrue(n > 0)
+    }
+
+    /**
+     * After a double tap the card stays while it is in the frame: slightly shifted and
+     * blurred frames of the same photo must not replace it (the bug: a misread outline gave
+     * another, sure card a second later).
+     */
+    @Test
+    fun aCardTakenByHandStaysWhileItIsInTheFrame() {
+        val sure = pack.metaFloat("margin_99", 0.085f)
+        val likely = pack.metaFloat("margin_90", 0.038f)
+        val items = fixtures.getJSONArray("real")
+        var autoOther = 0
+        var frames = 0
+        var n = 0
+        for (i in 0 until items.length()) {
+            val file = items.getJSONObject(i).getString("file")
+            val img = loadAsset("real/$file")
+            val kept = recognizer.recognise(img, Readings.guidePrior(img.cols(), img.rows()), manual = true).best?.group
+            if (kept == null) { img.release(); continue }
+            val tracker = ScanTracker(sure, likely).apply { delayMs = 0; lock(kept) }
+            var t = 0L
+            for (k in 0 until 8) {
+                val dx = (5 * k) % 21
+                val dy = (7 * k) % 21
+                val sub = img.submat(Rect(dx, dy, img.cols() - 21, img.rows() - 21))
+                val frame = sub.clone()
+                sub.release()
+                if (k % 2 == 1) Imgproc.GaussianBlur(frame, frame, Size(0.0, 0.0), 1.2)
+                val prior = Readings.guidePrior(frame.cols(), frame.rows())
+                val r = recognizer.recognise(frame, prior, manual = true)
+                // what the automatic read alone (before the fix) said about this frame
+                val auto = recognizer.recognise(frame, prior)
+                frame.release()
+                if (auto.best != null && auto.best!!.group != kept && auto.margin >= sure) autoOther++
+                frames++
+                val vote = ScanTracker.voteWhileKept(r.best, r.candidates, kept, sure)
+                tracker.update(vote?.group, if (vote == null) 0f else r.margin, now = t)
+                t += 150
+            }
+            img.release()
+            Log.i(TAG, "kept by hand $file: $kept -> still shown: ${tracker.shown}")
+            assertEquals("$file: the card taken by hand was replaced", kept, tracker.shown)
+            n++
+        }
+        Log.i(TAG, "frames where the automatic read alone was sure of another card: $autoOther of $frames")
         assertTrue(n > 0)
     }
 

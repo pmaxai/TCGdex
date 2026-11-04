@@ -9,6 +9,7 @@ import io.github.pmaxai.cardscanner.ui.PackCsv
 import io.github.pmaxai.cardscanner.ui.SessionItem
 import io.github.pmaxai.cardscanner.ui.Settings
 import io.github.pmaxai.cardscanner.ui.Shown
+import io.github.pmaxai.cardscanner.vision.Hit
 import io.github.pmaxai.cardscanner.vision.Readings
 import io.github.pmaxai.cardscanner.vision.ScanTracker
 import org.junit.Assert.assertEquals
@@ -59,6 +60,31 @@ class TrackerAndCsvTest {
         assertFalse(t.update("a", 0.05f, now = 600))          // three frames, but only 0.6 s
         assertTrue(t.update("a", 0.05f, now = 1000))
         assertNull(t.streakMillis(now = 1000))
+    }
+
+    @Test
+    fun aKeptCardIsOnlyReplacedWhenTheFrameIsSureItIsAnother() {
+        fun hit(g: String, s: Float) = Hit(g, s, 0, 0)
+        // the kept card is in the frame, another one only slightly better: no vote
+        assertNull(ScanTracker.voteWhileKept(hit("b", 0.84f), listOf(hit("b", 0.84f), hit("a", 0.80f)), "a", sure))
+        // clearly better than the kept card, or the kept card not seen at all: a vote
+        assertEquals("b", ScanTracker.voteWhileKept(hit("b", 0.95f), listOf(hit("b", 0.95f), hit("a", 0.80f)), "a", sure)?.group)
+        assertEquals("b", ScanTracker.voteWhileKept(hit("b", 0.84f), listOf(hit("b", 0.84f), hit("c", 0.70f)), "a", sure)?.group)
+        // the kept card itself, or nothing kept: unchanged
+        assertEquals("a", ScanTracker.voteWhileKept(hit("a", 0.8f), emptyList(), "a", sure)?.group)
+        assertEquals("b", ScanTracker.voteWhileKept(hit("b", 0.8f), listOf(hit("a", 0.79f)), null, sure)?.group)
+        // the tracker with these votes: the kept card survives a second of "sure" lookalike frames
+        val t = ScanTracker(sure, likely).apply { delayMs = 300; lock("a") }
+        for (i in 0 until 10) {
+            val v = ScanTracker.voteWhileKept(hit("b", 0.84f), listOf(hit("b", 0.84f), hit("a", 0.80f)), "a", sure)
+            assertFalse(t.update(v?.group, if (v == null) 0f else 0.2f, now = i * 120L))
+        }
+        assertEquals("a", t.shown)
+        // a new card in front of the camera replaces it
+        var changed = false
+        for (i in 10 until 20) changed = changed or t.update("b", 0.2f, now = i * 120L)
+        assertTrue(changed)
+        assertEquals("b", t.shown)
     }
 
     @Test

@@ -177,6 +177,12 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     private val busy = AtomicBoolean(false)
     /** double tap on the camera: take the card in the frame with the next frame, whatever the confidence */
     private val manualRequest = AtomicBoolean(false)
+    /**
+     * The card taken by hand or picked from the list (null: none). While it is shown, every
+     * frame reads all outlines like the double tap did, and another card only replaces it
+     * when the frame is sure it is not this one (ScanTracker.voteWhileKept).
+     */
+    @Volatile private var kept: String? = null
     private val lock = Any()
     private val prefs = app.getSharedPreferences("settings", Context.MODE_PRIVATE)
     private var serial = 0
@@ -285,7 +291,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             takeByHand(rec, rgb, prior)
             return
         }
-        val r0 = rec.recognise(rgb, prior, withPreview = _state.value.settings.showDebug)
+        val keep = kept
+        val r0 = rec.recognise(rgb, prior, withPreview = _state.value.settings.showDebug, manual = keep != null)
         // too little of the frame covered by a card: treat as "no card" (no ghost cards)
         val minFill = _state.value.settings.minFillPercent
         val fill = r0.best?.let { rec.guideFill(r0, it, rgb.cols(), rgb.rows(), prior) }
@@ -293,9 +300,13 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val r = if (minFill > 0 && (fill ?: 0.0) * 100 < minFill) r0.withoutCard() else r0
         val conf = confidenceOf(r)
         synchronized(lock) {
-            val changed = tracker.update(r.best?.group, r.margin)
+            // the list after a double tap is open: the user is choosing, nothing is taken meanwhile
+            if (_state.value.picks != null) return@synchronized
+            val vote = ScanTracker.voteWhileKept(r.best, r.candidates, keep, marginSure)
+            val changed = tracker.update(vote?.group, if (vote == null) 0f else r.margin)
             val current = _state.value.shown
             if (changed) {
+                kept = null
                 showNew(tracker.shown!!, r, rgb, fromPhoto = false, conf = conf)
             } else if (current != null && !current.fromPhoto && r.detected && r.best?.group == current.group) {
                 trackFoil(current, r, rgb)
@@ -325,6 +336,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                 return@synchronized
             }
             tracker.lock(best.group)
+            kept = best.group
             showNew(best.group, r, rgb, fromPhoto = false, conf = Confidence.LIKELY)
             // the most likely cards to pick from, the shown one first
             val picks = r.candidates.mapNotNull { candidateOf(it) }
@@ -415,9 +427,14 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         }
         fun byNumber(pool: List<Pair<String, String>>): String? {
             if (num.isEmpty()) return null
-            val ids = pool.map { it.first }.distinct()
+            // the card whose scan matched the picture comes first when several sets have this number
+            val ids = (listOfNotNull(entryCard) + pool.map { it.first }).distinct().filter { id -> pool.any { it.first == id } }
             fun m(cid: String, fuzzy: Boolean) = pool.any { it.first == cid && numberMatches(cid, it.second, fuzzy) }
-            return ids.firstOrNull { m(it, false) } ?: ids.firstOrNull { m(it, true) }
+            val exact = ids.firstOrNull { m(it, false) }
+            // a bare number without "/total" ("4") is weak: it may confirm the matched card, but
+            // not move to another set (Base Set 2's Charizard is also no. 4, worth a fraction)
+            if (exact != null && exact != entryCard && total == null && num.all { it.isDigit() }) return null
+            return exact ?: ids.firstOrNull { m(it, true) }
         }
         // Asian print: only when the text says so
         val asianLangs = when (text?.lang) {
@@ -489,7 +506,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         var shown = build(group, version, null, conf, alternatives, locked = false, fromPhoto = fromPhoto, preview = r.preview, scan = scan)
         if (hit != null) staticFoil(rgb, r, hit, shown)?.let { est -> shown = shown.copy(foil = est) }
         val first = shown
-        _state.update { s -> s.copy(shown = first, session = if (s.settings.youtube && !fromPhoto) addToSession(s, first) else s.session) }
+        _state.update { s -> s.copy(shown = first, picks = null,
+            session = if (s.settings.youtube && !fromPhoto) addToSession(s, first) else s.session) }
         if (hit == null) { maybeAlert(first); return }
         val frame = rgb.clone()
         viewModelScope.launch(textDispatcher) {
@@ -632,9 +650,12 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     fun undoLast() = _state.update { it.copy(session = it.session.dropLast(1)) }
 
     /** Swiped away: the card leaves the pack. It is not taken again until another card was in front of the camera. */
-    fun dismissShown() = _state.update { st ->
-        val s = st.shown ?: return@update st
-        st.copy(shown = null, session = st.session.filter { it.serial != s.serial })
+    fun dismissShown() {
+        kept = null
+        _state.update { st ->
+            val s = st.shown ?: return@update st
+            st.copy(shown = null, picks = null, session = st.session.filter { it.serial != s.serial })
+        }
     }
 
     /** Writes the pack as CSV; returns the number of cards. */
@@ -654,6 +675,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     private fun chooseLocked(c: Candidate) {
         val s = _state.value.shown ?: return
         tracker.lock(c.group)
+        kept = c.group
         foil?.reset()
         val version = resolveVersion(c.group, null, lastText) ?: c.info
         val alternatives = (listOf(Candidate(s.group, s.version, 0f, "")) + s.alternatives).filter { it.group != c.group }
@@ -695,15 +717,16 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     fun next() {
         synchronized(lock) {
             tracker.reset()
+            kept = null
             foil?.reset()
             foilSum = 0.0
             foilN = 0
         }
-        _state.update { it.copy(shown = null, paused = false) }
+        _state.update { it.copy(shown = null, paused = false, picks = null) }
     }
 
     fun resume() {
-        synchronized(lock) { tracker.reset() }
+        synchronized(lock) { tracker.reset(); kept = null }
         _state.update { it.copy(paused = false, shown = it.shown?.takeIf { s -> !s.fromPhoto }) }
     }
 

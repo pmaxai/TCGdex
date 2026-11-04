@@ -85,4 +85,19 @@ class ScanTracker(private val sureMargin: Float, private val likelyMargin: Float
         streakGroup = null
         return true
     }
+
+    companion object {
+        /**
+         * The vote of a frame while a card taken by hand (or picked from the list) is shown.
+         * That card stays as long as the frame still sees it: another card only counts when
+         * it beats the kept card in the same frame by a sure margin, or the kept card isn't
+         * among the frame's candidates at all (a new card). Without this, a misread outline
+         * (the shiny artwork box read as a whole card) could replace the right card.
+         */
+        fun voteWhileKept(best: Hit?, candidates: List<Hit>, kept: String?, sureMargin: Float): Hit? {
+            if (best == null || kept == null || best.group == kept) return best
+            val k = candidates.firstOrNull { it.group == kept }?.score ?: return best
+            return if (best.score - k >= sureMargin) best else null
+        }
+    }
 }

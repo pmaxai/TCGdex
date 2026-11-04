@@ -58,7 +58,10 @@ fun PickList(picks: List<Candidate>, shown: Shown?, onPick: (Candidate) -> Unit,
                 LazyColumn(Modifier.weight(1f, fill = false)) {
                     itemsIndexed(picks, key = { _, c -> c.group }) { i, c ->
                         val rel = if (top > low) 0.12f + 0.88f * (c.score - low) / (top - low) else 1f
-                        PickRow(i + 1, c, current = c.group == shown?.group, rel = rel) { onPick(c) }
+                        val current = shown != null && c.group == shown.group
+                        // the shown card as it is now (the printed text may have set its exact version)
+                        val row = if (current) c.copy(info = shown!!.version, image = shown.imageCard?.thumbnailUrl ?: c.image) else c
+                        PickRow(i + 1, row, current = current, rel = rel) { onPick(c) }
                     }
                 }
             }
