@@ -25,6 +25,7 @@ import sqlite3
 import subprocess
 import tarfile
 import time
+import warnings
 import zipfile
 import zlib
 from datetime import date, timedelta
@@ -74,9 +75,13 @@ def _cents(v) -> int:
 
 
 def calendar(today: date) -> list[date]:
-    """Weekly points for the past year, then every day of the last 90 days (oldest first)."""
+    """Weekly points (Mondays) for the past year, then every day of the last 90 days (oldest
+    first). The weekly points stay put from one day to the next, so a backfilled day keeps
+    being used and the backfill has nothing new to fetch once the year is filled."""
     daily_from = today - timedelta(days=DAILY_DAYS)
-    weekly = [daily_from - timedelta(days=7 * k) for k in range(1, (YEAR_DAYS - DAILY_DAYS) // 7 + 1)]
+    monday = daily_from - timedelta(days=daily_from.weekday() or 7)       # the last Monday before
+    weekly = [monday - timedelta(days=7 * k) for k in range(0, 60)]
+    weekly = [d for d in weekly if (today - d).days <= YEAR_DAYS]
     return sorted(weekly) + [daily_from + timedelta(days=k) for k in range(DAILY_DAYS + 1)]
 
 
@@ -206,7 +211,7 @@ def parse_tcgcsv(folder: Path, product_to_card: dict[int, str]) -> tuple[list[st
     return ids, (np.stack([rows[i] for i in ids]) if ids else np.zeros((0, len(FIELDS)), np.int32))
 
 
-def backfill_tcgcsv(db: Path, root: Path, today: date | None = None, max_files: int = 160, pause: float = 1.0) -> int:
+def backfill_tcgcsv(db: Path, root: Path, today: date | None = None, max_files: int = 160, pause: float = 2.0) -> int:
     """TCGplayer prices of the calendar's past days that the archive has no TCGplayer prices for.
     Each TCGCSV archive is downloaded once: a day it was taken from is marked in tcgcsv-done.txt."""
     today = today or date.today()
@@ -453,48 +458,79 @@ def unpack_months(root: Path, months_dir: Path) -> int:
 
 
 # ------------------------------------------------------------------ for the app
-def _nearest(have: list[date], d: date, within: int) -> date | None:
-    best = None
-    for k in range(within + 1):
-        for c in (d - timedelta(days=k), d + timedelta(days=k)):
-            if c in have:
-                return c
-    return best
+SPIKE = 4.0        # one reading 4x off its neighbours is a glitch (Cardmarket's trend has a few)
+NEAREST = 3        # a calendar day without a price of a card takes its nearest price within 3 days
+
+
+def _despike(v: np.ndarray) -> np.ndarray:
+    """Which of a card's readings (in date order) to keep: not one that is 4x above (or below)
+    both the median of the 3 readings before it and that of the 3 after. A real jump matches
+    one side, so it stays."""
+    if len(v) < 5:
+        return np.ones(len(v), dtype=bool)
+    pad = np.concatenate([np.full(3, np.nan, np.float32), v, np.full(3, np.nan, np.float32)])
+    w = np.lib.stride_tricks.sliding_window_view(pad, 7)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)          # no readings on one side
+        before, after = np.nanmedian(w[:, :3], axis=1), np.nanmedian(w[:, 4:], axis=1)
+    low = (np.isnan(before) | (v * SPIKE < before)) & (np.isnan(after) | (v * SPIKE < after))
+    high = (np.isnan(before) | (v > before * SPIKE)) & (np.isnan(after) | (v > after * SPIKE))
+    return ~(low | high)
 
 
 def app_series(root: Path, today: date | None = None, ids: set[str] | None = None) -> tuple[list[date], dict[tuple[str, str], np.ndarray], list[float | None]]:
-    """The calendar, (card id, field) -> float32 prices (NaN = none), and the USD-per-EUR rate per calendar day."""
+    """The calendar, (card id, field) -> float32 prices (NaN = none), and the USD-per-EUR rate per calendar day.
+
+    Every archived day of the year is read, per card: glitches are dropped, and a calendar day
+    the card has no price on takes its nearest one within 3 days (the backfilled Cardmarket
+    history has a reading every second day or so)."""
     arc = Archive(root)
     have = sorted(arc.have())
     today = today or (have[-1] if have else date.today())
     cal = calendar(today)
-    have_set = set(have)
-    series: dict[tuple[str, str], np.ndarray] = {}
-    app_idx = [FI[f] for f in APP_FIELDS]
-    for t, d in enumerate(cal):
-        src = d if d in have_set else _nearest(have_set, d, 0 if d >= today - timedelta(days=DAILY_DAYS) else 3)
-        if src is None:
-            continue
-        got = arc.load(src)
-        if got is None:
-            continue
-        day_ids, vals, _ = got
-        sub = vals[:, app_idx]
-        for i, cid in enumerate(day_ids.tolist()):
-            if ids is not None and cid not in ids:
-                continue
-            row = sub[i]
-            for j, f in enumerate(APP_FIELDS):
-                v = row[j]
-                if v < 0:
-                    continue
-                key = (cid, f)
-                a = series.get(key)
-                if a is None:
-                    a = series[key] = np.full(len(cal), np.nan, dtype=np.float32)
-                a[t] = v / 100.0
     rates = ecb_rates(root)
-    return cal, series, [rate_on(rates, d) for d in cal]
+    rate_list = [rate_on(rates, d) for d in cal]
+    first = cal[0] - timedelta(days=NEAREST)
+    days = [d for d in have if first <= d <= today]
+    # the cards: everything with a price on one of those days (and in the pack)
+    index: dict[str, int] = {}
+    for d in days:
+        for cid in np.load(arc.path(d), allow_pickle=False)["ids"].tolist():
+            if cid not in index and (ids is None or cid in ids):
+                index[cid] = len(index)
+    if not index:
+        return cal, {}, rate_list
+    n_days = (today - first).days + 1
+    app_idx = [FI[f] for f in APP_FIELDS]
+    m = np.full((len(index), len(APP_FIELDS), n_days), np.nan, dtype=np.float32)
+    for d in days:
+        day_ids, vals, _ = arc.load(d)
+        rows = np.array([index.get(c, -1) for c in day_ids.tolist()])
+        ok = rows >= 0
+        sub = vals[ok][:, app_idx].astype(np.float32) / 100.0
+        sub[vals[ok][:, app_idx] < 0] = np.nan
+        m[rows[ok], :, (d - first).days] = sub
+    # glitches
+    counts = np.isfinite(m).sum(axis=2)
+    for c, f in zip(*np.nonzero(counts >= 5)):
+        x = m[c, f]
+        obs = np.flatnonzero(np.isfinite(x))
+        x[obs[~_despike(x[obs])]] = np.nan
+    # the calendar: the day's price, else the nearest within 3 days (earlier first)
+    j = np.array([(d - first).days for d in cal])
+    out = np.full((len(index), len(APP_FIELDS), len(cal)), np.nan, dtype=np.float32)
+    for off in [0] + [k for n in range(1, NEAREST + 1) for k in (-n, n)]:
+        jo = j + off
+        valid = (jo >= 0) & (jo < n_days)
+        cand = m[:, :, np.clip(jo, 0, n_days - 1)]
+        take = np.isnan(out) & np.isfinite(cand) & valid[None, None, :]
+        out[take] = cand[take]
+    series: dict[tuple[str, str], np.ndarray] = {}
+    ok = np.isfinite(out).sum(axis=2) >= 1
+    names = list(index)
+    for c, f in zip(*np.nonzero(ok)):
+        series[(names[c], APP_FIELDS[f])] = out[c, f].copy()
+    return cal, series, rate_list
 
 
 F16_MAX = 65000.0

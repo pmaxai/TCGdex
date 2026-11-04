@@ -123,3 +123,35 @@ def test_ppt_history_points():
     # a holo rare alone on Cardmarket: its price is the standard one
     only = {"cardmarketPrices": {"variants": {"Holofoil": {"history": [{"date": "2026-06-01", "trendEur": 12.5}]}}}}
     assert h._ppt_points(only) == {date(2026, 6, 1): {"cm_trend": 1250}}
+
+
+def test_app_series_glitches_and_gaps(tmp_path):
+    """A one-day glitch is dropped; a card priced every second day still has a line every day."""
+    root, today = tmp_path / "hist", date(2026, 11, 4)
+    arc = h.Archive(root)
+    for k in range(20):
+        d = today - timedelta(days=k)
+        rows, ids = [], []
+        a = np.full(len(h.FIELDS), -1, dtype=np.int32)
+        a[h.FI["tp_normal"]] = 2 if k == 5 else 500           # $5.00, one day $0.02
+        rows.append(a); ids.append("base1-4")
+        if k % 2 == 0:                                       # Cardmarket every second day
+            b = np.full(len(h.FIELDS), -1, dtype=np.int32)
+            b[h.FI["cm_trend"]] = 1000 + k
+            rows.append(b); ids.append("sv06-034")
+        arc.save(d, ids, np.stack(rows), "test")
+    cal, series, _ = h.app_series(root, today, {"base1-4", "sv06-034"})
+    tp = series[("base1-4", "tp_normal")]
+    last20 = tp[-20:]
+    assert np.all(np.isfinite(last20)) and np.allclose(last20, 5.0)      # glitch gone, filled by a neighbour
+    cm = series[("sv06-034", "cm_trend")][-20:]
+    assert np.all(np.isfinite(cm))                                       # odd days take a neighbour's price
+    assert abs(cm[-1] - 10.0) < 1e-4 and abs(cm[-2] - 10.02) < 1e-4      # earlier neighbour first... or the same day
+    # a jump that stays is kept
+    assert not np.any(h._despike(np.array([1, 1, 1, 1, 9, 9, 9, 9], dtype=np.float32)) == False)
+    assert h._despike(np.array([1, 1, 1, 0.01, 1, 1, 1], dtype=np.float32)).tolist() == [True, True, True, False, True, True, True]
+    # the weekly points are Mondays and don't move from one day to the next
+    weekly = [d for d in h.calendar(today) if d < today - timedelta(days=h.DAILY_DAYS)]
+    assert all(d.weekday() == 0 for d in weekly)
+    nxt = [d for d in h.calendar(today + timedelta(days=1)) if d < today - timedelta(days=h.DAILY_DAYS)]
+    assert set(nxt) <= set(weekly) | {today - timedelta(days=h.DAILY_DAYS)}
