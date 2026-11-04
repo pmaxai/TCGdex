@@ -107,3 +107,12 @@ jobs:
           name: screenshots
           path: android/app/build/outputs/connected_android_test_additional_output/
           if-no-files-found: ignore
+
+      - name: Screenshots in the log (readable where artifacts are not)
+        if: always()
+        run: |
+          find android/app/build/outputs/connected_android_test_additional_output -name '*.png' 2>/dev/null | sort | while read -r f; do
+            echo "::group::$(basename "$f")"
+            echo "SHOT-BEGIN $(basename "$f")"; base64 "$f"; echo "SHOT-END"
+            echo "::endgroup::"
+          done
