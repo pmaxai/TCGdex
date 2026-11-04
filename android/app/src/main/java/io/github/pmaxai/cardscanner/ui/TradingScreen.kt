@@ -296,6 +296,7 @@ private fun CardPrice(s: Shown, state: UiState, vm: ScannerViewModel, onPad: (Pa
         if (market != null) p?.usd?.let { add("TCGplayer ${usd(it)}") }
     }
     if (parts.isNotEmpty()) Text(parts.joinToString(" · "), color = Color.White, fontSize = 12.sp)
+    PriceHistoryLine(s)
     if (state.settings.showPsa) s.graded?.let { PsaLine(it, printing = p?.kind?.takeIf { s.priceCard.printings.size > 1 }) }
 
     // warnings: a thin price is not to be trusted blindly

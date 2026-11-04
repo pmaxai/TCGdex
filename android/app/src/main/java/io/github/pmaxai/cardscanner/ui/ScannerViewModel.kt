@@ -16,6 +16,7 @@ import io.github.pmaxai.cardscanner.data.Graded
 import io.github.pmaxai.cardscanner.data.Population
 import io.github.pmaxai.cardscanner.data.Pack
 import io.github.pmaxai.cardscanner.data.Printing
+import io.github.pmaxai.cardscanner.data.PriceHistory
 import io.github.pmaxai.cardscanner.trading.Cart
 import io.github.pmaxai.cardscanner.trading.CartLine
 import io.github.pmaxai.cardscanner.trading.Condition
@@ -89,6 +90,8 @@ data class Shown(
     val scan: Bitmap? = null,
     /** looked up in the card search, not seen by the camera */
     val fromSearch: Boolean = false,
+    /** price history of [priceCard] (null: none in the data pack) */
+    val history: PriceHistory? = null,
 ) {
     /**
      * Whose picture is shown: this version, else the same card in another language (same
@@ -548,7 +551,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             .let { v -> if (v.none { it.id == version.id && it.lang == version.lang }) listOf(version) + v else v }
         val langs = all.filter { (it.id == version.id || it.lang in ASIAN) && (it.lang != version.lang || it.id != version.id) }
         return Shown(group, version, english, priceCard, priceCard.printings.firstOrNull()?.kind, false, null, conf,
-            alternatives, langs, text, locked, fromPhoto, preview, ++serial, versions = all, scan = scan)
+            alternatives, langs, text, locked, fromPhoto, preview, ++serial, versions = all, scan = scan,
+            history = runCatching { cat.history(priceCard.id) }.getOrNull())
     }
 
     private fun showNew(group: String, r: Recognition, rgb: Mat, fromPhoto: Boolean, conf: Confidence) {

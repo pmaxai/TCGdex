@@ -29,6 +29,58 @@ data class Printing(
     val value: Double? get() = eur ?: usd
 }
 
+/**
+ * A card's price history: one shared calendar (weekly for a year, then every day of the last
+ * 90 days), a series per price (NaN = no price that day), and the ECB's USD per EUR each day.
+ */
+class PriceHistory(val dates: List<java.time.LocalDate>, val usdPerEur: List<Double?>, val series: Map<String, FloatArray>) {
+    val lastRate: Double? get() = usdPerEur.lastOrNull { it != null }
+
+    /** Cardmarket trend (EUR) of a printing, picked like the price panel picks its price */
+    fun eur(kind: Printing.Kind?, hasNormal: Boolean): FloatArray? = when (kind) {
+        Printing.Kind.REVERSE -> series["cm_trend_h"]
+        Printing.Kind.HOLO -> if (hasNormal) null else series["cm_trend"]
+        Printing.Kind.FIRST_EDITION -> null
+        else -> series["cm_trend"]
+    }
+
+    /** TCGplayer market price (USD) of a printing */
+    fun usd(kind: Printing.Kind?): FloatArray? = when (kind) {
+        Printing.Kind.HOLO -> series["tp_holo"]
+        Printing.Kind.REVERSE -> series["tp_reverse"]
+        Printing.Kind.FIRST_EDITION -> series["tp_first"]
+        else -> series["tp_normal"]
+    }
+
+    /** TCGplayer converted to EUR at each day's ECB rate (the latest rate where a day has none) */
+    fun usdInEur(kind: Printing.Kind?): FloatArray? {
+        val a = usd(kind) ?: return null
+        val fallback = lastRate
+        return FloatArray(a.size) { i ->
+            val r = usdPerEur.getOrNull(i) ?: fallback
+            if (r != null && r > 0 && !a[i].isNaN()) (a[i] / r).toFloat() else Float.NaN
+        }
+    }
+
+    companion object {
+        /** zlib-compressed little-endian float16 values (the pipeline's history.write_app_history) */
+        fun decode(blob: ByteArray): FloatArray {
+            val inf = java.util.zip.Inflater()
+            inf.setInput(blob)
+            val out = java.io.ByteArrayOutputStream(blob.size * 4)
+            val buf = ByteArray(4096)
+            while (!inf.finished()) {
+                val n = inf.inflate(buf)
+                if (n == 0 && (inf.needsInput() || inf.needsDictionary())) break
+                out.write(buf, 0, n)
+            }
+            inf.end()
+            val bb = java.nio.ByteBuffer.wrap(out.toByteArray()).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            return FloatArray(out.size() / 2) { android.util.Half.toFloat(bb.getShort()) }
+        }
+    }
+}
+
 /** PSA population of one printing: how many copies were graded, how many got a 10 (gem rate). */
 data class Population(val psaTotal: Int, val psa10: Int?, val psa9: Int?, val psa8: Int?, val gemRate: Double?,
                       val updated: String?)
@@ -92,6 +144,35 @@ class Catalog(private val db: SQLiteDatabase) {
     val hasCategory = hasInfo && columns("card_info").contains("category")
     private val hasReleaseDate = columns("sets").contains("release_date")
     private val hasAltImages = columns("cards").contains("image_alt")
+    private val hasHistory = tableExists("history")
+
+    private fun meta(key: String): String? = runCatching {
+        db.rawQuery("SELECT value FROM meta WHERE key = ?", arrayOf(key)).use { c -> if (c.moveToFirst()) c.getString(0) else null }
+    }.getOrNull()
+
+    /** the history calendar and the euro rate on each of its days (null: the pack has no history) */
+    private val historyCalendar: Pair<List<java.time.LocalDate>, List<Double?>>? by lazy {
+        if (!hasHistory) return@lazy null
+        val dates = meta("history_dates")?.split(",")?.mapNotNull { runCatching { java.time.LocalDate.parse(it) }.getOrNull() }
+            ?: return@lazy null
+        val rates = (meta("history_rates") ?: "").split(",").map { it.toDoubleOrNull() }
+        dates to List(dates.size) { rates.getOrNull(it) }
+    }
+
+    /** The price history of a card (null: none in this data pack). */
+    fun history(id: String): PriceHistory? {
+        val (dates, rates) = historyCalendar ?: return null
+        val series = HashMap<String, FloatArray>()
+        runCatching {
+            db.rawQuery("SELECT field, data FROM history WHERE id = ?", arrayOf(id)).use { c ->
+                while (c.moveToNext()) {
+                    val a = PriceHistory.decode(c.getBlob(1))
+                    if (a.size == dates.size) series[c.getString(0)] = a
+                }
+            }
+        }
+        return if (series.isEmpty()) null else PriceHistory(dates, rates, series)
+    }
     private val hasGroups = columns("entries").contains("grp")
 
     /** The artwork group of a card (its own id when it has no picture in the index). */

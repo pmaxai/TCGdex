@@ -259,6 +259,19 @@ class ParityTest {
         assertEquals("the artwork group of a card without a picture is the card itself", "mep-019", cat.groupOf("mep-019"))
     }
 
+    /** The data pack carries price history once the pipeline has built it: a well-known card has a line. */
+    @Test
+    fun packHasPriceHistory() {
+        val cat = Catalog(pack.db)
+        val dates = pack.db.rawQuery("SELECT value FROM meta WHERE key = 'history_dates'", null).use { c -> if (c.moveToFirst()) c.getString(0) else null }
+        if (dates == null) { Log.i(TAG, "this data pack has no price history yet"); return }
+        val withHistory = listOf("sv06-034", "sv03.5-006", "base1-4", "swsh7-215", "sv08-059").mapNotNull { id ->
+            cat.history(id)?.let { h -> id to h.series.mapValues { (_, a) -> a.count { !it.isNaN() } } }
+        }
+        Log.i(TAG, "price history: ${dates.split(",").size} days in the calendar, points: $withHistory")
+        assertTrue("no card has a price history", withHistory.isNotEmpty())
+    }
+
     @Test
     fun excludedCardsAreNeverMatched() {
         val m = io.github.pmaxai.cardscanner.vision.Matcher(pack.index, pack.n, pack.dim, pack.entryGroup)

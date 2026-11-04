@@ -353,6 +353,7 @@ private fun ResultCard(s: Shown, settings: Settings, vm: ScannerViewModel) {
 
     Spacer(Modifier.height(8.dp))
     PriceBlock(s)
+    PriceHistoryLine(s)
     if (settings.showPsa) {
         val printing = s.selected?.kind?.takeIf { s.priceCard.printings.size > 1 }
         s.graded?.let { PsaLine(it, printing = printing) }
