@@ -101,7 +101,8 @@ class TradingTest {
         store.save(b)
         val back = store.load()
         assertEquals(b, back)
-        assertEquals("Booth 3", back.newCart(3).active?.name)
+        // the renamed cart doesn't use up a number: Booth 1 and "Max, table 14" -> the next one is Booth 2
+        assertEquals("Booth 2", back.newCart(3).active?.name)
         // no cart yet: one is made on the first + Cart
         val (made, cart) = TradingBook().withActive(5)
         assertEquals("Booth 1", cart.name)
