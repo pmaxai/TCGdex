@@ -151,7 +151,7 @@ jobs:
       - name: Price history
         if: env.MAX_SETS == '0'
         continue-on-error: true
-        timeout-minutes: 60
+        timeout-minutes: 85
         working-directory: pipeline
         env:
           GH_TOKEN: ${{ github.token }}
@@ -168,7 +168,7 @@ jobs:
           python -m tcgscan history ecb --dir $H
           python -m tcgscan history backfill --db ../out/catalog.sqlite --dir $H --max-files 160
           if [ "$PSA" = "true" ]; then
-            python -m tcgscan history backfill-ppt --db ../out/catalog.sqlite --dir $H --budget 12000 --minutes 25
+            python -m tcgscan history backfill-ppt --db ../out/catalog.sqlite --dir $H --budget 12000 --minutes 50
           fi
           python -m tcgscan history pack-months --dir $H --months $H/months > $H/made.txt
           gh release view price-history >/dev/null 2>&1 || gh release create price-history --latest=false \

@@ -63,8 +63,11 @@ class PriceHistory(val dates: List<java.time.LocalDate>, val usdPerEur: List<Dou
     }
 
     companion object {
-        /** zlib-compressed little-endian float16 values (the pipeline's history.write_app_history) */
-        fun decode(blob: ByteArray): FloatArray {
+        /**
+         * zlib-compressed little-endian values (the pipeline's history.write_app_history): float16,
+         * or float32 for a series of [size] values with a price above float16's range (65,504).
+         */
+        fun decode(blob: ByteArray, size: Int = -1): FloatArray {
             val inf = java.util.zip.Inflater()
             inf.setInput(blob)
             val out = java.io.ByteArrayOutputStream(blob.size * 4)
@@ -76,6 +79,7 @@ class PriceHistory(val dates: List<java.time.LocalDate>, val usdPerEur: List<Dou
             }
             inf.end()
             val bb = java.nio.ByteBuffer.wrap(out.toByteArray()).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            if (size > 0 && out.size() == size * 4) return FloatArray(size) { bb.getFloat() }
             return FloatArray(out.size() / 2) { android.util.Half.toFloat(bb.getShort()) }
         }
     }
@@ -166,7 +170,7 @@ class Catalog(private val db: SQLiteDatabase) {
         runCatching {
             db.rawQuery("SELECT field, data FROM history WHERE id = ?", arrayOf(id)).use { c ->
                 while (c.moveToNext()) {
-                    val a = PriceHistory.decode(c.getBlob(1))
+                    val a = PriceHistory.decode(c.getBlob(1), dates.size)
                     if (a.size == dates.size) series[c.getString(0)] = a
                 }
             }

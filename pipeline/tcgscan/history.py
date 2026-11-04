@@ -497,6 +497,8 @@ def app_series(root: Path, today: date | None = None, ids: set[str] | None = Non
     return cal, series, [rate_on(rates, d) for d in cal]
 
 
+F16_MAX = 65000.0
+
 HISTORY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS history(id TEXT NOT NULL, field TEXT NOT NULL, data BLOB NOT NULL, PRIMARY KEY(id, field)) WITHOUT ROWID;
 """
@@ -512,7 +514,9 @@ def write_app_history(con: sqlite3.Connection, root: Path, today: date | None = 
     for (cid, f), a in series.items():
         if np.isfinite(a).sum() < 2:          # one point is not a line
             continue
-        rows.append((cid, f, zlib.compress(a.astype("<f2").tobytes(), 6)))
+        # float16 halves the size; a price above its range (65,504) keeps the series in float32
+        big = np.nanmax(a) > F16_MAX
+        rows.append((cid, f, zlib.compress(a.astype("<f4" if big else "<f2").tobytes(), 6)))
     con.executemany("INSERT INTO history VALUES (?,?,?)", rows)
     meta = {
         "history_dates": ",".join(d.isoformat() for d in cal),

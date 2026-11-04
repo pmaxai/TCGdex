@@ -71,6 +71,17 @@ def test_record_merge_and_app_table(tmp_path):
     assert abs(a[-1] - 0.08) < 1e-3 and abs(a[-2] - 0.08) < 1e-3 and np.isnan(a[0])
     rates = pack.execute("SELECT value FROM meta WHERE key = 'history_rates'").fetchone()[0].split(",")
     assert rates[-1] == "1.1600" and rates[-2] == "1.1500"
+    # a price beyond float16's range keeps its series in float32
+    arc = h.Archive(root)
+    for d in (today, today - timedelta(days=1)):
+        ids_d, vals_d, _ = arc.load(d)
+        vals_d[ids_d.tolist().index("sv06-034"), h.FI["tp_first"]] = 12_050_050   # $120,500.50
+        arc.save(d, ids_d.tolist(), vals_d, "test")
+    h.write_app_history(pack, root, today)
+    blob = pack.execute("SELECT data FROM history WHERE id = 'sv06-034' AND field = 'tp_first'").fetchone()[0]
+    raw = zlib.decompress(blob)
+    assert len(raw) == 4 * len(dates)
+    assert np.frombuffer(raw, dtype="<f4")[-1] == np.float32(120500.5)
     # sv06-035 is not a card of the pack: not exported
     assert pack.execute("SELECT COUNT(*) FROM history WHERE id = 'sv06-035'").fetchone()[0] == 0
 

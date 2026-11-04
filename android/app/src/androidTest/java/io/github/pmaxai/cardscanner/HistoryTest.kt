@@ -19,9 +19,9 @@ import java.util.zip.Deflater
 @RunWith(AndroidJUnit4::class)
 class HistoryTest {
     /** what the pipeline writes: little-endian float16, zlib-compressed */
-    private fun encode(v: FloatArray): ByteArray {
-        val bb = ByteBuffer.allocate(v.size * 2).order(ByteOrder.LITTLE_ENDIAN)
-        v.forEach { bb.putShort(Half.toHalf(it)) }
+    private fun encode(v: FloatArray, f32: Boolean = false): ByteArray {
+        val bb = ByteBuffer.allocate(v.size * if (f32) 4 else 2).order(ByteOrder.LITTLE_ENDIAN)
+        v.forEach { if (f32) bb.putFloat(it) else bb.putShort(Half.toHalf(it)) }
         val d = Deflater(6)
         d.setInput(bb.array())
         d.finish()
@@ -43,7 +43,10 @@ class HistoryTest {
         db.execSQL("INSERT INTO history VALUES ('sv06-034', 'cm_trend', ?)", arrayOf(encode(floatArrayOf(nan, 0.08f, 0.09f, 0.1f))))
         db.execSQL("INSERT INTO history VALUES ('sv06-034', 'cm_trend_h', ?)", arrayOf(encode(floatArrayOf(0.2f, 0.21f, nan, 0.25f))))
         db.execSQL("INSERT INTO history VALUES ('sv06-034', 'tp_normal', ?)", arrayOf(encode(floatArrayOf(1.1f, 1.1f, 1.2f, 1.2f))))
+        // a series with a price beyond float16's range comes as float32
+        db.execSQL("INSERT INTO history VALUES ('sv06-034', 'tp_first', ?)", arrayOf(encode(floatArrayOf(nan, 99000f, 120500.5f, 131000f), f32 = true)))
         val h = Catalog(db).history("sv06-034")!!
+        assertEquals(120500.5f, h.series.getValue("tp_first")[2], 0.01f)
         assertEquals(4, h.dates.size)
         assertEquals("2026-11-04", h.dates.last().toString())
         assertTrue(h.series.getValue("cm_trend")[0].isNaN())
