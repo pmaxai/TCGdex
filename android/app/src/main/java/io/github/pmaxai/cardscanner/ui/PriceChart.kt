@@ -139,37 +139,44 @@ private fun DrawScope.drawSeries(h: PriceHistory, a: FloatArray, from: Int, lo: 
 @Composable
 fun PriceChartDialog(title: String, h: PriceHistory, printings: List<Printing.Kind>, initial: Printing.Kind?, hasNormal: Boolean,
                      onClose: () -> Unit) {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        PriceChartPanel(title, h, printings, initial, hasNormal, Modifier.fillMaxWidth(0.96f), onClose = onClose)
+    }
+}
+
+/** The chart dialog's content (also drawn on its own by the screenshot test). */
+@Composable
+fun PriceChartPanel(title: String, h: PriceHistory, printings: List<Printing.Kind>, initial: Printing.Kind?, hasNormal: Boolean,
+                    modifier: Modifier = Modifier, initialDays: Int = 90, onClose: () -> Unit) {
     var kind by remember { mutableStateOf(initial) }
-    var days by remember { mutableIntStateOf(90) }
+    var days by remember { mutableIntStateOf(initialDays) }
     val measurer = rememberTextMeasurer()
     val fmt = remember { DateTimeFormatter.ofPattern("d MMM yy", Locale.getDefault()) }
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(shape = RoundedCornerShape(18.dp), color = Panel, modifier = Modifier.fillMaxWidth(0.96f)) {
-            Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    FitText(title, 18.sp, Color.White, Modifier.weight(1f), weight = FontWeight.Bold)
-                    Box(Modifier.size(36.dp).background(Color(0xFF2A2D34), CircleShape).clickable(onClick = onClose),
-                        contentAlignment = Alignment.Center) { Text("✕", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+    Surface(shape = RoundedCornerShape(18.dp), color = Panel, modifier = modifier) {
+        Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                FitText(title, 18.sp, Color.White, Modifier.weight(1f), weight = FontWeight.Bold)
+                Box(Modifier.size(36.dp).background(Color(0xFF2A2D34), CircleShape).clickable(onClick = onClose),
+                    contentAlignment = Alignment.Center) { Text("✕", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+            }
+            if (printings.size > 1) {
+                Row(Modifier.padding(top = 6.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    printings.forEach { k -> FilterChip(selected = k == kind, onClick = { kind = k }, label = { Text(k.label, fontSize = 12.sp) }) }
                 }
-                if (printings.size > 1) {
-                    Row(Modifier.padding(top = 6.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        printings.forEach { k -> FilterChip(selected = k == kind, onClick = { kind = k }, label = { Text(k.label, fontSize = 12.sp) }) }
-                    }
+            }
+            Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(30 to "1M", 90 to "3M", 180 to "6M", 365 to "1Y").forEach { (d, label) ->
+                    FilterChip(selected = d == days, onClick = { days = d }, label = { Text(label) })
                 }
-                Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf(30 to "1M", 90 to "3M", 180 to "6M", 365 to "1Y").forEach { (d, label) ->
-                        FilterChip(selected = d == days, onClick = { days = d }, label = { Text(label) })
-                    }
-                }
-                val from = h.firstIndex(days)
-                val cm = h.eur(kind, hasNormal)?.takeIf { it.finite(from).isNotEmpty() }
-                val tp = h.usdInEur(kind)?.takeIf { it.finite(from).isNotEmpty() }
-                val main = cm ?: tp
-                if (main == null) {
-                    Text("No price history for this printing yet.", color = Muted, modifier = Modifier.padding(vertical = 24.dp))
-                } else {
-                    ChartBody(h, from, cm, tp, main, fmt, measurer)
-                }
+            }
+            val from = h.firstIndex(days)
+            val cm = h.eur(kind, hasNormal)?.takeIf { it.finite(from).isNotEmpty() }
+            val tp = h.usdInEur(kind)?.takeIf { it.finite(from).isNotEmpty() }
+            val main = cm ?: tp
+            if (main == null) {
+                Text("No price history for this printing yet.", color = Muted, modifier = Modifier.padding(vertical = 24.dp))
+            } else {
+                ChartBody(h, from, cm, tp, main, fmt, measurer)
             }
         }
     }

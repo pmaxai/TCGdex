@@ -18,6 +18,8 @@ android {
         versionCode = buildNumber
         versionName = "1.1.$buildNumber"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // screenshots from the tests land in build/outputs/connected_android_test_additional_output
+        testInstrumentationRunnerArguments["useTestStorageService"] = "true"
     }
 
     // one APK per processor type: arm64 for phones (the download), x86_64 for the CI emulator
@@ -99,6 +101,11 @@ dependencies {
     implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
 
+    androidTestImplementation(composeBom)
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+    androidTestImplementation("androidx.test.services:storage:1.5.0")
+    androidTestUtil("androidx.test.services:test-services:1.5.0")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test:core:1.6.1")
