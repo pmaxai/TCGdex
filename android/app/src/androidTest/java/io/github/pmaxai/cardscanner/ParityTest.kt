@@ -243,6 +243,22 @@ class ParityTest {
         assertTrue(n > 0)
     }
 
+    /** The card search finds any card, also those without a picture (which the camera can't recognise). */
+    @Test
+    fun searchFindsCardsByNameNumberAndSet() {
+        val cat = Catalog(pack.db)
+        fun ids(q: String) = cat.search(q).map { "${it.id}/${it.lang}" }
+        val whim = ids("whimsicott 019")
+        Log.i(TAG, "search 'whimsicott 019': ${whim.take(5)}")
+        assertEquals("whimsicott 019", "mep-019/en", whim.first())
+        assertTrue("German name finds the German card", ids("elfun 019").first() == "mep-019/de")
+        assertTrue("number with total", ids("darumaka 034/167").first() == "sv06-034/en")
+        assertTrue("set code + number", ids("sv06 34").first().startsWith("sv06-034/"))
+        assertTrue("several Whimsicotts, newest first", cat.search("whimsicott").size >= 10)
+        assertTrue("one letter is not enough to match everything", cat.search("x zzzzqq").isEmpty())
+        assertEquals("the artwork group of a card without a picture is the card itself", "mep-019", cat.groupOf("mep-019"))
+    }
+
     @Test
     fun excludedCardsAreNeverMatched() {
         val m = io.github.pmaxai.cardscanner.vision.Matcher(pack.index, pack.n, pack.dim, pack.entryGroup)

@@ -117,14 +117,13 @@ def write_catalog(src_db: Path, dst_db: Path, entries, meta: dict, groups: list[
     con.executescript("""
         CREATE TABLE entries(idx INTEGER PRIMARY KEY, card_id TEXT NOT NULL, lang TEXT NOT NULL, grp TEXT NOT NULL);
         CREATE TABLE cards(id TEXT, lang TEXT, set_id TEXT, local_id TEXT, name TEXT, image_url TEXT,
-                           PRIMARY KEY(id, lang));
+                           image_alt TEXT, image_alt_large TEXT, PRIMARY KEY(id, lang));
         CREATE TABLE card_info(id TEXT PRIMARY KEY, rarity TEXT, variants TEXT, category TEXT);
         CREATE TABLE sets(id TEXT, lang TEXT, name TEXT, serie_id TEXT, serie_name TEXT, official INTEGER,
                           total INTEGER, release_date TEXT, PRIMARY KEY(id, lang));
         CREATE TABLE prices(id TEXT PRIMARY KEY, updated TEXT, trend REAL, avg REAL, low REAL, avg1 REAL,
                             avg7 REAL, avg30 REAL, trend_holo REAL, avg_holo REAL, low_holo REAL, avg30_holo REAL);
         CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
-        INSERT INTO cards SELECT c.id, c.lang, c.set_id, c.local_id, c.name, c.image_url FROM src.cards c;
         CREATE TABLE tcgplayer(id TEXT PRIMARY KEY, updated TEXT, data TEXT);
         CREATE TABLE graded(id TEXT, printing TEXT, currency TEXT, updated TEXT, psa10 REAL, psa10_n INTEGER,
                             psa9 REAL, psa9_n INTEGER, psa8 REAL, psa8_n INTEGER, source TEXT, PRIMARY KEY(id, printing));
@@ -134,6 +133,10 @@ def write_catalog(src_db: Path, dst_db: Path, entries, meta: dict, groups: list[
             avg30_holo FROM src.prices_cardmarket;
         CREATE INDEX cards_id ON cards(id);
     """)
+    # pictures from the second source (altimages) for cards TCGdex has none for, if that step ran
+    src_cols = {r[1] for r in con.execute("PRAGMA src.table_info(cards)")}
+    alt = "c.image_alt, c.image_alt_large" if "image_alt" in src_cols else "NULL, NULL"
+    con.execute(f"INSERT INTO cards SELECT c.id, c.lang, c.set_id, c.local_id, c.name, c.image_url, {alt} FROM src.cards c")
     # printings as compact flags; TCGplayer reduced to the market price per printing
     info_rows = []
     for cid, rarity, variants, category in con.execute("SELECT id, rarity, variants, category FROM src.card_details").fetchall():

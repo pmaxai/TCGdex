@@ -48,6 +48,11 @@ def main(argv: list[str] | None = None) -> None:
     x.add_argument("--results", type=Path, default=Path("out/results.json"))
     x.add_argument("--out", type=Path, default=Path("out/app-pack"))
 
+    p = sub.add_parser("altimages", help="pictures from pokemontcg.io for cards TCGdex has none for")
+    p.add_argument("--db", type=Path, default=Path("out/catalog.sqlite"))
+    p.add_argument("--cache", type=Path, default=Path(".cache/tcgdex"))
+    p.add_argument("--data", type=Path, required=True, help="checkout of github.com/PokemonTCG/pokemon-tcg-data")
+
     g = sub.add_parser("graded", help="PSA 10/9/8 prices from PokemonPriceTracker (needs POKEMONPRICETRACKER_API_KEY)")
     g.add_argument("--db", type=Path, default=Path("out/catalog.sqlite"))
     g.add_argument("--cache", type=Path, default=Path(".cache/graded"))
@@ -67,6 +72,9 @@ def main(argv: list[str] | None = None) -> None:
                       with_details=not a.no_prices, download_images=not a.no_images, max_sets=a.max_sets,
                       exclude_series=tuple(x.strip() for x in a.exclude_series.split(",") if x.strip()),
                       image_langs=[x.strip() for x in a.image_langs.split(",") if x.strip()])
+    elif a.cmd == "altimages":
+        from .altimages import fill
+        fill(a.db, a.cache, a.data)
     elif a.cmd == "graded":
         from .graded import fetch as graded_fetch, inspect as graded_inspect, probe_population
         if a.probe_population:

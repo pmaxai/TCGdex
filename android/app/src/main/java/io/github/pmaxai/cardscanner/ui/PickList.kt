@@ -38,7 +38,7 @@ import coil.compose.AsyncImage
  * card shown.
  */
 @Composable
-fun PickList(picks: List<Candidate>, shown: Shown?, onPick: (Candidate) -> Unit, onClose: () -> Unit) {
+fun PickList(picks: List<Candidate>, shown: Shown?, onPick: (Candidate) -> Unit, onSearch: () -> Unit, onClose: () -> Unit) {
     Dialog(onDismissRequest = onClose) {
         Surface(shape = RoundedCornerShape(18.dp), color = Panel, modifier = Modifier.fillMaxWidth().heightIn(max = 540.dp)) {
             Column(Modifier.padding(vertical = 12.dp)) {
@@ -61,30 +61,39 @@ fun PickList(picks: List<Candidate>, shown: Shown?, onPick: (Candidate) -> Unit,
                         val current = shown != null && c.group == shown.group
                         // the shown card as it is now (the printed text may have set its exact version)
                         val row = if (current) c.copy(info = shown!!.version, image = shown.imageCard?.thumbnailUrl ?: c.image) else c
-                        PickRow(i + 1, row, current = current, rel = rel) { onPick(c) }
+                        CardRow(row, rank = i + 1, current = current, rel = rel) { onPick(c) }
                     }
                 }
+                // not in the list (e.g. a card the scanner has no picture of): look it up by name or number
+                Text("🔍  Not there? Search by name or number", color = Gold, fontSize = 15.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.fillMaxWidth().clickable(onClick = onSearch).padding(horizontal = 16.dp, vertical = 12.dp))
             }
         }
     }
 }
 
+/** One card in a list: picture, name, set · number · language · year, price; [rank] and [rel] (bar) optional. */
 @Composable
-private fun PickRow(rank: Int, c: Candidate, current: Boolean, rel: Float, onClick: () -> Unit) {
+fun CardRow(c: Candidate, rank: Int? = null, current: Boolean = false, rel: Float? = null, onClick: () -> Unit) {
     val blank = ColorPainter(Color(0xFF2A2D34))
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick)
         .background(if (current) Gold.copy(alpha = 0.14f) else Color.Transparent)
         .padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("$rank", color = Muted, fontSize = 13.sp, modifier = Modifier.width(24.dp))
-        AsyncImage(model = c.image, contentDescription = c.info.name, placeholder = blank, error = blank, fallback = blank,
-            modifier = Modifier.width(44.dp).aspectRatio(63f / 88f).clip(RoundedCornerShape(4.dp)))
+        if (rank != null) Text("$rank", color = Muted, fontSize = 13.sp, modifier = Modifier.width(24.dp))
+        Box(Modifier.width(44.dp).aspectRatio(63f / 88f).clip(RoundedCornerShape(4.dp)), contentAlignment = Alignment.Center) {
+            AsyncImage(model = c.image, contentDescription = c.info.name, placeholder = blank, error = blank, fallback = blank,
+                modifier = Modifier.matchParentSize())
+            // no picture anywhere: the camera can't recognise this card, only the search finds it
+            if (c.image == null) Text("no\npicture", color = Muted, fontSize = 8.sp, lineHeight = 9.sp,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text(c.info.name + if (current) "  ✓ shown" else "", color = if (current) Gold else Color.White, fontSize = 15.sp,
                 fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(c.info.setLine(), color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             // how close it came, compared with the others in the list
-            Box(Modifier.padding(top = 4.dp).fillMaxWidth(rel.coerceIn(0.05f, 1f)).height(3.dp)
+            if (rel != null) Box(Modifier.padding(top = 4.dp).fillMaxWidth(rel.coerceIn(0.05f, 1f)).height(3.dp)
                 .background(if (rank == 1) Sure else Muted.copy(alpha = 0.6f), RoundedCornerShape(2.dp)))
         }
         Spacer(Modifier.width(8.dp))

@@ -92,6 +92,18 @@ jobs:
           python -m tcgscan fetch --cache ../.cache/tcgdex --db ../out/catalog.sqlite \
             --langs "$LANGS" --image-langs "$IMAGE_LANGS" --max-sets "$MAX_SETS" $PRICE_FLAG
 
+      # cards TCGdex has no picture for (galleries, promos ...) can't be recognised; this
+      # second source fills many of them. Optional: without it they just stay unrecognisable.
+      - name: Pictures for cards TCGdex has none for (pokemontcg.io)
+        continue-on-error: true
+        timeout-minutes: 20
+        working-directory: pipeline
+        run: |
+          rm -rf ../.cache/ptcg-data
+          git clone -q --depth 1 --filter=blob:none --sparse https://github.com/PokemonTCG/pokemon-tcg-data.git ../.cache/ptcg-data
+          git -C ../.cache/ptcg-data sparse-checkout set sets cards/en
+          python -m tcgscan altimages --db ../out/catalog.sqlite --cache ../.cache/tcgdex --data ../.cache/ptcg-data
+
       - name: Save TCGdex cache
         if: always()
         uses: actions/cache/save@v4

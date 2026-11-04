@@ -89,9 +89,16 @@ downgrades), or restore the code from the tag.
 - **Zoom:** pinch the camera picture, or pick 1× … 4× in ⚙. The zoom is kept.
 - **Capture frame size** (⚙, 50–90 %): how tall the frame is in the camera picture.
   Bigger means holding the card closer (more detail), smaller suits a tripod further away.
-- **Card picture:** always shown: the card's image, the same card in another language, or
-  another print of the artwork; without internet or when there is no image at all, the
-  card as the camera saw it. **Hold the picture for a second** to see it full screen (✕
+- **Search cards** (🔍 at the top, or ⚙ → *Search a card…* in YouTube mode): look up any
+  card without having it in front of the camera: name in any language, number and set,
+  e.g. `whimsicott 019`, `elfun`, `charizard base`, `GG01`, `darumaka 034/167`. The camera
+  pauses and shows the card (tap the picture to scan again). It also finds cards the
+  camera can't recognise because no picture of them exists (marked *no picture*).
+  *Not this card? → 🔍 Search…* (and the window after a double tap) puts the card you pick
+  in place of the one shown, also in the pack.
+- **Card picture:** the card's image, the same card in another language, or another print
+  of the artwork. While it loads the frame stays empty; your card as the camera saw it
+  only shows when there is no picture or no internet, marked *your card*. **Hold the picture for a second** to see it full screen (✕
   closes it); *Card image* / *Your card* switches between the database image and your
   card, e.g. to check its condition.
 - **Other versions:** the same picture printed in other sets or languages is listed
@@ -236,7 +243,9 @@ python -m tcgscan detector-lab --photos 200
 
 ## Notes
 
-- Card images and data come from TCGdex. Card images belong to The Pokémon Company.
+- Card images and data come from TCGdex. Cards TCGdex has no picture for (galleries,
+  promos, ...) get theirs from pokemontcg.io's open card data where it has one. Card images
+  belong to The Pokémon Company.
   They are only cached inside GitHub Actions and are never committed here.
 - Prices from TCGdex can be missing or occasionally wrong for some cards (their own
   FAQ says so). Cardmarket's own price-guide download can be added later as a second

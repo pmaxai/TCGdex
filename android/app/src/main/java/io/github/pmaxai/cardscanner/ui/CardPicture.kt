@@ -53,26 +53,39 @@ import coil.compose.AsyncImage
 import coil.compose.rememberAsyncImagePainter
 
 /**
- * The card's picture. Always shows something: the database image of this version, of the
- * same card in another language, or of another version of the artwork; while it loads,
- * without internet or when no version has one, the card as the camera saw it.
- * Hold it for a second to see it full screen.
+ * The card's picture: the database image of this version, of the same card in another
+ * language, or of another version of the artwork. While it loads: an empty frame (never
+ * your own card, which would look like a match before the real picture arrives). Your
+ * card as the camera saw it shows only when there is no picture or no internet, and then
+ * it says so. Hold it for a second to see it full screen.
  */
 @Composable
 fun CardImage(s: Shown, modifier: Modifier) {
     var full by remember { mutableStateOf(false) }
     val scan = s.scan?.let { b -> remember(b) { BitmapPainter(b.asImageBitmap()) } }
     val img = s.imageCard
-    val stand = scan ?: ColorPainter(Color(0xFF2A2D34))
+    val blank = remember { ColorPainter(Color(0xFF2A2D34)) }
+    var failed by remember(img?.thumbnailUrl) { mutableStateOf(false) }
     Box(modifier.clip(RoundedCornerShape(6.dp)).background(Panel).holdToOpen { full = true }) {
-        if (img != null) {
-            AsyncImage(model = img.thumbnailUrl, contentDescription = s.version.name, placeholder = stand, error = stand,
-                fallback = stand, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
-        } else if (scan != null) {
-            Image(scan, s.version.name, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-        } else {
-            Text("no picture", color = Muted, fontSize = 11.sp, textAlign = TextAlign.Center, modifier = Modifier.align(Alignment.Center))
+        val ownCard = when {
+            img != null -> {
+                AsyncImage(model = img.thumbnailUrl, contentDescription = s.version.name, placeholder = blank,
+                    error = scan ?: blank, fallback = scan ?: blank, onError = { failed = true }, onSuccess = { failed = false },
+                    contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                failed && scan != null
+            }
+            scan != null -> {
+                Image(scan, s.version.name, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                true
+            }
+            else -> {
+                Text("no picture", color = Muted, fontSize = 11.sp, textAlign = TextAlign.Center, modifier = Modifier.align(Alignment.Center))
+                false
+            }
         }
+        if (ownCard) Text("your card", color = Color.White, fontSize = 10.sp, maxLines = 1,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(4.dp)
+                .background(Color(0xB3000000), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 1.dp))
     }
     if (full) FullscreenCard(s, scan) { full = false }
 }
@@ -112,7 +125,7 @@ fun FullscreenCard(s: Shown, scan: Painter?, onClose: () -> Unit) {
             val pic = Modifier.fillMaxSize().padding(start = 16.dp, end = 16.dp, top = 72.dp, bottom = 96.dp)
             when {
                 !showScan && img != null -> AsyncImage(model = img.highUrl, contentDescription = s.version.name,
-                    placeholder = low ?: scan, error = low ?: scan, contentScale = ContentScale.Fit, modifier = pic)
+                    placeholder = low, error = low, contentScale = ContentScale.Fit, modifier = pic)
                 scan != null -> Image(scan, s.version.name, pic, contentScale = ContentScale.Fit)
             }
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(16.dp),

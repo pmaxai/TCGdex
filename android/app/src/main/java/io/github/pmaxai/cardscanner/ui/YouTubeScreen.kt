@@ -161,7 +161,7 @@ private fun Reveal(state: UiState, vm: ScannerViewModel, modifier: Modifier) {
                     SwipeToRemove(serial, onRemove = vm::dismissShown) {
                         val s = state.shown ?: shown
                         RevealCard(s, state.settings, state.session.count { it.group == s.group }, vm::choosePrinting,
-                            vm::stepVersion, vm::chooseVersion, vm::choose)
+                            vm::stepVersion, vm::chooseVersion, vm::choose) { vm.openSearch(SearchMode.REPLACE) }
                     }
                 }
             }
@@ -171,7 +171,7 @@ private fun Reveal(state: UiState, vm: ScannerViewModel, modifier: Modifier) {
 
 @Composable
 private fun RevealCard(s: Shown, settings: Settings, copies: Int, onPrinting: (Printing.Kind) -> Unit, onStep: (Int) -> Unit,
-                       onVersion: (CardInfo) -> Unit, onOther: (Candidate) -> Unit) {
+                       onVersion: (CardInfo) -> Unit, onOther: (Candidate) -> Unit, onSearch: () -> Unit) {
     val value = s.value
     val hit = settings.threshold > 0 && (value ?: 0.0) >= settings.threshold
     val count = remember(s.serial) { Animatable(0f) }
@@ -199,7 +199,7 @@ private fun RevealCard(s: Shown, settings: Settings, copies: Int, onPrinting: (P
                     FitText(s.version.name, 30.sp, Color.White, weight = FontWeight.Black, minSize = 16.sp)
                     s.english?.let { FitText(it.name, 16.sp, Color.White.copy(alpha = 0.8f)) }
                     FitText(s.version.setLine(withLang = false), 15.sp, Muted)
-                    VersionSwitcher(s, onStep, onVersion, onOther)
+                    VersionSwitcher(s, onStep, onVersion, onOther, onSearch)
                     if (s.priceCard.printings.size <= 1) s.selected?.let {
                         FitText(it.kind.label, 15.sp, Gold, weight = FontWeight.Bold)
                     }
@@ -288,7 +288,8 @@ private const val REMOVE_AT = 0.3f
  * opens the list, with the other candidate cards below it ("not this card?").
  */
 @Composable
-private fun VersionSwitcher(s: Shown, onStep: (Int) -> Unit, onVersion: (CardInfo) -> Unit, onOther: (Candidate) -> Unit) {
+private fun VersionSwitcher(s: Shown, onStep: (Int) -> Unit, onVersion: (CardInfo) -> Unit, onOther: (Candidate) -> Unit,
+                            onSearch: () -> Unit) {
     val n = s.versions.size
     if (n < 2 && s.alternatives.isEmpty()) return
     var open by remember { mutableStateOf(false) }
@@ -318,6 +319,8 @@ private fun VersionSwitcher(s: Shown, onStep: (Int) -> Unit, onVersion: (CardInf
                             onClick = { open = false; onOther(c) })
                     }
                 }
+                DropdownMenuItem(text = { Text("🔍 Search for the right card…", fontSize = 14.sp, color = Gold) },
+                    onClick = { open = false; onSearch() })
             }
         }
         if (n > 1) Text(" › ", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold,
@@ -430,6 +433,7 @@ private fun MenuButton(state: UiState, vm: ScannerViewModel, torch: Boolean, onT
                 Triple("Remove last card", state.session.isNotEmpty()) { vm.undoLast() },
                 Triple("Next card", true) { vm.next() },
                 Triple(if (torch) "Light off" else "Light on", true) { onTorch(!torch) },
+                Triple("Search a card…", true) { vm.openSearch(SearchMode.LOOK_UP) },
                 Triple("Settings…", true, onSettings),
                 Triple("Exit YouTube mode", true) { vm.updateSettings { it.copy(youtube = false) } },
             )

@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.opencv.android.Utils
 import org.opencv.core.Mat
 import org.opencv.core.Point
@@ -42,6 +43,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
 enum class Confidence { SURE, LIKELY, UNSURE }
+
+enum class SearchMode { LOOK_UP, REPLACE }
 
 /** Another artwork the scanner considered. [image]: thumbnail of it (this version or another one with a picture). */
 data class Candidate(val group: String, val info: CardInfo, val score: Float, val reading: String, val image: String? = null)
@@ -74,6 +77,8 @@ data class Shown(
     val versions: List<CardInfo> = emptyList(),
     /** the card as the camera saw it, straightened: shown when there is no image (or no internet) */
     val scan: Bitmap? = null,
+    /** looked up in the card search, not seen by the camera */
+    val fromSearch: Boolean = false,
 ) {
     /**
      * Whose picture is shown: this version, else the same card in another language (same
@@ -81,7 +86,7 @@ data class Shown(
      * scanned card is shown instead.
      */
     val imageCard: CardInfo? get() = (listOfNotNull(version, priceCard, english) +
-        versions.sortedBy { if (it.id == version.id) 0 else 1 }).firstOrNull { it.imageUrl != null }
+        versions.sortedBy { if (it.id == version.id) 0 else 1 }).firstOrNull { it.thumbnailUrl != null }
     /** position of the shown version in [versions] */
     val versionIndex: Int get() = versions.indexOfFirst { it.id == version.id && it.lang == version.lang }
     val selected: Printing? get() = priceCard.printing(printing)
@@ -155,6 +160,8 @@ data class UiState(
     val maxZoom: Float = ScannerViewModel.MAX_ZOOM,
     /** after a double tap: the most likely cards to pick from (null: no list open) */
     val picks: List<Candidate>? = null,
+    /** the card search is open: LOOK_UP shows any card, REPLACE puts it in place of the shown one */
+    val search: SearchMode? = null,
 ) {
     val sessionValue: Double get() = session.sumOf { it.value ?: 0.0 }
 }
@@ -183,6 +190,10 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
      * when the frame is sure it is not this one (ScanTracker.voteWhileKept).
      */
     @Volatile private var kept: String? = null
+    /** cards the user said it isn't (the one replaced and its alternatives): they don't count while a card is kept */
+    @Volatile private var rejected: Set<String> = emptySet()
+    /** the list shown after the last double tap */
+    @Volatile private var lastPicks: List<Candidate> = emptyList()
     private val lock = Any()
     private val prefs = app.getSharedPreferences("settings", Context.MODE_PRIVATE)
     private var serial = 0
@@ -303,10 +314,13 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             // the list after a double tap is open: the user is choosing, nothing is taken meanwhile
             if (_state.value.picks != null) return@synchronized
             val vote = ScanTracker.voteWhileKept(r.best, r.candidates, keep, marginSure)
+                ?.takeIf { keep == null || it.group !in rejected }
             val changed = tracker.update(vote?.group, if (vote == null) 0f else r.margin)
             val current = _state.value.shown
             if (changed) {
                 kept = null
+                rejected = emptySet()
+                lastPicks = emptyList()
                 showNew(tracker.shown!!, r, rgb, fromPhoto = false, conf = conf)
             } else if (current != null && !current.fromPhoto && r.detected && r.best?.group == current.group) {
                 trackFoil(current, r, rgb)
@@ -337,9 +351,11 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             }
             tracker.lock(best.group)
             kept = best.group
+            rejected = emptySet()
             showNew(best.group, r, rgb, fromPhoto = false, conf = Confidence.LIKELY)
             // the most likely cards to pick from, the shown one first
             val picks = r.candidates.mapNotNull { candidateOf(it) }
+            lastPicks = picks
             if (picks.size > 1) _state.update { it.copy(picks = picks) }
         }
         publishLive(r, rgb.cols(), rgb.rows(), confidenceOf(r))
@@ -666,6 +682,62 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         st.session.size
     }.onFailure { Log.e(TAG, "saving the pack failed", it) }
 
+    // ------------------------------------------------------------------ card search
+    fun openSearch(mode: SearchMode) = _state.update { it.copy(search = mode, picks = null) }
+    fun closeSearch() = _state.update { it.copy(search = null) }
+
+    /** Cards matching the search words (name in any language, number, set), with a picture to show. */
+    suspend fun search(query: String): List<Candidate> = withContext(Dispatchers.IO) {
+        val cat = catalog ?: return@withContext emptyList()
+        runCatching {
+            cat.search(query).map { info ->
+                val group = cat.groupOf(info.id)
+                val image = info.thumbnailUrl ?: cat.cardExact(info.id, "en")?.thumbnailUrl
+                    ?: cat.versions(group).firstNotNullOfOrNull { (id, l) -> cat.cardExact(id, l)?.thumbnailUrl }
+                Candidate(group, info, 0f, "search", image)
+            }
+        }.onFailure { Log.e(TAG, "search failed", it) }.getOrDefault(emptyList())
+    }
+
+    /** A card from the search, the way the search was opened. */
+    fun pickFromSearch(c: Candidate) {
+        val mode = _state.value.search
+        _state.update { it.copy(search = null) }
+        if (mode == SearchMode.REPLACE && _state.value.shown != null) replaceWith(c) else lookUp(c)
+    }
+
+    /**
+     * Looked up without the card in front of the camera: shown, the camera pauses (tap the
+     * picture to scan again). Not added to the pack; +1 adds it.
+     */
+    fun lookUp(c: Candidate) = synchronized(lock) {
+        tracker.reset()
+        kept = null
+        rejected = emptySet()
+        foil?.reset()
+        lastText = null
+        val shown = build(c.group, c.info, null, Confidence.SURE, emptyList(), locked = true, fromPhoto = true,
+            preview = null, scan = null).copy(versionByUser = true, fromSearch = true)
+        _state.update { it.copy(shown = shown, paused = true, picks = null) }
+    }
+
+    /** The shown card is this one (found in the search): it takes its place, also in the pack. */
+    fun replaceWith(c: Candidate) = synchronized(lock) {
+        val s = _state.value.shown ?: return@synchronized lookUp(c)
+        tracker.lock(c.group)
+        kept = c.group
+        rejected = rejectedBy(s, c.group)
+        val alternatives = (listOf(Candidate(s.group, s.version, 0f, "")) + s.alternatives).filter { it.group != c.group }
+        val shown = build(c.group, c.info, lastText, Confidence.SURE, alternatives, locked = true, fromPhoto = s.fromPhoto,
+            preview = s.preview, scan = s.scan).copy(versionByUser = true, fromSearch = s.fromSearch)
+        _state.update { st -> st.copy(shown = shown, picks = null, session = replaceInSession(st.session, shown, oldSerial = s.serial)) }
+        maybeAlert(shown)
+    }
+
+    /** What the user said the card isn't: the shown card, its alternatives, the list after a double tap. */
+    private fun rejectedBy(s: Shown, chosen: String): Set<String> =
+        (listOf(s.group) + s.alternatives.map { it.group } + lastPicks.map { it.group }).filter { it != chosen }.toSet()
+
     // ------------------------------------------------------------------ user choices
     /** The user says it is this other card: show it and keep it. */
     fun choose(c: Candidate) {
@@ -676,6 +748,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val s = _state.value.shown ?: return
         tracker.lock(c.group)
         kept = c.group
+        rejected = rejectedBy(s, c.group)
         foil?.reset()
         val version = resolveVersion(c.group, null, lastText) ?: c.info
         val alternatives = (listOf(Candidate(s.group, s.version, 0f, "")) + s.alternatives).filter { it.group != c.group }
@@ -718,6 +791,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         synchronized(lock) {
             tracker.reset()
             kept = null
+            rejected = emptySet()
             foil?.reset()
             foilSum = 0.0
             foilN = 0

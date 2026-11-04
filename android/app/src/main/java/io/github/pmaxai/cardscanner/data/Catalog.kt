@@ -57,13 +57,16 @@ data class CardInfo(
     val category: String? = null,
     /** release date of the card's set in its language, "1999-01-09" */
     val releaseDate: String? = null,
+    /** picture from the second source (pokemontcg.io) when TCGdex has none: small and large */
+    val imageAlt: String? = null,
+    val imageAltLarge: String? = null,
 ) {
     /** release year, "1999" */
     val year: String? get() = releaseDate?.take(4)?.takeIf { it.length == 4 && it.all(Char::isDigit) }
     val numberText: String get() = if (setTotal != null && setTotal > 0) "$number/$setTotal" else number
-    val thumbnailUrl: String? get() = imageUrl?.let { "$it/low.webp" }
+    val thumbnailUrl: String? get() = imageUrl?.let { "$it/low.webp" } ?: imageAlt
     /** the large image (fullscreen view) */
-    val highUrl: String? get() = imageUrl?.let { "$it/high.webp" }
+    val highUrl: String? get() = imageUrl?.let { "$it/high.webp" } ?: imageAltLarge ?: imageAlt
     val bestValue: Double? get() = printings.mapNotNull { it.value }.maxOrNull()
     fun printing(kind: Printing.Kind?): Printing? = printings.firstOrNull { it.kind == kind } ?: printings.firstOrNull()
 
@@ -88,6 +91,72 @@ class Catalog(private val db: SQLiteDatabase) {
     /** the data pack knows each card's category (for skipping energy cards) */
     val hasCategory = hasInfo && columns("card_info").contains("category")
     private val hasReleaseDate = columns("sets").contains("release_date")
+    private val hasAltImages = columns("cards").contains("image_alt")
+    private val hasGroups = columns("entries").contains("grp")
+
+    /** The artwork group of a card (its own id when it has no picture in the index). */
+    fun groupOf(cardId: String): String =
+        db.rawQuery("SELECT ${if (hasGroups) "grp" else "card_id"} FROM entries WHERE card_id = ? LIMIT 1", arrayOf(cardId))
+            .use { c -> if (c.moveToFirst()) c.getString(0) else cardId }
+
+    /**
+     * Cards whose name (any language), number or set matches every word of [query], best
+     * first: "whimsicott 019", "elfun", "charizard base", "GG01", "sv06 34". One row per
+     * card, in the language whose name matched (English when several did). Also finds
+     * cards without a picture, which the camera can't recognise.
+     */
+    fun search(query: String, limit: Int = 50): List<CardInfo> {
+        val words = query.trim().lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }.take(6)
+        if (words.isEmpty()) return emptyList()
+        val where = ArrayList<String>()
+        val args = ArrayList<String>()
+        fun like(w: String) = w.replace("\\", "").replace("%", "").replace("_", "")
+        for (w in words) {
+            val num = w.substringBefore('/')
+            val conds = mutableListOf("c.name LIKE ?", "s.name LIKE ?", "c.set_id LIKE ?")
+            args += "%${like(w)}%"; args += "%${like(w)}%"; args += "${like(w)}%"
+            if (num.any { it.isDigit() }) {
+                conds += "ltrim(upper(c.local_id), '0') = ltrim(upper(?), '0')"
+                args += num
+            }
+            where += conds.joinToString(" OR ", "(", ")")
+        }
+        class Row(val id: String, val lang: String, val name: String, val number: String, val setId: String,
+                  val setName: String, val date: String)
+        val rows = ArrayList<Row>()
+        db.rawQuery("""
+            SELECT c.id, c.lang, c.name, c.local_id, c.set_id, s.name, ${if (hasReleaseDate) "s.release_date" else "''"}
+            FROM cards c LEFT JOIN sets s ON s.id = c.set_id AND s.lang = c.lang
+            WHERE ${where.joinToString(" AND ")}
+            ORDER BY ${if (hasReleaseDate) "s.release_date" else "c.id"} DESC LIMIT 800
+        """.trimIndent(), args.toTypedArray()).use { c ->
+            while (c.moveToNext()) rows += Row(c.getString(0), c.getString(1), c.getString(2) ?: "", c.getString(3) ?: "",
+                c.getString(4) ?: "", c.getString(5) ?: "", c.getString(6) ?: "")
+        }
+        fun digits(s: String) = s.trimStart('0').uppercase()
+        fun score(r: Row): Int = words.sumOf { w ->
+            val name = r.name.lowercase()
+            val num = w.substringBefore('/')
+            maxOf(
+                when {
+                    name == w -> 6
+                    name.startsWith(w) -> 5
+                    Regex("(^|[^\\p{L}])${Regex.escape(w)}").containsMatchIn(name) -> 4
+                    name.contains(w) -> 2
+                    else -> 0
+                },
+                if (num.any { it.isDigit() } && digits(r.number) == digits(num)) 4 else 0,
+                when { r.setId.lowercase() == w -> 4; r.setId.lowercase().startsWith(w) -> 3; else -> 0 },
+                if (r.setName.lowercase().contains(w)) 1 else 0,
+            )
+        }
+        val langRank = mapOf("en" to 0, "de" to 1)
+        return rows.groupBy { it.id }.values
+            .map { same -> same.maxWith(compareBy<Row> { score(it) }.thenBy { -(langRank[it.lang] ?: 2) }) }
+            .sortedWith(compareByDescending<Row> { score(it) }.thenByDescending { it.date })
+            .take(limit)
+            .mapNotNull { cardExact(it.id, it.lang) }
+    }
 
     /** The card in exactly this language, or null. */
     fun cardExact(id: String, lang: String): CardInfo? = synchronized(cache) {
@@ -131,7 +200,8 @@ class Catalog(private val db: SQLiteDatabase) {
                    s.name, s.official, s.serie_name,
                    p.updated, p.trend, p.avg, p.low, p.avg30, p.trend_holo, p.avg_holo, p.low_holo, p.avg30_holo,
                    ${if (hasInfo) "i.variants" else "NULL"}, ${if (hasCategory) "i.category" else "NULL"},
-                   ${if (hasReleaseDate) "s.release_date" else "NULL"}
+                   ${if (hasReleaseDate) "s.release_date" else "NULL"},
+                   ${if (hasAltImages) "c.image_alt, c.image_alt_large" else "NULL, NULL"}
             FROM cards c
             LEFT JOIN sets s ON s.id = c.set_id AND s.lang = c.lang
             LEFT JOIN prices p ON p.id = c.id
@@ -160,6 +230,7 @@ class Catalog(private val db: SQLiteDatabase) {
                 population = population(cardId),
                 category = c.getString(19),
                 releaseDate = c.getString(20)?.takeIf { it.isNotBlank() },
+                imageAlt = c.getString(21), imageAltLarge = c.getString(22),
             )
         }
     }

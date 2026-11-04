@@ -175,7 +175,9 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
             else -> Scanner(state, vm)
         }
         // after a double tap: the most likely cards to pick from
-        state.picks?.let { PickList(it, state.shown, onPick = vm::pick, onClose = vm::closePicks) }
+        state.picks?.let { PickList(it, state.shown, onPick = vm::pick, onSearch = { vm.openSearch(SearchMode.REPLACE) },
+            onClose = vm::closePicks) }
+        state.search?.let { SearchDialog(it, vm) }
     }
 }
 
@@ -211,8 +213,10 @@ private fun Scanner(state: UiState, vm: ScannerViewModel) {
 
     val topBar: @Composable () -> Unit = {
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Card Scanner", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp, maxLines = 1,
-                softWrap = false, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 8.dp).weight(1f))
+            // look up any card, without it in front of the camera
+            Text("🔍  Search cards", color = Muted, fontSize = 15.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(end = 6.dp).weight(1f).background(Panel, RoundedCornerShape(20.dp))
+                    .clickable { vm.openSearch(SearchMode.LOOK_UP) }.padding(horizontal = 12.dp, vertical = 8.dp))
             AssistChip(onClick = { settings = true }, label = {
                 Text(if (state.settings.threshold > 0) "Alert ≥ ${state.settings.threshold.toInt()} €" else "Alert off", maxLines = 1)
             })
@@ -225,12 +229,7 @@ private fun Scanner(state: UiState, vm: ScannerViewModel) {
     }
     val camera: @Composable (Modifier) -> Unit = { m ->
         CameraArea(state, vm, torch, video = false, modifier = m) {
-            if (state.paused) {
-                Box(Modifier.fillMaxSize().background(Color(0xAA000000)).clickable { vm.resume() },
-                    contentAlignment = Alignment.Center) {
-                    Text("Tap to scan again", color = Color.White, fontSize = 18.sp)
-                }
-            } else {
+            if (!state.paused) {
                 val hint = when {
                     state.shown?.locked == true -> "Kept – tap “Next card” for the next one"
                     state.liveConfidence == Confidence.SURE -> "Got it"
@@ -253,7 +252,7 @@ private fun Scanner(state: UiState, vm: ScannerViewModel) {
             } else {
                 ResultCard(s, state.settings, vm)
             }
-            if (state.settings.showDebug || s?.fromPhoto == true) state.debug?.let { DebugPanel(it) }
+            if (state.settings.showDebug || (s?.fromPhoto == true && !s.fromSearch)) state.debug?.let { DebugPanel(it) }
             Spacer(Modifier.height(8.dp))
             Text(state.packInfo, color = Muted, fontSize = 11.sp)
         }
@@ -299,6 +298,14 @@ fun CameraArea(state: UiState, vm: ScannerViewModel, torch: Boolean, video: Bool
         GuideOverlay(state, Modifier.fillMaxSize(), dim = !video)
         CameraGestures(state, vm, alwaysShowZoom = !video)
         extra()
+        // a photo or a looked-up card is shown: the camera waits
+        if (state.paused) {
+            Box(Modifier.fillMaxSize().background(Color(0xAA000000)).clickable { vm.resume() },
+                contentAlignment = Alignment.Center) {
+                Text(if (state.shown?.fromSearch == true) "Looked up · tap to scan again" else "Tap to scan again",
+                    color = Color.White, fontSize = 18.sp)
+            }
+        }
     }
 }
 
@@ -364,7 +371,7 @@ private fun ResultCard(s: Shown, settings: Settings, vm: ScannerViewModel) {
             }
         }
     }
-    if (s.alternatives.isNotEmpty()) {
+    if (!s.fromSearch) {
         Spacer(Modifier.height(8.dp))
         Text("Not this card?", color = Muted, fontSize = 12.sp)
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -373,6 +380,7 @@ private fun ResultCard(s: Shown, settings: Settings, vm: ScannerViewModel) {
                     Text("${alt.info.name} ${alt.info.numberText} · ${eur(alt.info.bestValue)}", fontSize = 12.sp)
                 })
             }
+            FilterChip(selected = false, onClick = { vm.openSearch(SearchMode.REPLACE) }, label = { Text("🔍 Search…", fontSize = 12.sp) })
         }
     }
     Spacer(Modifier.height(8.dp))
