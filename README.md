@@ -8,8 +8,12 @@ for flea markets.
 
 ## Install the app
 
-1. On your phone, open **github.com/pmaxai/TCGdex/releases/tag/app-latest** and tap
-   **CardScanner.apk**.
+**Version 1.0** is the first release: **github.com/pmaxai/TCGdex/releases/tag/v1.0**
+(it stays as it is). **app-latest** is always the newest build, with whatever is being
+worked on since. The version (1.0.*build*) is shown at the bottom of ⚙.
+
+1. On your phone, open **github.com/pmaxai/TCGdex/releases/tag/v1.0** (or `app-latest`)
+   and tap **CardScanner.apk**.
 2. Open the downloaded file. Android asks once to allow installing from your browser:
    allow it.
 3. Start **Card Scanner** and allow the camera. The first start takes a few seconds

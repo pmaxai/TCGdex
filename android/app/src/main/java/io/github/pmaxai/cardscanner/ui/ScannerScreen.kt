@@ -547,6 +547,10 @@ fun SettingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) {
                 SettingSwitch("Details", "what the scanner saw, scores, text it read, holo check", s.showDebug) { v ->
                     vm.updateSettings { it.copy(showDebug = v) }
                 }
+                val ctx = LocalContext.current
+                val version = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() }
+                Text("Card Scanner ${version ?: ""}\n${state.packInfo}", color = Muted, fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 14.dp))
             }
         },
         confirmButton = { TextButton({ vm.updateSettings { it.copy(title = title) }; onClose() }) { Text("Done") } },
