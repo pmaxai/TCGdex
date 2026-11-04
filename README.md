@@ -128,8 +128,24 @@ downgrades), or restore the code from the tag.
     or status (considering, agreed, dropped), swipe it left to drop it. Totals: market
     value, asking, what you pay, saved against market and asking. *Next booth* starts a
     new cart; ▾ switches between open carts, renames, saves as CSV or deletes one.
-  - **Paid** (cash, card, other) moves the cart into the **deal history** (⚙): deals by
-    day with totals, reopen one to fix a mistake, save one or all as CSV.
+  - **Bundle…** in the cart: tap the cards of a bundle, see their market value, asking
+    total and a suggested offer, and agree one price for them. **Agree total** does the
+    same for the whole cart. The price is split over the cards by market value, to the
+    cent, and they are marked agreed.
+  - **Trades and selling**: the pill at the top of the camera switches what you scan
+    between *I get* (the vendor's cards) and *I give* (yours; + I give). For your own
+    cards the panel rates the vendor's offer: under 75 % of the market value *low*, up to
+    90 % *usual*, above *good*. In the cart, *Trade* opens the I give side: your cards
+    count at 80 % of their market value, the vendor's at 100 % (tap to change), unless a
+    card has its own price or offer. The balance says who pays how much; *Agreed cash*
+    stores what you settle on (⇄ flips who pays), and *At market value* shows what the
+    trade is worth to you without the rates. A cart with only I give cards is a sale.
+  - **Show & budget** (⚙): name the show and set a budget. A bar under the top bar fills
+    with what you spent (paid deals) and agreed (not paid yet), orange from 90 %.
+  - **Paid** (or **Done** for a trade; cash, card, other) moves the cart into the **deal
+    history** (⚙): deals by show (or by day) with a summary (spent, received, market
+    value in and out, cards, savings, budget used); reopen one to fix a mistake, save one,
+    a show or all as CSV.
   - **Last scans**: the tray under the price brings back any of the last 20 cards.
   - Carts and deals are kept on the phone (nothing leaves it unless you save a CSV).
 - **YouTube mode** (⚙ → Mode → YouTube): a clean screen for screen-recorded opening and

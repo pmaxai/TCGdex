@@ -21,6 +21,7 @@ import io.github.pmaxai.cardscanner.trading.CartLine
 import io.github.pmaxai.cardscanner.trading.Condition
 import io.github.pmaxai.cardscanner.trading.LineStatus
 import io.github.pmaxai.cardscanner.trading.Reference
+import io.github.pmaxai.cardscanner.trading.Side
 import io.github.pmaxai.cardscanner.trading.TradingBook
 import io.github.pmaxai.cardscanner.trading.TradingCsv
 import io.github.pmaxai.cardscanner.trading.TradingMath
@@ -194,6 +195,8 @@ data class UiState(
     val book: TradingBook = TradingBook(),
     /** Trading Mode: condition and asking price of the shown card */
     val draft: DealDraft = DealDraft(),
+    /** Trading Mode: + Cart puts the card on this side (I get: buying, I give: your card for a trade or sale) */
+    val scanTarget: Side = Side.GET,
 ) {
     val sessionValue: Double get() = session.sumOf { it.value ?: 0.0 }
 }
@@ -712,6 +715,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setCondition(c: Condition) = _state.update { it.copy(draft = it.draft.copy(condition = c)) }
+    fun setScanTarget(side: Side) = _state.update { it.copy(scanTarget = side) }
     fun setAsking(v: Double?) = _state.update { it.copy(draft = it.draft.copy(asking = v)) }
 
     /** All carts change through here: shown at once, written to the phone in order. */
@@ -735,17 +739,20 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             cartName = cart.name
             val printing = s.selected?.kind?.name
             val ref = TradingMath.reference(s.selected, st.settings.reference)
+            val side = st.scanTarget
             val last = cart.lines.lastOrNull()
             val same = last != null && last.status == LineStatus.CONSIDERING && last.cardId == s.version.id &&
                 last.lang == s.version.lang && last.printing == printing && last.condition == st.draft.condition &&
-                last.asking == st.draft.asking
+                last.asking == st.draft.asking && last.side == side
             val lines = if (same) cart.lines.dropLast(1) + last!!.copy(qty = last.qty + 1)
                 else cart.lines + CartLine(id = now, cardId = s.version.id, lang = s.version.lang, group = s.group,
                     name = s.version.name, setLine = s.version.setLine(), image = s.imageCard?.thumbnailUrl,
-                    printing = printing, reference = ref, condition = st.draft.condition, asking = st.draft.asking, added = now)
-            b.replace(cart.copy(lines = lines))
+                    printing = printing, reference = ref, condition = st.draft.condition, asking = st.draft.asking, added = now,
+                    side = side)
+            b.replace(cart.copy(lines = lines, trade = cart.trade || side == Side.GIVE))
         }
-        _state.update { it.copy(draft = it.draft.copy(asking = null), message = "Added to $cartName") }
+        val where = if (st.scanTarget == Side.GIVE) "I give ($cartName)" else cartName
+        _state.update { it.copy(draft = it.draft.copy(asking = null), message = "Added to $where") }
     }
 
     fun selectCart(id: Long) = updateBook { it.copy(activeId = id) }
@@ -754,6 +761,39 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         b.carts.firstOrNull { it.id == id }?.let { b.replace(it.copy(name = name.trim().ifEmpty { it.name })) } ?: b
     }
     fun deleteCart(id: Long) = updateBook { b -> b.copy(carts = b.carts.filter { it.id != id }) }
+
+    private fun updateCart(cartId: Long, f: (Cart) -> Cart) = updateBook { b ->
+        b.carts.firstOrNull { it.id == cartId }?.let { b.replace(f(it)) } ?: b
+    }
+
+    /** the I give side on or off (off only while it is empty) */
+    fun setTrade(cartId: Long, on: Boolean) = updateCart(cartId) { c ->
+        if (!on && c.lines.any { it.side == Side.GIVE && it.active }) c else c.copy(trade = on, cash = if (on) c.cash else null)
+    }
+
+    /** trade rates as shares (0.8 = 80 %) */
+    fun setRates(cartId: Long, give: Double? = null, get: Double? = null) = updateCart(cartId) { c ->
+        c.copy(giveRate = give?.coerceIn(0.0, 2.0) ?: c.giveRate, getRate = get?.coerceIn(0.0, 2.0) ?: c.getRate)
+    }
+
+    /** the cash agreed in a trade: + you pay, - the vendor pays you, null = the balance */
+    fun setCash(cartId: Long, cash: Double?) = updateCart(cartId) { it.copy(cash = cash?.let { v -> TradingMath.round2(v) }) }
+
+    /**
+     * One price for several cards (a bundle, or the whole cart): split over them by market
+     * value to the cent, each card's negotiated price set and marked agreed.
+     */
+    fun agreeTotal(cartId: Long, lineIds: List<Long>, total: Double) = updateCart(cartId) { c ->
+        val chosen = c.lines.filter { it.id in lineIds && it.active }
+        if (chosen.isEmpty()) return@updateCart c
+        val shares = TradingMath.split(total, chosen.map { ((it.market ?: it.asking ?: 0.0) * it.qty) })
+        val each = chosen.zip(shares).associate { (l, t) -> l.id to t / l.qty }
+        c.copy(lines = c.lines.map { l -> each[l.id]?.let { l.copy(negotiated = it, status = LineStatus.AGREED) } ?: l })
+    }
+
+    /** a new show (or day) with an optional budget; open carts move along */
+    fun startShow(name: String, budget: Double?) = updateBook { it.startShow(name.trim().ifEmpty { "Show" }, budget, System.currentTimeMillis()) }
+    fun updateShow(name: String, budget: Double?) = updateBook { it.updateShow(name.trim().ifEmpty { "Show" }, budget) }
 
     fun updateLine(cartId: Long, lineId: Long, f: (CartLine) -> CartLine) = updateBook { b ->
         val c = b.carts.firstOrNull { it.id == cartId } ?: return@updateBook b
@@ -779,7 +819,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Writes these carts as CSV; returns the number of cards. */
     fun saveDeals(resolver: android.content.ContentResolver, uri: android.net.Uri, carts: List<Cart>): Result<Int> = runCatching {
-        val csv = TradingCsv.build(carts, java.util.Locale.getDefault())
+        val csv = TradingCsv.build(carts, java.util.Locale.getDefault(), _state.value.book.shows)
         resolver.openOutputStream(uri, "wt")?.use { it.write(csv.toByteArray(Charsets.UTF_8)) } ?: error("cannot write the file")
         carts.sumOf { it.cards }
     }.onFailure { Log.e(TAG, "saving the deals failed", it) }

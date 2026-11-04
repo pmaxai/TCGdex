@@ -4,6 +4,7 @@ import java.text.DecimalFormatSymbols
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * Deals (carts) as CSV: one row per card with condition, market value, asking and
@@ -14,10 +15,10 @@ object TradingCsv {
     private val HEADER = listOf(
         "Booth", "Paid", "Payment", "Status", "Name", "Set / number / language / year", "Card ID", "Language",
         "Printing", "Condition", "Qty", "Market value each EUR", "Asking each EUR", "Negotiated each EUR",
-        "You pay EUR", "Verdict",
+        "You pay EUR", "Verdict", "Side",
     )
 
-    fun build(carts: List<Cart>, locale: Locale): String {
+    fun build(carts: List<Cart>, locale: Locale, shows: List<ShowInfo> = emptyList()): String {
         val decimalComma = DecimalFormatSymbols.getInstance(locale).decimalSeparator == ','
         val sep = if (decimalComma) ';' else ','
         fun num(v: Double?): String = v?.let { String.format(Locale.ROOT, "%.2f", it).let { s -> if (decimalComma) s.replace('.', ',') else s } } ?: ""
@@ -34,18 +35,24 @@ object TradingCsv {
             for (l in c.lines) {
                 row(listOf(c.name, paid, c.payment, l.status.label, l.name, l.setLine, l.cardId, l.lang, l.printingLabel,
                     l.condition.label, l.qty, num(l.market), num(l.asking), num(l.negotiated),
-                    if (l.active) num(l.price?.let { it * l.qty }) else "", l.verdict?.label))
+                    if (l.active && l.side == Side.GET) num(l.price?.let { it * l.qty }) else "",
+                    l.verdict?.label ?: l.sellVerdict?.label, l.side.label))
             }
         }
         out.append("\r\n")
-        row(listOf("Booth", "Paid", "Cards", "Market value EUR", "Asking EUR", "You pay EUR", "Saved vs market EUR"))
+        row(listOf("Booth", "Paid", "Cards", "Market value EUR", "Asking EUR", "You pay EUR", "Saved vs market EUR",
+            "Cards given", "Market value given EUR", "Your cards count at %", "Trade balance EUR", "Cash paid (+) / received (-) EUR",
+            "Show"))
         for (c in carts) {
             row(listOf(c.name, c.paidAt?.let { time.format(Date(it)) } ?: "open", c.cards, num(c.marketTotal), num(c.askingTotal),
-                num(c.payTotal), num(c.savedVsMarket)))
+                num(c.payTotal), num(c.savedVsMarket), c.giveCards.takeIf { c.isTrade },
+                if (c.isTrade) num(c.marketGive) else "", if (c.isTrade) (c.giveRate * 100).roundToInt() else "",
+                if (c.isTrade) num(c.balance) else "", num(c.settle), shows.firstOrNull { it.id == c.showId }?.name))
         }
         if (carts.size > 1) {
             row(listOf("All", "", carts.sumOf { it.cards }, num(carts.sumOf { it.marketTotal }), num(carts.sumOf { it.askingTotal }),
-                num(carts.sumOf { it.payTotal }), num(carts.sumOf { it.savedVsMarket })))
+                num(carts.sumOf { it.payTotal }), num(carts.sumOf { it.savedVsMarket }), carts.sumOf { it.giveCards },
+                num(carts.sumOf { it.marketGive }), "", "", num(carts.sumOf { it.settle }), ""))
         }
         return out.toString()
     }
