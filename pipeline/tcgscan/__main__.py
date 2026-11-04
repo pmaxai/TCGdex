@@ -60,6 +60,7 @@ def main(argv: list[str] | None = None) -> None:
     g.add_argument("--max-age-days", type=float, default=7)
     g.add_argument("--inspect", action="store_true", help="only print the cached data's structure")
     g.add_argument("--probe-population", action="store_true", help="one call: does the plan include gem rates?")
+    g.add_argument("--probe-history", action="store_true", help="two calls: price history for one card, and its credit cost")
 
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
@@ -76,8 +77,10 @@ def main(argv: list[str] | None = None) -> None:
         from .altimages import fill
         fill(a.db, a.cache, a.data)
     elif a.cmd == "graded":
-        from .graded import fetch as graded_fetch, inspect as graded_inspect, probe_population
-        if a.probe_population:
+        from .graded import fetch as graded_fetch, inspect as graded_inspect, probe_history, probe_population
+        if a.probe_history:
+            probe_history()
+        elif a.probe_population:
             probe_population()
         elif a.inspect:
             graded_inspect(a.cache)

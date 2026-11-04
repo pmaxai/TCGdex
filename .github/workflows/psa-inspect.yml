@@ -4,6 +4,11 @@ name: PSA data check
 # prints how graded sales are split by printing.
 on:
   workflow_dispatch:
+    inputs:
+      history:
+        description: "Also probe price history for one card (2 API calls)"
+        type: boolean
+        default: false
 
 jobs:
   inspect:
@@ -29,3 +34,9 @@ jobs:
         env:
           POKEMONPRICETRACKER_API_KEY: ${{ secrets.POKEMONPRICETRACKER_API_KEY }}
         run: python -m tcgscan graded --probe-population
+      - name: Price history for one card (what comes back, what it costs)
+        if: inputs.history
+        working-directory: pipeline
+        env:
+          POKEMONPRICETRACKER_API_KEY: ${{ secrets.POKEMONPRICETRACKER_API_KEY }}
+        run: python -m tcgscan graded --probe-history

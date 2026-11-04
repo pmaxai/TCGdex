@@ -467,6 +467,39 @@ def probe_population(key: str | None = None) -> None:
         log.info("population: failed: %s", ex)
 
 
+def probe_history(key: str | None = None, tcgplayer_id: str = "45167") -> None:
+    """Two calls for one card: does history come back (TCGplayer, Cardmarket), how far, and what it costs.
+    Logs only structure, dates, counts and credit headers (never the key)."""
+    key = key or os.environ.get("POKEMONPRICETRACKER_API_KEY", "").strip()
+    if not key:
+        log.info("no API key")
+        return
+    client = Client(key, Path(".cache/graded"))
+    for days in (30, 180):
+        before = client.daily_remaining
+        try:
+            resp = client.get("cards", {"tcgPlayerId": tcgplayer_id, "includeHistory": "true", "includeCardmarket": "true",
+                                        "days": str(days)})
+        except Exception as ex:   # noqa: BLE001
+            log.info("history probe (%d days) failed: %s", days, ex)
+            continue
+        log.info("history probe (%d days): credits remaining before %s, after %s, counted %s", days, before,
+                 client.daily_remaining, client.credits_used)
+        log.info("history probe (%d days) skeleton: %s", days, json.dumps(_skeleton(resp), ensure_ascii=False)[:4000])
+        card = (_items(resp) or [resp.get("data") if isinstance(resp, dict) else None])[0] or {}
+        def walk(o, path=""):
+            if isinstance(o, list) and o and isinstance(o[0], dict) and any(k in o[0] for k in ("date", "market", "price", "avg", "trend")):
+                log.info("  series %s: %d points, first %s, last %s", path, len(o), json.dumps(o[0])[:200], json.dumps(o[-1])[:200])
+                return
+            if isinstance(o, dict):
+                for k, v in o.items():
+                    walk(v, f"{path}.{k}")
+            elif isinstance(o, list):
+                for i, v in enumerate(o[:3]):
+                    walk(v, f"{path}[{i}]")
+        walk(card)
+
+
 def build_table(db: Path, cache_dir: Path) -> None:
     """Match cached PokemonPriceTracker cards to our card ids and fill the graded table."""
     con = sqlite3.connect(db)
