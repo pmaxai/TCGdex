@@ -24,7 +24,8 @@ Every data pipeline run with fresh prices also builds a new APK.
 
 ## Restore points
 
-Go to **Actions → Restore point → Run workflow** and give it a name like `v0.2`. That
+Go to **Actions → Restore point → Run workflow** and give it a name like `v0.2`
+(tick *latest* for a shipped version such as `v1.0`: it becomes the Latest release). That
 freezes the code (a git tag), the current APK and the current data pack as a release
 that later builds never touch. They're listed under **Releases**. To go back, either
 install the APK from that release (uninstall the app first, since Android blocks

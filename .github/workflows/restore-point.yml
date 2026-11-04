@@ -13,6 +13,10 @@ on:
       notes:
         description: "What this version is (optional)"
         default: ""
+      latest:
+        description: "Shipped version: mark it as the Latest release (also works on an existing one)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -28,9 +32,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           NAME: ${{ inputs.name }}
           NOTES: ${{ inputs.notes }}
+          LATEST: ${{ inputs.latest }}
         run: |
           if ! [[ "$NAME" =~ ^[A-Za-z0-9._-]+$ ]]; then echo "invalid name: $NAME"; exit 1; fi
-          if gh release view "$NAME" >/dev/null 2>&1; then echo "restore point $NAME already exists"; exit 1; fi
+          if gh release view "$NAME" >/dev/null 2>&1; then
+            # an existing release is never changed, except to mark it as the shipped (Latest) one
+            if [ "$LATEST" = "true" ]; then gh release edit "$NAME" --latest; gh release view "$NAME"; exit 0; fi
+            echo "restore point $NAME already exists"; exit 1
+          fi
           mkdir freeze
           gh release download app-latest -D freeze -p CardScanner.apk
           gh release download data-pack -D freeze
@@ -44,5 +53,5 @@ jobs:
             echo
             echo "To reinstall this APK over a newer one, uninstall the app first (Android blocks downgrades)."
           } > notes.md
-          gh release create "$NAME" freeze/* --target "$GITHUB_SHA" --title "$NAME" --notes-file notes.md --latest=false
+          gh release create "$NAME" freeze/* --target "$GITHUB_SHA" --title "$NAME" --notes-file notes.md --latest="$LATEST"
           gh release view "$NAME"
