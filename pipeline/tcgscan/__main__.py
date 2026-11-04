@@ -47,6 +47,16 @@ def main(argv: list[str] | None = None) -> None:
     x.add_argument("--real", type=Path, default=None)
     x.add_argument("--results", type=Path, default=Path("out/results.json"))
     x.add_argument("--out", type=Path, default=Path("out/app-pack"))
+    x.add_argument("--history", type=Path, default=None, help="price history archive (tcgscan history)")
+
+    h = sub.add_parser("history", help="price history: record today, backfill, ECB rates, monthly files")
+    h.add_argument("action", choices=["record", "backfill", "backfill-ppt", "ecb", "pack-months", "unpack-months"])
+    h.add_argument("--db", type=Path, default=Path("out/catalog.sqlite"))
+    h.add_argument("--dir", type=Path, default=Path(".cache/history"))
+    h.add_argument("--months", type=Path, default=None, help="folder of history-YYYY-MM.tar files")
+    h.add_argument("--max-files", type=int, default=160, help="backfill: TCGCSV archives to read at most")
+    h.add_argument("--budget", type=int, default=12000, help="backfill-ppt: PokemonPriceTracker credits to spend at most")
+    h.add_argument("--minutes", type=float, default=25, help="backfill-ppt: time limit")
 
     p = sub.add_parser("altimages", help="pictures from pokemontcg.io for cards TCGdex has none for")
     p.add_argument("--db", type=Path, default=Path("out/catalog.sqlite"))
@@ -88,7 +98,22 @@ def main(argv: list[str] | None = None) -> None:
             graded_fetch(a.db, a.cache, a.budget, a.max_age_days)
     elif a.cmd == "export":
         from .export import run as export_run
-        export_run(a.db, a.cache, a.emb_cache, a.model, a.out, a.real, a.results, a.pca)
+        export_run(a.db, a.cache, a.emb_cache, a.model, a.out, a.real, a.results, a.pca, history_dir=a.history)
+    elif a.cmd == "history":
+        from . import history as hist
+        if a.action == "record":
+            hist.record(a.db, a.dir)
+        elif a.action == "backfill":
+            hist.backfill_tcgcsv(a.db, a.dir, max_files=a.max_files)
+        elif a.action == "backfill-ppt":
+            hist.backfill_ppt(a.db, a.dir, budget=a.budget, minutes=a.minutes)
+        elif a.action == "ecb":
+            hist.fetch_ecb(a.dir)
+        elif a.action == "pack-months":
+            for p in hist.pack_months(a.dir, a.months or a.dir / "months"):
+                print(p)
+        else:
+            hist.unpack_months(a.dir, a.months or a.dir / "months")
     elif a.cmd == "detector-lab":
         from .lab import run as lab_run
         text = lab_run(a.db, a.cache, a.photos)

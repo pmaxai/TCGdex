@@ -136,6 +136,56 @@ jobs:
           path: .cache/graded
           key: graded-${{ github.run_id }}
 
+      - name: Restore price history cache
+        if: env.MAX_SETS == '0'
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/history
+          key: history-${{ github.run_id }}
+          restore-keys: history-
+
+      # the day's prices into the archive; the past filled in once (TCGplayer from TCGCSV's daily
+      # archives, Cardmarket and TCGplayer from PokemonPriceTracker within the day's credits, most
+      # valuable cards first); the archive kept as monthly files in the 'price-history' release.
+      # Optional: never holds up or breaks the data pack.
+      - name: Price history
+        if: env.MAX_SETS == '0'
+        continue-on-error: true
+        timeout-minutes: 60
+        working-directory: pipeline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          POKEMONPRICETRACKER_API_KEY: ${{ secrets.POKEMONPRICETRACKER_API_KEY }}
+        run: |
+          H=../.cache/history
+          mkdir -p $H/months
+          if gh release view price-history >/dev/null 2>&1; then
+            gh release download price-history -D $H/months --skip-existing || true
+          fi
+          python -m tcgscan history unpack-months --dir $H --months $H/months
+          rm -f $H/touched.txt
+          python -m tcgscan history record --db ../out/catalog.sqlite --dir $H
+          python -m tcgscan history ecb --dir $H
+          python -m tcgscan history backfill --db ../out/catalog.sqlite --dir $H --max-files 160
+          if [ "$PSA" = "true" ]; then
+            python -m tcgscan history backfill-ppt --db ../out/catalog.sqlite --dir $H --budget 12000 --minutes 25
+          fi
+          python -m tcgscan history pack-months --dir $H --months $H/months > $H/made.txt
+          gh release view price-history >/dev/null 2>&1 || gh release create price-history --latest=false \
+            --title "Price history archive" \
+            --notes "Daily card prices collected by the Data pipeline (Cardmarket EUR, TCGplayer USD) as monthly files. Used to build the app's price history."
+          if [ -s $H/made.txt ]; then xargs -a $H/made.txt gh release upload price-history --clobber; fi
+          for f in ecb.csv tcgcsv-done.txt ppt-done.txt; do
+            if [ -f $H/months/$f ]; then gh release upload price-history $H/months/$f --clobber; fi
+          done
+
+      - name: Save price history cache
+        if: always() && env.MAX_SETS == '0'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/history
+          key: history-${{ github.run_id }}
+
       - name: Restore fingerprint cache
         uses: actions/cache/restore@v4
         with:
@@ -154,7 +204,8 @@ jobs:
         working-directory: pipeline
         run: |
           python -m tcgscan export --cache ../.cache/tcgdex --db ../out/catalog.sqlite --emb-cache ../.cache/emb \
-            --model mnv3_art --real ../testdata/real --results ../out/results.json --out ../out/app-pack
+            --model mnv3_art --real ../testdata/real --results ../out/results.json --out ../out/app-pack \
+            --history ../.cache/history
 
       # after the export: it adds the foil texture grids to the cache
       - name: Save fingerprint cache

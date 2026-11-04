@@ -299,7 +299,8 @@ def synthetic_detection_photos(n: int, seed: int = 4242) -> list[tuple[str, np.n
 
 # ---------------------------------------------------------------- main
 def run(db: Path, cache_dir: Path, emb_cache: Path, model_name: str, out_dir: Path,
-        real_dir: Path | None, results: Path | None, pca_dim: int = 256, n_synthetic: int = 8) -> None:
+        real_dir: Path | None, results: Path | None, pca_dim: int = 256, n_synthetic: int = 8,
+        history_dir: Path | None = None) -> None:
     t0 = time.time()
     out_dir = Path(out_dir)
     if out_dir.exists():
@@ -352,6 +353,17 @@ def run(db: Path, cache_dir: Path, emb_cache: Path, model_name: str, out_dir: Pa
         "foil_version": foil.VERSION,
     }
     write_catalog(db, out_dir / "catalog.sqlite", entries, meta, groups)
+    # price history (weekly for a year, daily for 90 days), when the archive is there
+    if history_dir is not None and Path(history_dir).exists():
+        from .history import write_app_history
+        hcon = sqlite3.connect(out_dir / "catalog.sqlite")
+        try:
+            write_app_history(hcon, Path(history_dir))
+            hcon.commit()
+        except Exception as ex:   # noqa: BLE001  the pack never fails for want of history
+            log.warning("price history not exported: %s", ex)
+        finally:
+            hcon.close()
     tex = foil.reference_grids(entries, Path(emb_cache) / "foil_grids.npz")
     (out_dir / "texture.u8").write_bytes(tex.tobytes())
     log.info("foil texture grids: %d x %d", *tex.shape)

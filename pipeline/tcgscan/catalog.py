@@ -36,6 +36,7 @@ CREATE TABLE prices_cardmarket(
   avg_holo REAL, low_holo REAL, trend_holo REAL,
   avg1_holo REAL, avg7_holo REAL, avg30_holo REAL);
 CREATE TABLE prices_tcgplayer(id TEXT PRIMARY KEY, updated TEXT, unit TEXT, data TEXT);
+CREATE TABLE card_products(id TEXT, type TEXT, subtype TEXT, cardmarket INTEGER, tcgplayer INTEGER);
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE INDEX cards_by_id ON cards(id);
 """
@@ -129,7 +130,7 @@ def fetch_catalog(client: TCGdexClient, out_db: Path, langs: list[str], price_la
         log.info("[%s] %d sets, %d cards (%d with image url)", lang, st.sets, st.cards, st.with_image_url)
 
     # ---------------------------------------------------------------- details/prices
-    detail_rows, cm_rows, tp_rows = [], [], []
+    detail_rows, cm_rows, tp_rows, product_rows = [], [], [], []
     if with_details:
         # prices are per card id (language independent): fetch each id once,
         # preferring price_lang, falling back to the first language that has it
@@ -156,6 +157,16 @@ def fetch_catalog(client: TCGdexClient, out_db: Path, langs: list[str], price_la
             tp = pricing.get("tcgplayer")
             if isinstance(tp, dict):
                 tp_rows.append((cid, tp.get("updated"), tp.get("unit"), json.dumps(tp)))
+            # marketplace product ids per printing (price history from other sources is found by them)
+            for v in d.get("variants_detailed") or []:
+                if not isinstance(v, dict):
+                    continue
+                tp_ids = v.get("thirdParty") or {}
+                cm_id, tp_id = tp_ids.get("cardmarket"), tp_ids.get("tcgplayer")
+                if cm_id or tp_id:
+                    product_rows.append((cid, v.get("type"), v.get("subtype"),
+                                         int(cm_id) if str(cm_id).isdigit() else None,
+                                         int(tp_id) if str(tp_id).isdigit() else None))
         log.info("details for %d cards, cardmarket prices for %d, tcgplayer for %d",
                  len(detail_rows), len(cm_rows), len(tp_rows))
         sample = next((d for d in got.values() if d and d.get("pricing")), None)
@@ -193,6 +204,9 @@ def fetch_catalog(client: TCGdexClient, out_db: Path, langs: list[str], price_la
     con.executemany("INSERT OR REPLACE INTO card_details VALUES (?,?,?,?,?,?,?,?)", detail_rows)
     con.executemany(f"INSERT OR REPLACE INTO prices_cardmarket VALUES ({','.join('?' * 15)})", cm_rows)
     con.executemany("INSERT OR REPLACE INTO prices_tcgplayer VALUES (?,?,?,?)", tp_rows)
+    con.executemany("INSERT INTO card_products VALUES (?,?,?,?,?)", product_rows)
+    log.info("marketplace product ids: %d (TCGplayer for %d cards)", len(product_rows),
+             len({r[0] for r in product_rows if r[4]}))
     meta = {
         "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "langs": ",".join(langs), "price_lang": price_lang, "max_sets": str(max_sets),
