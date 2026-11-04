@@ -16,6 +16,15 @@ import io.github.pmaxai.cardscanner.data.Graded
 import io.github.pmaxai.cardscanner.data.Population
 import io.github.pmaxai.cardscanner.data.Pack
 import io.github.pmaxai.cardscanner.data.Printing
+import io.github.pmaxai.cardscanner.trading.Cart
+import io.github.pmaxai.cardscanner.trading.CartLine
+import io.github.pmaxai.cardscanner.trading.Condition
+import io.github.pmaxai.cardscanner.trading.LineStatus
+import io.github.pmaxai.cardscanner.trading.Reference
+import io.github.pmaxai.cardscanner.trading.TradingBook
+import io.github.pmaxai.cardscanner.trading.TradingCsv
+import io.github.pmaxai.cardscanner.trading.TradingMath
+import io.github.pmaxai.cardscanner.trading.TradingStore
 import io.github.pmaxai.cardscanner.vision.CardText
 import io.github.pmaxai.cardscanner.vision.FoilEstimate
 import io.github.pmaxai.cardscanner.vision.FoilMeter
@@ -128,9 +137,26 @@ data class Settings(
     val zoom: Float = 1f,
     /** height of the capture frame, percent of the camera picture */
     val guideSize: Int = 70,
+    /** Trading Mode (card shows): price check, carts per booth, deals */
+    val trading: Boolean = false,
+    /** condition a newly scanned card starts with in Trading Mode */
+    val tradingCondition: Condition = Condition.NM,
+    /** Cardmarket price the market value starts from */
+    val reference: Reference = Reference.TREND,
 ) {
     val guideFraction: Double get() = guideSize / 100.0
+    val mode: AppMode get() = when { youtube -> AppMode.YOUTUBE; trading -> AppMode.TRADING; else -> AppMode.SCANNER }
+    fun withMode(m: AppMode) = copy(youtube = m == AppMode.YOUTUBE, trading = m == AppMode.TRADING)
 }
+
+enum class AppMode(val label: String, val about: String) {
+    SCANNER("Scanner", "flea market: spot the valuable card fast"),
+    TRADING("Trading", "card show: judge prices, negotiate, carts per booth"),
+    YOUTUBE("YouTube", "full screen, price reveal, pack value"),
+}
+
+/** Trading Mode: what the user set for the shown card before it goes into a cart. */
+data class DealDraft(val condition: Condition = Condition.NM, val asking: Double? = null)
 
 data class DebugInfo(val preview: Bitmap?, val lines: List<String>)
 
@@ -162,6 +188,12 @@ data class UiState(
     val picks: List<Candidate>? = null,
     /** the card search is open: LOOK_UP shows any card, REPLACE puts it in place of the shown one */
     val search: SearchMode? = null,
+    /** Trading Mode: the last scanned cards, newest last */
+    val tray: List<SessionItem> = emptyList(),
+    /** Trading Mode: carts (open ones and the paid deal history) */
+    val book: TradingBook = TradingBook(),
+    /** Trading Mode: condition and asking price of the shown card */
+    val draft: DealDraft = DealDraft(),
 ) {
     val sessionValue: Double get() = session.sumOf { it.value ?: 0.0 }
 }
@@ -200,6 +232,9 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     private var lastAlerted: String? = null
     private var lastText: CardText? = null
     @Volatile private var lastFill: Double? = null
+    /** Trading Mode's carts on the phone; written one after the other on their own thread */
+    private val tradingStore = TradingStore(java.io.File(app.filesDir, "trading.json"))
+    private val saveDispatcher = java.util.concurrent.Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     /** text recognition runs here, one card at a time, so a card shows up without waiting for it */
     private val textDispatcher = java.util.concurrent.Executors.newSingleThreadExecutor().asCoroutineDispatcher()
 
@@ -219,7 +254,17 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                     ?: if (prefs.getBoolean("youtube", false)) "auto" else "portrait",
                 zoom = prefs.getFloat("zoom", 1f),
                 guideSize = prefs.getInt("guide_size", 70),
-            ))
+                trading = prefs.getBoolean("trading", false),
+                tradingCondition = runCatching { Condition.valueOf(prefs.getString("trade_condition", null) ?: "NM") }
+                    .getOrDefault(Condition.NM),
+                reference = runCatching { Reference.valueOf(prefs.getString("trade_reference", null) ?: "TREND") }
+                    .getOrDefault(Reference.TREND),
+            ), draft = DealDraft(runCatching { Condition.valueOf(prefs.getString("trade_condition", null) ?: "NM") }
+                .getOrDefault(Condition.NM)))
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val book = tradingStore.load()
+            _state.update { it.copy(book = book) }
         }
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -523,7 +568,9 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         if (hit != null) staticFoil(rgb, r, hit, shown)?.let { est -> shown = shown.copy(foil = est) }
         val first = shown
         _state.update { s -> s.copy(shown = first, picks = null,
-            session = if (s.settings.youtube && !fromPhoto) addToSession(s, first) else s.session) }
+            session = if (s.settings.youtube && !fromPhoto) addToSession(s, first) else s.session,
+            tray = if (s.settings.trading) addToTray(s.tray, first) else s.tray,
+            draft = DealDraft(s.settings.tradingCondition)) }
         if (hit == null) { maybeAlert(first); return }
         val frame = rgb.clone()
         viewModelScope.launch(textDispatcher) {
@@ -550,7 +597,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             val keep = cur.printing.takeIf { cur.printingByUser && b.priceCard.printings.any { it.kind == cur.printing } }
             b.copy(serial = cur.serial, foil = cur.foil, printing = keep ?: b.printing, printingByUser = keep != null)
         }
-        _state.update { s -> s.copy(shown = updated, session = replaceInSession(s.session, updated)) }
+        _state.update { s -> s.copy(shown = updated, session = replaceInSession(s.session, updated), tray = replaceInSession(s.tray, updated)) }
         maybeAlert(updated)
     }
 
@@ -602,7 +649,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { s ->
             val sh = s.shown?.takeIf { it.serial == current.serial } ?: return@update s
             val updated = sh.copy(foil = est, printing = printing)
-            s.copy(shown = updated, session = replaceInSession(s.session, updated))
+            s.copy(shown = updated, session = replaceInSession(s.session, updated), tray = replaceInSession(s.tray, updated))
         }
     }
 
@@ -649,6 +696,93 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         session.map { if (it.serial == oldSerial) it.copy(serial = sh.serial, shown = sh.copy(preview = null, scan = null)) else it }
 
     fun resetSession() = _state.update { it.copy(session = emptyList()) }
+
+    // ------------------------------------------------------------------ Trading Mode
+    private fun addToTray(tray: List<SessionItem>, sh: Shown): List<SessionItem> {
+        if (tray.lastOrNull()?.group == sh.group) return tray
+        return (tray + SessionItem(sh.serial, System.currentTimeMillis(), sh.copy(preview = null, scan = null))).takeLast(TRAY_SIZE)
+    }
+
+    /** A card from the tray back in the price panel; it stays until another card is clearly in front of the camera. */
+    fun showFromTray(item: SessionItem) = synchronized(lock) {
+        tracker.lock(item.group)
+        kept = item.group
+        rejected = emptySet()
+        _state.update { it.copy(shown = item.shown, picks = null, draft = DealDraft(it.settings.tradingCondition)) }
+    }
+
+    fun setCondition(c: Condition) = _state.update { it.copy(draft = it.draft.copy(condition = c)) }
+    fun setAsking(v: Double?) = _state.update { it.copy(draft = it.draft.copy(asking = v)) }
+
+    /** All carts change through here: shown at once, written to the phone in order. */
+    private fun updateBook(f: (TradingBook) -> TradingBook) {
+        var saved: TradingBook? = null
+        _state.update { st -> f(st.book).also { saved = it }.let { st.copy(book = it) } }
+        val b = saved ?: return
+        viewModelScope.launch(saveDispatcher) {
+            runCatching { tradingStore.save(b) }.onFailure { Log.e(TAG, "saving the carts failed", it) }
+        }
+    }
+
+    /** + Cart: the shown card with its printing, condition and asking price into the active cart. */
+    fun addToCart() {
+        val st = _state.value
+        val s = st.shown ?: return
+        val now = System.currentTimeMillis()
+        var cartName = ""
+        updateBook { b0 ->
+            val (b, cart) = b0.withActive(now)
+            cartName = cart.name
+            val printing = s.selected?.kind?.name
+            val ref = TradingMath.reference(s.selected, st.settings.reference)
+            val last = cart.lines.lastOrNull()
+            val same = last != null && last.status == LineStatus.CONSIDERING && last.cardId == s.version.id &&
+                last.lang == s.version.lang && last.printing == printing && last.condition == st.draft.condition &&
+                last.asking == st.draft.asking
+            val lines = if (same) cart.lines.dropLast(1) + last!!.copy(qty = last.qty + 1)
+                else cart.lines + CartLine(id = now, cardId = s.version.id, lang = s.version.lang, group = s.group,
+                    name = s.version.name, setLine = s.version.setLine(), image = s.imageCard?.thumbnailUrl,
+                    printing = printing, reference = ref, condition = st.draft.condition, asking = st.draft.asking, added = now)
+            b.replace(cart.copy(lines = lines))
+        }
+        _state.update { it.copy(draft = it.draft.copy(asking = null), message = "Added to $cartName") }
+    }
+
+    fun selectCart(id: Long) = updateBook { it.copy(activeId = id) }
+    fun newCart() = updateBook { it.newCart(System.currentTimeMillis()) }
+    fun renameCart(id: Long, name: String) = updateBook { b ->
+        b.carts.firstOrNull { it.id == id }?.let { b.replace(it.copy(name = name.trim().ifEmpty { it.name })) } ?: b
+    }
+    fun deleteCart(id: Long) = updateBook { b -> b.copy(carts = b.carts.filter { it.id != id }) }
+
+    fun updateLine(cartId: Long, lineId: Long, f: (CartLine) -> CartLine) = updateBook { b ->
+        val c = b.carts.firstOrNull { it.id == cartId } ?: return@updateBook b
+        b.replace(c.copy(lines = c.lines.map { if (it.id == lineId) f(it) else it }))
+    }
+
+    /** Paid: the cart's cards are bought; it moves to the deal history and the next open cart becomes active. */
+    fun markPaid(cartId: Long, payment: String) = updateBook { b ->
+        val c = b.carts.firstOrNull { it.id == cartId } ?: return@updateBook b
+        val paid = c.copy(paidAt = System.currentTimeMillis(), payment = payment,
+            lines = c.lines.map { if (it.active) it.copy(status = LineStatus.BOUGHT) else it })
+        val next = b.replace(paid)
+        next.copy(activeId = next.open.lastOrNull()?.id)
+    }
+
+    /** A paid deal back to an open cart (to fix a mistake). */
+    fun reopen(cartId: Long) = updateBook { b ->
+        val c = b.carts.firstOrNull { it.id == cartId } ?: return@updateBook b
+        b.replace(c.copy(paidAt = null, payment = null,
+            lines = c.lines.map { if (it.status == LineStatus.BOUGHT) it.copy(status = LineStatus.AGREED) else it }))
+            .copy(activeId = cartId)
+    }
+
+    /** Writes these carts as CSV; returns the number of cards. */
+    fun saveDeals(resolver: android.content.ContentResolver, uri: android.net.Uri, carts: List<Cart>): Result<Int> = runCatching {
+        val csv = TradingCsv.build(carts, java.util.Locale.getDefault())
+        resolver.openOutputStream(uri, "wt")?.use { it.write(csv.toByteArray(Charsets.UTF_8)) } ?: error("cannot write the file")
+        carts.sumOf { it.cards }
+    }.onFailure { Log.e(TAG, "saving the deals failed", it) }
 
     /**
      * +1: the shown card goes into the pack once more (two of the same card in a row are
@@ -718,7 +852,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         lastText = null
         val shown = build(c.group, c.info, null, Confidence.SURE, emptyList(), locked = true, fromPhoto = true,
             preview = null, scan = null).copy(versionByUser = true, fromSearch = true)
-        _state.update { it.copy(shown = shown, paused = true, picks = null) }
+        _state.update { it.copy(shown = shown, paused = true, picks = null, draft = DealDraft(it.settings.tradingCondition)) }
     }
 
     /** The shown card is this one (found in the search): it takes its place, also in the pack. */
@@ -730,7 +864,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val alternatives = (listOf(Candidate(s.group, s.version, 0f, "")) + s.alternatives).filter { it.group != c.group }
         val shown = build(c.group, c.info, lastText, Confidence.SURE, alternatives, locked = true, fromPhoto = s.fromPhoto,
             preview = s.preview, scan = s.scan).copy(versionByUser = true, fromSearch = s.fromSearch)
-        _state.update { st -> st.copy(shown = shown, picks = null, session = replaceInSession(st.session, shown, oldSerial = s.serial)) }
+        _state.update { st -> st.copy(shown = shown, picks = null, session = replaceInSession(st.session, shown, oldSerial = s.serial), tray = replaceInSession(st.tray, shown, oldSerial = s.serial)) }
         maybeAlert(shown)
     }
 
@@ -755,7 +889,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         // another artwork: the picture of the scanned card still shows what was in front of the camera
         val shown = build(c.group, version, lastText, Confidence.SURE, alternatives, locked = true, fromPhoto = s.fromPhoto,
             preview = s.preview, scan = s.scan).copy(versionByUser = true)
-        _state.update { st -> st.copy(shown = shown, session = replaceInSession(st.session, shown, oldSerial = s.serial)) }
+        _state.update { st -> st.copy(shown = shown, session = replaceInSession(st.session, shown, oldSerial = s.serial), tray = replaceInSession(st.tray, shown, oldSerial = s.serial)) }
         maybeAlert(shown)
     }
 
@@ -776,14 +910,14 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             .copy(serial = s.serial, printing = s.printing, printingByUser = s.printingByUser, foil = s.foil, versionByUser = true)
             .let { if (it.priceCard.printing(s.printing)?.kind != s.printing) it.copy(printing = it.priceCard.printings.firstOrNull()?.kind) else it }
         tracker.lock(s.group)
-        st.copy(shown = shown, session = replaceInSession(st.session, shown))
+        st.copy(shown = shown, session = replaceInSession(st.session, shown), tray = replaceInSession(st.tray, shown))
     }
 
     fun choosePrinting(kind: Printing.Kind) = _state.update { st ->
         val s = st.shown ?: return@update st
         val updated = s.copy(printing = kind, printingByUser = true, locked = true)
         tracker.lock(s.group)
-        st.copy(shown = updated, session = replaceInSession(st.session, updated))
+        st.copy(shown = updated, session = replaceInSession(st.session, updated), tray = replaceInSession(st.tray, updated))
     }
 
     /** Forget the current card and look for the next one. */
@@ -813,6 +947,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             .putInt("trigger_delay", new.triggerDelayMs)
             .putInt("energy_filter", new.energyFilter).putInt("min_fill", new.minFillPercent)
             .putString("orientation", new.orientation).putFloat("zoom", new.zoom).putInt("guide_size", new.guideSize)
+            .putBoolean("trading", new.trading).putString("trade_condition", new.tradingCondition.name)
+            .putString("trade_reference", new.reference.name)
             .apply()
         tracker.delayMs = new.triggerDelayMs.toLong()
         if (new.energyFilter != _state.value.settings.energyFilter) applyEnergyFilter(new.energyFilter)
@@ -880,6 +1016,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         recognizer?.close()
         resolver?.close()
         textDispatcher.close()
+        saveDispatcher.close()
         foil?.reset()
     }
 
@@ -887,6 +1024,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         const val TAG = "CardScanner"
         /** further than this the analysed picture gets too coarse */
         const val MAX_ZOOM = 5f
+        /** scanned cards kept in Trading Mode's tray */
+        const val TRAY_SIZE = 20
         /** languages with their own set ids and script */
         val ASIAN = setOf("ja", "ko", "zh-tw", "zh-cn", "th")
     }

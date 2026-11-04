@@ -106,6 +106,8 @@ import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 import androidx.compose.ui.input.pointer.pointerInput
 import io.github.pmaxai.cardscanner.data.Graded
+import io.github.pmaxai.cardscanner.trading.Condition
+import io.github.pmaxai.cardscanner.trading.Reference
 import io.github.pmaxai.cardscanner.data.Population
 import io.github.pmaxai.cardscanner.data.Printing
 import io.github.pmaxai.cardscanner.vision.FoilEstimate
@@ -172,6 +174,7 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
             state.loading -> Loading(state.loadingText)
             !granted -> Message("The scanner needs the camera.") { Button({ ask.launch(Manifest.permission.CAMERA) }) { Text("Allow camera") } }
             state.settings.youtube -> YouTubeScreen(state, vm)
+            state.settings.trading -> TradingScreen(state, vm)
             else -> Scanner(state, vm)
         }
         // after a double tap: the most likely cards to pick from
@@ -485,7 +488,33 @@ fun SettingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) {
         title = { Text("Settings") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Text("Alert / HIT for cards worth at least", color = Muted, fontSize = 13.sp)
+                Text("Mode", color = Muted, fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    AppMode.values().forEach { m ->
+                        FilterChip(selected = m == s.mode, onClick = { vm.updateSettings { it.withMode(m).copy(title = title) } },
+                            label = { Text(m.label) })
+                    }
+                }
+                Text(s.mode.about, color = Muted, fontSize = 12.sp)
+                if (s.trading) {
+                    Text("Trading: condition of a new scan", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Condition.values().forEach { c ->
+                            FilterChip(selected = c == s.tradingCondition, onClick = { vm.updateSettings { it.copy(tradingCondition = c) } },
+                                label = { Text(c.label) })
+                        }
+                    }
+                    Text("Trading: market value starts from Cardmarket's", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Reference.values().forEach { r ->
+                            FilterChip(selected = r == s.reference, onClick = { vm.updateSettings { it.copy(reference = r) } },
+                                label = { Text(r.label) })
+                        }
+                    }
+                    Text("Condition: NM 100 · EX 85 · GD 75 · LP 65 · PL 50 · PO 30 % of that price. Verdict: up to 80 % of the " +
+                        "market value great, 95 % good, 110 % fair, above expensive. Opening offer 85 %.", color = Muted, fontSize = 12.sp)
+                }
+                Text("Alert / HIT for cards worth at least", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
                 listOf(0.0, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0).chunked(4).forEach { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         row.forEach { v ->
@@ -548,8 +577,6 @@ fun SettingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) {
                     color = Muted, fontSize = 12.sp)
                 SettingSwitch("PSA 10 / 9 / 8 prices", if (state.hasPsaData) "eBay sold averages, USD" else "not in this data pack yet",
                     s.showPsa) { v -> vm.updateSettings { it.copy(showPsa = v) } }
-                SettingSwitch("YouTube mode", "full screen, price reveal, pack value",
-                    s.youtube) { v -> vm.updateSettings { it.copy(youtube = v, title = title) } }
                 OutlinedTextField(value = title, onValueChange = { title = it }, singleLine = true,
                     label = { Text("YouTube title line (optional)") }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
                 SettingSwitch("Details", "what the scanner saw, scores, text it read, holo check", s.showDebug) { v ->

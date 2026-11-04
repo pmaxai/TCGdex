@@ -244,9 +244,9 @@ private fun FitInside(designWidth: Dp = 440.dp, maxScale: Float = 1.25f, content
     }
 }
 
-/** Swipe the card to the left to take it out of the pack (a wrong match, or a card you don't count). */
+/** Swipe to the left to take it out (of the pack, or a cart): a wrong match, or a card you don't count. */
 @Composable
-private fun SwipeToRemove(key: Int, onRemove: () -> Unit, content: @Composable () -> Unit) {
+fun SwipeToRemove(key: Int, onRemove: () -> Unit, label: String = "Remove from pack", content: @Composable () -> Unit) {
     val offset = remember(key) { Animatable(0f) }
     val scope = rememberCoroutineScope()
     var width by remember { mutableStateOf(1f) }
@@ -255,7 +255,7 @@ private fun SwipeToRemove(key: Int, onRemove: () -> Unit, content: @Composable (
             // what letting go will do
             Box(Modifier.matchParentSize().background(Color(0xFF7A1F1F), RoundedCornerShape(20.dp)).padding(end = 24.dp),
                 contentAlignment = Alignment.CenterEnd) {
-                Text(if (offset.value < -width * REMOVE_AT) "Release to remove" else "Remove from pack",
+                Text(if (offset.value < -width * REMOVE_AT) "Release to remove" else label,
                     color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             }
         }

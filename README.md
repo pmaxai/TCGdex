@@ -109,7 +109,30 @@ downgrades), or restore the code from the tag.
 - **Alert:** set a price (e.g. 5 €). The phone vibrates when a card worth at least
   that appears (any printing), so you can sweep through a box and only stop when it
   buzzes.
-- **YouTube mode** (⚙ → YouTube mode): a clean screen for screen-recorded opening and
+- **Trading Mode** (⚙ → Mode → Trading), for card shows: judge a vendor's price, negotiate,
+  and keep track of what you buy, booth by booth.
+  - **Market value**: the Cardmarket trend of the printing (or the 30-day average or the
+    lowest price, ⚙), times the card's condition: NM 100 · EX 85 · GD 75 · LP 65 · PL 50 ·
+    PO 30 %. Tap the condition under the name; the camera can't judge it. An arrow shows
+    the trend against the 30-day average. Warnings appear for few sales, a price taken
+    from the English version, and prices older than 3 days (install the latest app
+    before a show).
+  - **Asking price**: tap *Type the asking price* and enter it on the big number pad
+    (quick buttons: = market, −10 %, −20 %, offer). The verdict: up to 80 % of the market
+    value *great deal*, 95 % *good price*, 110 % *fair*, above that *expensive*. Below it:
+    an opening offer (85 %, rounded down) and the walk-away price (100 %).
+  - **+ Cart** puts the card with its printing, condition and asking price into the cart
+    of the current booth. The same card again adds to its quantity.
+  - **Carts per booth**: the cart chip at the top opens it. Each line keeps market value,
+    asking price and negotiated price; tap a line to change condition, quantity, prices
+    or status (considering, agreed, dropped), swipe it left to drop it. Totals: market
+    value, asking, what you pay, saved against market and asking. *Next booth* starts a
+    new cart; ▾ switches between open carts, renames, saves as CSV or deletes one.
+  - **Paid** (cash, card, other) moves the cart into the **deal history** (⚙): deals by
+    day with totals, reopen one to fix a mistake, save one or all as CSV.
+  - **Last scans**: the tray under the price brings back any of the last 20 cards.
+  - Carts and deals are kept on the phone (nothing leaves it unless you save a CSV).
+- **YouTube mode** (⚙ → Mode → YouTube): a clean screen for screen-recorded opening and
   price-check videos, in portrait or landscape (see *Screen orientation*). The card box
   keeps the same look in both: it is scaled as a whole instead of wrapping text, and long
   names or prices shrink to one line.
