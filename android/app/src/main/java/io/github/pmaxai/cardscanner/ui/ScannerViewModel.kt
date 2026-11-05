@@ -37,6 +37,8 @@ import io.github.pmaxai.cardscanner.vision.Recognition
 import io.github.pmaxai.cardscanner.vision.Recognizer
 import io.github.pmaxai.cardscanner.vision.ScanTracker
 import io.github.pmaxai.cardscanner.vision.VersionResolver
+import io.github.pmaxai.cardscanner.update.AppRelease
+import io.github.pmaxai.cardscanner.update.AppUpdate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
@@ -159,6 +161,18 @@ enum class AppMode(val label: String, val about: String) {
     YOUTUBE("YouTube", "full screen, price reveal, pack value"),
 }
 
+/** A newer build of the app on GitHub, and how far its download / install has got. */
+data class UpdateState(
+    val release: AppRelease,
+    /** 0..1 while downloading */
+    val progress: Float? = null,
+    /** downloaded: the installer was opened (tap again if it was cancelled) */
+    val apk: java.io.File? = null,
+    /** Android first needs "allow from this source" for Card Scanner (Settings was opened) */
+    val needsPermission: Boolean = false,
+    val error: String? = null,
+)
+
 /** Trading Mode: what the user set for the shown card before it goes into a cart. */
 data class DealDraft(val condition: Condition = Condition.NM, val asking: Double? = null)
 
@@ -200,11 +214,16 @@ data class UiState(
     val draft: DealDraft = DealDraft(),
     /** Trading Mode: + Cart puts the card on this side (I get: buying, I give: your card for a trade or sale) */
     val scanTarget: Side = Side.GET,
+    /** a newer app with newer prices is out (null: none, or not checked yet) */
+    val update: UpdateState? = null,
+    /** TCGdex's price date of this app's data pack, ISO UTC */
+    val pricesDate: String? = null,
 ) {
     val sessionValue: Double get() = session.sumOf { it.value ?: 0.0 }
 }
 
 class ScannerViewModel(app: Application) : AndroidViewModel(app) {
+    private val appCtx: Application = app
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
@@ -291,8 +310,13 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                     p.db.rawQuery("SELECT COUNT(*) FROM graded", null).use { c -> c.moveToFirst() && c.getInt(0) > 0 }
                 }.getOrDefault(false)
                 val info = "${p.n} card images · data ${p.version.take(10)}" + if (psa) " · PSA prices" else ""
-                _state.update { it.copy(loading = false, packInfo = info, hasPsaData = psa, hasCategories = cat.hasCategory) }
+                val prices = runCatching {
+                    p.db.rawQuery("SELECT MAX(updated) FROM prices", null).use { c -> if (c.moveToFirst()) c.getString(0) else null }
+                }.getOrNull()
+                _state.update { it.copy(loading = false, packInfo = info, hasPsaData = psa, hasCategories = cat.hasCategory,
+                    pricesDate = prices) }
                 applyEnergyFilter(_state.value.settings.energyFilter)
+                checkForUpdate()
             } catch (t: Throwable) {
                 Log.e(TAG, "loading failed", t)
                 _state.update { it.copy(loading = false, error = t.message ?: t.toString()) }
@@ -430,6 +454,79 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     fun closePicks() = _state.update { it.copy(picks = null) }
 
     fun messageShown() = _state.update { it.copy(message = null) }
+
+    // ------------------------------------------------------------------ app update
+    private var lastUpdateCheck = 0L
+    private var dismissedUpdate = -1
+
+    private fun installedVersionCode(): Long = runCatching {
+        androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(appCtx.packageManager.getPackageInfo(appCtx.packageName, 0))
+    }.getOrDefault(Long.MAX_VALUE)
+
+    /**
+     * Looks for a newer build on GitHub (at start and when the app comes back, at most every 30
+     * minutes). [announce]: say so when there is none (the Settings button).
+     */
+    fun checkForUpdate(announce: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!announce && now - lastUpdateCheck < 30 * 60_000L) return
+        lastUpdateCheck = now
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = AppUpdate.latest()
+            when {
+                r == null -> if (announce) _state.update { it.copy(message = "Couldn't reach GitHub – try again with internet") }
+                r.versionCode <= installedVersionCode() ->
+                    if (announce) _state.update { it.copy(message = "You have the newest version") }
+                announce || r.versionCode != dismissedUpdate -> _state.update { s ->
+                    if (s.update?.release?.versionCode == r.versionCode) s else s.copy(update = UpdateState(r))
+                }
+            }
+        }
+    }
+
+    /** Update: download the new APK and open Android's installer (the user confirms there). */
+    fun startUpdate() {
+        val u = _state.value.update ?: return
+        if (u.progress != null) return
+        u.apk?.takeIf { it.exists() }?.let { install(it); return }
+        _state.update { it.copy(update = u.copy(progress = 0f, error = null)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val f = AppUpdate.download(appCtx, u.release) { p -> _state.update { s -> s.copy(update = s.update?.copy(progress = p)) } }
+                _state.update { s -> s.copy(update = s.update?.copy(progress = null, apk = f)) }
+                withContext(Dispatchers.Main) { install(f) }
+            } catch (t: Throwable) {
+                Log.w(TAG, "update download failed", t)
+                _state.update { s -> s.copy(update = s.update?.copy(progress = null, error = t.message ?: "download failed")) }
+            }
+        }
+    }
+
+    private fun install(apk: java.io.File) {
+        if (!AppUpdate.canInstall(appCtx)) {
+            // once: Android wants "allow from this source" for Card Scanner; back in the app it goes on
+            _state.update { s -> s.copy(update = s.update?.copy(needsPermission = true)) }
+            runCatching { appCtx.startActivity(AppUpdate.allowIntent(appCtx)) }
+            return
+        }
+        _state.update { s -> s.copy(update = s.update?.copy(needsPermission = false)) }
+        runCatching { appCtx.startActivity(AppUpdate.installIntent(appCtx, apk)) }.onFailure { t ->
+            _state.update { s -> s.copy(update = s.update?.copy(error = t.message ?: "installer didn't open")) }
+        }
+    }
+
+    /** The app is back in front: look for updates; after "allow from this source", go on installing. */
+    fun onResume() {
+        checkForUpdate()
+        val u = _state.value.update ?: return
+        if (u.needsPermission && u.apk != null && AppUpdate.canInstall(appCtx)) install(u.apk)
+    }
+
+    /** Later: hide it until the app starts again. */
+    fun dismissUpdate() {
+        dismissedUpdate = _state.value.update?.release?.versionCode ?: -1
+        _state.update { it.copy(update = null) }
+    }
 
     /** A picked photo: no guide frame, shown immediately and the camera pauses. */
     fun onPhoto(rgb: Mat) {

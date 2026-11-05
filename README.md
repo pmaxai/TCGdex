@@ -23,6 +23,12 @@ bottom of ⚙.
 New builds install over the old one (same signing key), so updating is the same two taps.
 Every data pipeline run with fresh prices also builds a new APK.
 
+**Updating:** when a newer build is out, the app shows a bar at the top: "New version
+1.1.57 · prices of 5 Nov (yours: 3 Nov)" with **Update**. One tap downloads it and opens
+Android's installer; confirm there (the first time, Android asks you to allow Card Scanner
+to install apps: allow it, come back, and it goes on). Your carts and settings stay.
+**Later** hides the bar until the next start; ⚙ → **Check for updates** looks again.
+
 **Fresh prices every night:** TCGdex updates its prices daily at about 23:50 CET. The data
 pipeline starts at 00:40 CET and the new APK (with that day's prices) is out at about
 02:30 CET, well before flea markets (6:00) and shows (10:00). Install it before you leave.

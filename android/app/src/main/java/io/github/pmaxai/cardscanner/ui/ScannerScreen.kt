@@ -167,15 +167,31 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
         }
     }
 
+    // back in the app: a newer build? (and after "allow from this source": go on installing)
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    androidx.compose.runtime.DisposableEffect(lifecycle) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) vm.onResume() }
+        lifecycle.addObserver(obs)
+        onDispose { lifecycle.removeObserver(obs) }
+    }
+
     Surface(Modifier.fillMaxSize(), color = Ink) {
-        when {
-            !openCvReady -> Message("OpenCV could not be loaded on this phone.")
-            state.error != null -> Message("Could not start: ${state.error}")
-            state.loading -> Loading(state.loadingText)
-            !granted -> Message("The scanner needs the camera.") { Button({ ask.launch(Manifest.permission.CAMERA) }) { Text("Allow camera") } }
-            state.settings.youtube -> YouTubeScreen(state, vm)
-            state.settings.trading -> TradingScreen(state, vm)
-            else -> Scanner(state, vm)
+        Column(Modifier.fillMaxSize()) {
+            // a newer app with newer prices (not over the YouTube picture)
+            state.update?.takeIf { !state.loading && !state.settings.youtube }?.let { u ->
+                UpdateBanner(u, state.pricesDate, onUpdate = vm::startUpdate, onLater = vm::dismissUpdate)
+            }
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                when {
+                    !openCvReady -> Message("OpenCV could not be loaded on this phone.")
+                    state.error != null -> Message("Could not start: ${state.error}")
+                    state.loading -> Loading(state.loadingText)
+                    !granted -> Message("The scanner needs the camera.") { Button({ ask.launch(Manifest.permission.CAMERA) }) { Text("Allow camera") } }
+                    state.settings.youtube -> YouTubeScreen(state, vm)
+                    state.settings.trading -> TradingScreen(state, vm)
+                    else -> Scanner(state, vm)
+                }
+            }
         }
         // after a double tap: the most likely cards to pick from
         state.picks?.let { PickList(it, state.shown, onPick = vm::pick, onSearch = { vm.openSearch(SearchMode.REPLACE) },
@@ -595,6 +611,15 @@ fun SettingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) {
                 val version = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() }
                 Text("Card Scanner ${version ?: ""}\n${state.packInfo}", color = Muted, fontSize = 11.sp,
                     modifier = Modifier.padding(top = 14.dp))
+                val u = state.update
+                if (u != null) {
+                    Text(updateLine(u, state.pricesDate), color = Gold, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+                    Button(onClick = { vm.startUpdate() }, modifier = Modifier.padding(top = 2.dp)) {
+                        Text(if (u.progress != null) "Downloading… ${(u.progress * 100).toInt()} %" else "Update now")
+                    }
+                } else {
+                    TextButton(onClick = { vm.checkForUpdate(announce = true) }) { Text("Check for updates") }
+                }
             }
         },
         confirmButton = { TextButton({ vm.updateSettings { it.copy(title = title) }; onClose() }) { Text("Done") } },
