@@ -225,3 +225,44 @@ def test_ppt_backfill_keeps_what_came_in(tmp_path, monkeypatch):
     ids, vals, _ = h.Archive(root).load(date(2026, 10, 1))
     assert sorted(ids.tolist()) == ["a-1", "a-3"]
     assert set((root / "ppt-done.txt").read_text().split()) == {"a-1", "a-3"}     # a-2 is asked again next time
+
+
+def test_one_tcgplayer_product_per_card(tmp_path):
+    """Base Set Charizard: Unlimited ($987) and Shadowless ($2,258) are both 'Holofoil'; the
+    backfill takes the one TCGdex prices, and earlier mixed days are read again."""
+    folder = tmp_path / "x" / "2026-10-01" / "3" / "604"
+    folder.mkdir(parents=True)
+    (folder / "prices").write_text(json.dumps({"success": True, "results": [
+        {"productId": 42382, "subTypeName": "Holofoil", "marketPrice": 987.13},
+        {"productId": 106999, "subTypeName": "Holofoil", "marketPrice": 2258.0},
+        {"productId": 106998, "subTypeName": "1st Edition Holofoil", "marketPrice": 30000.0}]}))
+    prod = {42382: "base1-4", 106999: "base1-4", 106998: "base1-4"}
+    choice = {}
+    ids, vals = h.parse_tcgcsv(tmp_path / "x", prod, {("base1-4", "tp_holo"): 98713}, choice)
+    assert vals[0][h.FI["tp_holo"]] == 98713 and vals[0][h.FI["tp_first"]] == 3000000
+    assert choice == {("base1-4", "tp_holo"): 42382}
+    # no reference: the cheaper product
+    ids, vals = h.parse_tcgcsv(tmp_path / "x", prod)
+    assert vals[0][h.FI["tp_holo"]] == 98713
+    # the clean-up: mixed cards lose their TCGplayer prices on TCGCSV days, those days are read again
+    db = tmp_path / "catalog.sqlite"
+    con = sqlite3.connect(db)
+    con.executescript(SCHEMA)
+    con.executemany("INSERT INTO card_products VALUES (?, 'holo', ?, NULL, ?)",
+                    [("base1-4", None, 42382), ("base1-4", "shadowless", 106999), ("sv06-034", None, 5551)])
+    con.commit()
+    con.close()
+    assert h.several_products(db) == {"base1-4"}
+    arc = h.Archive(tmp_path / "hist")
+    row = np.full(len(h.FIELDS), -1, dtype=np.int32)
+    row[h.FI["tp_holo"]] = 225800
+    d1, d2 = date(2026, 10, 1), date(2026, 11, 4)
+    arc.save(d1, ["base1-4", "sv06-034"], np.stack([row, row]), "tcgcsv")
+    arc.save(d2, ["base1-4"], row[None], "tcgdex")
+    done = {d1.isoformat(), "2026-09-01"}
+    assert h.reread_mixed_products(arc, done, {"base1-4"}) == 1
+    assert done == {"2026-09-01"}
+    ids, vals, _ = arc.load(d1)
+    got = dict(zip(ids.tolist(), vals[:, h.FI["tp_holo"]].tolist()))
+    assert got == {"base1-4": -1, "sv06-034": 225800}
+    assert arc.load(d2)[1][0][h.FI["tp_holo"]] == 225800          # TCGdex's own day stays

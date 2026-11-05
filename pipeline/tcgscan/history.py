@@ -20,6 +20,7 @@ import csv
 import io
 import json
 import logging
+import math
 import shutil
 import sqlite3
 import subprocess
@@ -190,9 +191,39 @@ def products(db: Path) -> dict[int, str]:
     return out
 
 
-def parse_tcgcsv(folder: Path, product_to_card: dict[int, str]) -> tuple[list[str], np.ndarray]:
-    """An extracted TCGCSV archive (date/category/group/prices JSON) -> our cards' TCGplayer prices."""
-    rows: dict[str, np.ndarray] = {}
+def reference_tp(db: Path) -> dict[tuple[str, str], int]:
+    """TCGdex's own TCGplayer price per (card, field), in cents: the series the daily snapshot
+    continues, so the backfill picks the same TCGplayer product."""
+    out: dict[tuple[str, str], int] = {}
+    con = sqlite3.connect(db)
+    try:
+        for cid, data in con.execute("SELECT id, data FROM prices_tcgplayer"):
+            try:
+                d = json.loads(data) if data else {}
+            except ValueError:
+                continue
+            for k, v in d.items():
+                field = tp_field(k)
+                if field and isinstance(v, dict):
+                    c = _cents(v.get("marketPrice") or v.get("midPrice"))
+                    if c > 0:
+                        out[(cid, field)] = c
+    except sqlite3.OperationalError:
+        pass
+    con.close()
+    return out
+
+
+def parse_tcgcsv(folder: Path, product_to_card: dict[int, str], ref: dict[tuple[str, str], int] | None = None,
+                 choice: dict[tuple[str, str], int] | None = None) -> tuple[list[str], np.ndarray]:
+    """An extracted TCGCSV archive (date/category/group/prices JSON) -> our cards' TCGplayer prices.
+
+    Several TCGplayer products can belong to one card and printing (Base Set Charizard:
+    Unlimited and Shadowless are both 'Holofoil'). The one whose price is nearest TCGdex's own
+    TCGplayer price [ref] is taken, and kept in [choice] for the next days of the run."""
+    ref = ref or {}
+    choice = {} if choice is None else choice
+    cand: dict[tuple[str, str], dict[int, int]] = {}
     for cat in TCGCSV_CATEGORIES:
         for f in folder.glob(f"*/{cat}/*/prices"):
             try:
@@ -200,19 +231,66 @@ def parse_tcgcsv(folder: Path, product_to_card: dict[int, str]) -> tuple[list[st
             except (OSError, ValueError):
                 continue
             for p in results:
-                cid = product_to_card.get(p.get("productId"))
+                pid = p.get("productId")
+                cid = product_to_card.get(pid)
                 field = tp_field(p.get("subTypeName"))
                 if not cid or not field:
                     continue
                 v = _cents(p.get("marketPrice") or p.get("midPrice"))
                 if v < 0:
                     continue
-                r = rows.get(cid)
-                if r is None:
-                    r = rows[cid] = np.full(len(FIELDS), -1, dtype=np.int32)
-                r[FI[field]] = v
+                cand.setdefault((cid, field), {})[pid] = v
+    rows: dict[str, np.ndarray] = {}
+    for (cid, field), by_product in cand.items():
+        pid = choice.get((cid, field))
+        if pid not in by_product:
+            if len(by_product) == 1:
+                pid = next(iter(by_product))
+            else:
+                r = ref.get((cid, field))
+                if r:
+                    pid = min(by_product, key=lambda k: abs(math.log(max(by_product[k], 1) / r)))
+                else:        # nothing to go by: the cheaper one (never overstate a card)
+                    pid = min(by_product, key=lambda k: by_product[k])
+                choice[(cid, field)] = pid
+        row = rows.get(cid)
+        if row is None:
+            row = rows[cid] = np.full(len(FIELDS), -1, dtype=np.int32)
+        row[FI[field]] = by_product[pid]
     ids = sorted(rows)
     return ids, (np.stack([rows[i] for i in ids]) if ids else np.zeros((0, len(FIELDS)), np.int32))
+
+
+ONE_PRODUCT = "tcgplayer-one-product-per-card"   # marker in tcgcsv-done.txt: the clean-up below ran
+
+
+def several_products(db: Path) -> set[str]:
+    """Cards that more than one TCGplayer product points at."""
+    seen: dict[str, set[int]] = {}
+    for pid, cid in products(db).items():
+        seen.setdefault(cid, set()).add(pid)
+    return {cid for cid, ps in seen.items() if len(ps) > 1}
+
+
+def reread_mixed_products(arc: "Archive", done: set[str], cards: set[str]) -> int:
+    """Earlier backfills mixed the products of such cards (the last one read won). Clears their
+    TCGplayer prices on TCGCSV's days and lets TCGCSV read those days again."""
+    tp = [FI[f] for f in FIELDS if f.startswith("tp_")]
+    n = 0
+    for d in sorted(arc.have()):
+        ids, vals, src = arc.load(d)
+        parts = src.split("+")
+        if "tcgcsv" not in parts or "tcgdex" in parts:
+            continue
+        rows = [i for i, c in enumerate(ids.tolist()) if c in cards]
+        if not rows:
+            continue
+        vals = vals.copy()
+        vals[np.ix_(rows, tp)] = -1
+        arc.write(d, ids.tolist(), vals, src)
+        done.discard(d.isoformat())
+        n += 1
+    return n
 
 
 TP_ONLY_TCGCSV = "tcgplayer-only-from-tcgcsv"     # marker in tcgcsv-done.txt: the clean-up below ran
@@ -250,6 +328,12 @@ def backfill_tcgcsv(db: Path, root: Path, today: date | None = None, max_files: 
         done.add(TP_ONLY_TCGCSV)
         done_file.write_text("\n".join(sorted(done)) + "\n")
         log.info("price history: TCGplayer prices from PokemonPriceTracker removed from %d days; TCGCSV reads them again", n)
+    if ONE_PRODUCT not in done and products(db):
+        mixed = several_products(db)
+        n = reread_mixed_products(arc, done, mixed)
+        done.add(ONE_PRODUCT)
+        done_file.write_text("\n".join(sorted(done)) + "\n")
+        log.info("price history: %d cards have several TCGplayer products; their prices on %d days are read again", len(mixed), n)
     want = [d for d in calendar(today) if TCGCSV_START <= d < today and d.isoformat() not in done]
     if not want:
         log.info("price history: TCGplayer backfill complete")
@@ -265,6 +349,7 @@ def backfill_tcgcsv(db: Path, root: Path, today: date | None = None, max_files: 
     s.headers["User-Agent"] = UA
     n = 0
     work = Path(root) / "tmp"
+    ref, choice = reference_tp(db), {}
     for d in sorted(want, reverse=True)[:max_files]:       # newest first: the 90 daily days matter most
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True)
@@ -287,7 +372,7 @@ def backfill_tcgcsv(db: Path, root: Path, today: date | None = None, max_files: 
         if res.returncode not in (0, 1):
             log.warning("TCGCSV %s: 7z failed: %s", d, res.stderr[-300:])
             continue
-        ids, vals = parse_tcgcsv(work, prod)
+        ids, vals = parse_tcgcsv(work, prod, ref, choice)
         if ids:
             arc.save(d, ids, vals, "tcgcsv", prefer_existing=True)
         done.add(d.isoformat())
