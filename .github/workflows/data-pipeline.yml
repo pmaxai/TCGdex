@@ -34,9 +34,8 @@ on:
         description: "Fill in Cardmarket price history from PokemonPriceTracker (uses most of the day's credits)"
         type: boolean
         default: true
-  # fresh prices every morning (a new APK follows automatically)
-  schedule:
-    - cron: "17 4 * * *"
+  # every night: started by the "Nightly start" workflow (nightly.yml) right after TCGdex's
+  # daily price update, because GitHub starts scheduled workflows hours late
   # adding your own photos re-runs the test automatically
   push:
     branches: [main]
@@ -50,6 +49,7 @@ concurrency:
 
 permissions:
   contents: write      # publishes the app's data pack as the release 'data-pack'
+  actions: write       # starts the Android build once the data pack is out
 
 jobs:
   pipeline:
@@ -94,8 +94,9 @@ jobs:
         run: |
           PRICE_FLAG=""
           if [ "$PRICES" != "true" ]; then PRICE_FLAG="--no-prices"; fi
+          # TCGdex updates its prices daily ~22:50 UTC: anything fetched before the last update is fetched again
           python -m tcgscan fetch --cache ../.cache/tcgdex --db ../out/catalog.sqlite \
-            --langs "$LANGS" --image-langs "$IMAGE_LANGS" --max-sets "$MAX_SETS" $PRICE_FLAG
+            --langs "$LANGS" --image-langs "$IMAGE_LANGS" --max-sets "$MAX_SETS" $PRICE_FLAG --fresh-after 23:15
 
       # cards TCGdex has no picture for (galleries, promos ...) can't be recognised; this
       # second source fills many of them. Optional: without it they just stay unrecognisable.
@@ -173,9 +174,6 @@ jobs:
           python -m tcgscan history ecb --dir $H
           # a backfill that stops early must not keep the archive from being saved
           python -m tcgscan history backfill --db ../out/catalog.sqlite --dir $H --max-files 160 || echo "TCGplayer backfill stopped"
-          if [ "$PSA" = "true" ] && [ "$HISTORY_BACKFILL" = "true" ]; then
-            python -m tcgscan history backfill-ppt --db ../out/catalog.sqlite --dir $H --budget 12000 --minutes 50 || echo "Cardmarket backfill stopped"
-          fi
           python -m tcgscan history pack-months --dir $H --months $H/months > $H/made.txt
           gh release view price-history >/dev/null 2>&1 || gh release create price-history --latest=false \
             --title "Price history archive" \
@@ -184,13 +182,6 @@ jobs:
           for f in ecb.csv tcgcsv-done.txt ppt-done.txt; do
             if [ -f $H/months/$f ]; then gh release upload price-history $H/months/$f --clobber; fi
           done
-
-      - name: Save price history cache
-        if: always() && env.MAX_SETS == '0'
-        uses: actions/cache/save@v4
-        with:
-          path: .cache/history
-          key: history-${{ github.run_id }}
 
       - name: Restore fingerprint cache
         uses: actions/cache/restore@v4
@@ -231,6 +222,39 @@ jobs:
             --title "Data pack for the app" \
             --notes "Fingerprint model, card index, catalog with Cardmarket prices. Built by the Data pipeline workflow; no card images."
           gh release upload data-pack out/app-pack/* --clobber
+
+      # the new data pack -> a new APK, right away (the history backfill below doesn't hold it up)
+      - name: Start the Android build
+        if: env.MAX_SETS == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/$GITHUB_REPOSITORY/actions/workflows/android.yml/dispatches" -f ref=main
+
+      # Cardmarket's past six months from PokemonPriceTracker, most valuable cards first, within
+      # the day's credits. After the data pack: what it adds is in tomorrow's. Optional.
+      - name: Cardmarket price history backfill (PokemonPriceTracker)
+        if: env.MAX_SETS == '0' && env.PSA == 'true' && env.HISTORY_BACKFILL == 'true'
+        continue-on-error: true
+        timeout-minutes: 60
+        working-directory: pipeline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          POKEMONPRICETRACKER_API_KEY: ${{ secrets.POKEMONPRICETRACKER_API_KEY }}
+        run: |
+          H=../.cache/history
+          rm -f $H/touched.txt
+          python -m tcgscan history backfill-ppt --db ../out/catalog.sqlite --dir $H --budget 12000 --minutes 50 || echo "Cardmarket backfill stopped"
+          python -m tcgscan history pack-months --dir $H --months $H/months > $H/made.txt
+          if [ -s $H/made.txt ]; then xargs -a $H/made.txt gh release upload price-history --clobber; fi
+          if [ -f $H/months/ppt-done.txt ]; then gh release upload price-history $H/months/ppt-done.txt --clobber; fi
+
+      - name: Save price history cache
+        if: always() && env.MAX_SETS == '0'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/history
+          key: history-${{ github.run_id }}
+
 
       - name: Show report on the run page
         if: always()

@@ -1,0 +1,92 @@
+name: Nightly start
+
+# Starts the Data pipeline every night right after TCGdex's daily price update (~22:50 UTC),
+# so the new data pack and APK are out at about 01:30 UTC (02:30 CET), long before the
+# morning.
+#
+# GitHub starts scheduled workflows late: hours late at busy times (7 h 40 min here in early
+# November). So this workflow is scheduled three times in the evening. The first copy that
+# runs waits until the start time and then starts the Data pipeline directly (a direct start
+# is immediate, it doesn't queue like a schedule); a copy that only runs after midnight starts
+# it at once. Every copy first checks whether tonight's pipeline is already running or done,
+# so it's started once a night.
+
+on:
+  schedule:
+    - cron: "17 18 * * *"
+    - cron: "17 20 * * *"
+    - cron: "17 22 * * *"
+  workflow_dispatch:
+    inputs:
+      now:
+        description: "Start the Data pipeline now (no waiting, no check for tonight's run)"
+        type: boolean
+        default: false
+      history_backfill:
+        description: "Pipeline: fill in Cardmarket price history (uses most of the day's PokemonPriceTracker credits)"
+        type: boolean
+        default: true
+
+# one copy at a time: a later copy waits, then sees tonight's pipeline and stops
+concurrency:
+  group: nightly-start
+  cancel-in-progress: false
+
+permissions:
+  actions: write       # starts the Data pipeline
+
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      GH_TOKEN: ${{ github.token }}
+      START: "23:40"     # UTC, after TCGdex's price update (~22:50 UTC)
+      SINCE: "23:15"     # UTC, a Data pipeline run since then is tonight's
+      NOW: ${{ inputs.now || 'false' }}
+      BACKFILL: ${{ github.event_name == 'workflow_dispatch' && !inputs.history_backfill && 'false' || 'true' }}
+    steps:
+      - name: Wait for the start time
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_ENV"
+          import os
+          from datetime import datetime, timedelta, timezone
+          now = datetime.now(timezone.utc)
+          def at(hm, day):
+              h, m = (int(x) for x in hm.split(":"))
+              return day.replace(hour=h, minute=m, second=0, microsecond=0)
+          evening = now.hour >= 12                      # a copy for tonight; after midnight: for the night just passed
+          night = now if evening else now - timedelta(days=1)
+          wait = (at(os.environ["START"], night) - now).total_seconds() if evening else 0
+          if os.environ["NOW"] == "true":
+              wait = 0
+          print(f"WAIT={max(0, int(wait))}")
+          print(f"SINCE_TS={at(os.environ['SINCE'], night).strftime('%Y-%m-%dT%H:%M:%SZ')}")
+          EOF
+          echo "now $(date -u +%H:%M) UTC, waiting $(cat "$GITHUB_ENV" | grep WAIT)"
+
+      - name: Sleep
+        run: |
+          w="${WAIT:-0}"
+          if [ "$w" -gt 20700 ]; then
+            echo "Too early (more than 5 h 45 min to wait); a later copy starts the pipeline."
+            echo "SKIP=true" >> "$GITHUB_ENV"
+          elif [ "$w" -gt 0 ]; then
+            sleep "$w"
+          fi
+
+      - name: Start the Data pipeline (once a night)
+        if: env.SKIP != 'true'
+        run: |
+          if [ "$NOW" != "true" ]; then
+            tonight=$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/data-pipeline.yml/runs" \
+              -f created=">=$SINCE_TS" -f per_page=30 \
+              -q '[.workflow_runs[] | select(.status != "completed" or .conclusion == "success")] | length')
+            if [ "${tonight:-0}" -gt 0 ]; then
+              echo "Tonight's Data pipeline is already running or done (since $SINCE_TS)."
+              exit 0
+            fi
+          fi
+          gh api -X POST "repos/$GITHUB_REPOSITORY/actions/workflows/data-pipeline.yml/dispatches" \
+            -f ref=main -f "inputs[history_backfill]=$BACKFILL"
+          echo "Data pipeline started at $(date -u +%H:%M) UTC."

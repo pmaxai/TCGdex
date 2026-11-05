@@ -71,6 +71,17 @@ def image_path(cache_dir: Path, lang: str, set_id: str, card_id: str) -> Path:
     return Path(cache_dir) / "img" / lang / safe_name(set_id) / (safe_name(card_id) + ".webp")
 
 
+def hours_since_utc(hhmm: str, now: "datetime | None" = None) -> float:
+    """Hours since the latest occurrence of a UTC time of day ("23:15")."""
+    from datetime import datetime, timedelta, timezone
+    now = now or datetime.now(timezone.utc)
+    h, m = (int(x) for x in hhmm.split(":"))
+    last = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    if last > now:
+        last -= timedelta(days=1)
+    return (now - last).total_seconds() / 3600
+
+
 def pick_sets(set_ids: list[str], max_sets: int) -> list[str]:
     """Evenly spaced subset (old and new eras) for quick test runs."""
     if not max_sets or max_sets >= len(set_ids):

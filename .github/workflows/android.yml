@@ -10,11 +10,8 @@ on:
     paths:
       - "android/**"
       - ".github/workflows/android.yml"
-  # a new data pack (prices, cards) -> a new APK
-  workflow_run:
-    workflows: ["Data pipeline"]
-    types: [completed]
-    branches: [main]
+  # a new data pack (prices, cards) -> a new APK: the Data pipeline starts this workflow
+  # (workflow_dispatch) as soon as it has published the pack
 
 concurrency:
   group: android

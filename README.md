@@ -23,6 +23,10 @@ bottom of ⚙.
 New builds install over the old one (same signing key), so updating is the same two taps.
 Every data pipeline run with fresh prices also builds a new APK.
 
+**Fresh prices every night:** TCGdex updates its prices daily at about 23:50 CET. The data
+pipeline starts at 00:40 CET and the new APK (with that day's prices) is out at about
+02:30 CET, well before flea markets (6:00) and shows (10:00). Install it before you leave.
+
 ## Restore points
 
 Go to **Actions → Restore point → Run workflow** and give it a name like `v0.2`
@@ -263,7 +267,15 @@ Everything runs on GitHub. Nothing needs installing.
 
 - **Manually:** go to **Actions → Data pipeline → Run workflow**. For a quick first look,
   set `max_sets` to `15` (about 10 min); `0` runs the full catalog.
-- **Automatically:** whenever photos are added to `testdata/real/`.
+- **Automatically:** every night (see below), and whenever photos are added to `testdata/real/`.
+- **Every night:** the **Nightly start** workflow starts the pipeline at 23:40 UTC, right
+  after TCGdex's daily price update. GitHub starts scheduled workflows late (hours, at busy
+  times), so Nightly start is scheduled three times in the evening (18:17, 20:17, 22:17
+  UTC): the first copy that runs waits until 23:40 and starts the pipeline directly (no
+  queue); a copy that only runs after midnight starts it at once; the others see tonight's
+  run and stop. The pipeline publishes the data pack and starts the Android build at once;
+  the 50-minute Cardmarket history backfill runs after that, so it doesn't hold up the APK.
+  To start a night run by hand: **Actions → Nightly start → Run workflow** with `now` ticked.
 
 **Where the results are:** open the run. Its **Summary** page shows the report.
 Further down, *Artifacts* has two downloads:

@@ -21,6 +21,8 @@ def main(argv: list[str] | None = None) -> None:
     f.add_argument("--max-sets", type=int, default=0, help="0 = all sets; N = evenly spread subset for quick tests")
     f.add_argument("--workers", type=int, default=8)
     f.add_argument("--exclude-series", default="tcgp", help="TCGdex series ids to skip (tcgp = TCG Pocket, digital only)")
+    f.add_argument("--fresh-after", default=None, metavar="HH:MM",
+                   help="UTC time of TCGdex's daily price update: prices fetched before its latest occurrence are fetched again")
 
     e = sub.add_parser("evaluate", help="accuracy test on synthetic + real photos")
     e.add_argument("--cache", type=Path, default=Path(".cache/tcgdex"))
@@ -79,7 +81,11 @@ def main(argv: list[str] | None = None) -> None:
         from .catalog import fetch_catalog
         from .tcgdex import TCGdexClient
         client = TCGdexClient(a.cache, workers=a.workers)
+        from .catalog import hours_since_utc
+        age = hours_since_utc(a.fresh_after) if a.fresh_after else 20.0
+        logging.getLogger("tcgscan").info("prices: cached card details younger than %.1f h are kept", age)
         fetch_catalog(client, a.db, [x.strip() for x in a.langs.split(",") if x.strip()], a.price_lang,
+                      details_max_age_h=age,
                       with_details=not a.no_prices, download_images=not a.no_images, max_sets=a.max_sets,
                       exclude_series=tuple(x.strip() for x in a.exclude_series.split(",") if x.strip()),
                       image_langs=[x.strip() for x in a.image_langs.split(",") if x.strip()])
