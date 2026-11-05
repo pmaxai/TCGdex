@@ -187,3 +187,41 @@ def test_tcgplayer_only_from_tcgcsv(tmp_path):
     _, series, _ = h.app_series(root, today, {"sv06-034", "base1-4"})
     assert ("sv06-034", "cm_trend") not in series
     assert ("base1-4", "cm_trend") in series
+
+
+def test_ppt_backfill_keeps_what_came_in(tmp_path, monkeypatch):
+    """A dropped connection skips the card; what came in before and after is saved."""
+    import requests
+    from tcgscan import graded
+
+    calls = []
+
+    class FakeClient:
+        daily_remaining = 15000
+
+        def __init__(self, key, cache):
+            pass
+
+        def get(self, path, params):
+            calls.append(params["tcgPlayerId"])
+            if params["tcgPlayerId"] == "2":
+                raise requests.ConnectionError("Remote end closed connection without response")
+            return {"data": {"cardmarketPrices": {"variants": {"Normal": {"history": [
+                {"date": "2026-10-01T00:00:00.000Z", "trendEur": 1.5}]}}}}}
+
+    monkeypatch.setattr(graded, "Client", FakeClient)
+    monkeypatch.setattr(h.time, "sleep", lambda s: None)
+    db = tmp_path / "catalog.sqlite"
+    con = sqlite3.connect(db)
+    con.executescript(SCHEMA)
+    for i, cid in enumerate(["a-1", "a-2", "a-3"], start=1):
+        con.execute("INSERT INTO card_products VALUES (?, 'normal', NULL, NULL, ?)", (cid, i))
+        con.execute("INSERT INTO prices_cardmarket(id, trend) VALUES (?, ?)", (cid, 10.0 - i))
+    con.commit()
+    con.close()
+    root = tmp_path / "hist"
+    assert h.backfill_ppt(db, root, key="k") == 2
+    assert calls == ["1", "2", "3"]
+    ids, vals, _ = h.Archive(root).load(date(2026, 10, 1))
+    assert sorted(ids.tolist()) == ["a-1", "a-3"]
+    assert set((root / "ppt-done.txt").read_text().split()) == {"a-1", "a-3"}     # a-2 is asked again next time

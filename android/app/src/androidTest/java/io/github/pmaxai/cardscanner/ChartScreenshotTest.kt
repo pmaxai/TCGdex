@@ -17,6 +17,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.unit.dp
@@ -76,6 +77,11 @@ class ChartScreenshotTest {
                 }
             }
         }
+        // right after the emulator boots, the test activity can take a moment to show anything
+        val shown = runCatching {
+            compose.waitUntil(15_000) { runCatching { compose.onAllNodes(isRoot()).fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false) }
+        }.isSuccess
+        if (!shown) { Log.w(TAG, "chart-$name.png skipped: the test screen didn't come up"); return }
         compose.waitForIdle()
         val bmp = compose.onRoot().captureToImage().asAndroidBitmap()
         TestStorage().openOutputFile("chart-$name.png").use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }

@@ -362,7 +362,7 @@ def backfill_ppt(db: Path, root: Path, budget: int = 12000, minutes: float = 25,
     client = Client(key, root / "ppt-cache")
     today = date.today()
     per_day: dict[date, dict[str, np.ndarray]] = {}
-    spent, n, t0 = 0, 0, time.time()
+    spent, n, t0, errors = 0, 0, time.time(), 0
     try:
         for cid, tp in todo:
             if spent + 6 > budget or time.time() - t0 > minutes * 60:
@@ -371,8 +371,19 @@ def backfill_ppt(db: Path, root: Path, budget: int = 12000, minutes: float = 25,
                 log.info("price history: keeping %d credits for tomorrow", client.daily_remaining)
                 break
             before = client.daily_remaining
-            resp = client.get("cards", {"tcgPlayerId": str(tp), "includeHistory": "true", "includeCardmarket": "true",
-                                        "days": str(days)})
+            try:
+                resp = client.get("cards", {"tcgPlayerId": str(tp), "includeHistory": "true", "includeCardmarket": "true",
+                                            "days": str(days)})
+            except RateLimited:
+                raise
+            except Exception as ex:           # a dropped connection or a timeout: skip the card, stop after a few
+                errors += 1
+                log.warning("price history: PokemonPriceTracker, card %s: %s", cid, str(ex)[:200])
+                if errors >= 5:
+                    log.warning("price history: too many errors from PokemonPriceTracker, stopping for today")
+                    break
+                time.sleep(15)
+                continue
             used = (before - client.daily_remaining) if (before is not None and client.daily_remaining is not None) else 6
             spent += used if 0 <= used <= 60 else 6          # the day's allowance resets at midnight UTC
             card = resp.get("data") if isinstance(resp, dict) else None
@@ -391,11 +402,13 @@ def backfill_ppt(db: Path, root: Path, budget: int = 12000, minutes: float = 25,
             time.sleep(1.0)          # 60 requests a minute
     except RateLimited as ex:
         log.info("price history: PokemonPriceTracker stopped us: %s", ex)
-    arc = Archive(root)
-    for d, rows in per_day.items():
-        ids = sorted(rows)
-        arc.save(d, ids, np.stack([rows[i] for i in ids]), "ppt", prefer_existing=True)
-    done_file.write_text("\n".join(sorted(done)) + "\n")
+    finally:
+        # whatever came in is kept, also when something unexpected stops the run
+        arc = Archive(root)
+        for d, rows in per_day.items():
+            ids = sorted(rows)
+            arc.save(d, ids, np.stack([rows[i] for i in ids]), "ppt", prefer_existing=True)
+        done_file.write_text("\n".join(sorted(done)) + "\n")
     log.info("price history: Cardmarket history of %d cards from PokemonPriceTracker (%d credits, %d days written), %d cards left",
              n, spent, len(per_day), len(todo) - n)
     return n
