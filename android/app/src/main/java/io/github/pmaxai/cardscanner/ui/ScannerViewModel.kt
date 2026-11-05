@@ -752,7 +752,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                 else cart.lines + CartLine(id = now, cardId = s.version.id, lang = s.version.lang, group = s.group,
                     name = s.version.name, setLine = s.version.setLine(), image = s.imageCard?.thumbnailUrl,
                     printing = printing, reference = ref, condition = st.draft.condition, asking = st.draft.asking, added = now,
-                    side = side)
+                    side = side, priceDoubt = ref != null && s.priceCard.priceCheck != null)
             b.replace(cart.copy(lines = lines, trade = cart.trade || side == Side.GIVE))
         }
         val where = if (st.scanTarget == Side.GIVE) "I give ($cartName)" else cartName

@@ -71,6 +71,14 @@ downgrades), or restore the code from the tag.
   (about 2,500 cards a day within the plan's daily credits, most valuable cards first). A
   single reading far off its neighbours (a glitch) is left out; a day without a reading
   takes the nearest one within 3 days.
+- **Price check:** the card database (TCGdex) links some cards to the wrong Cardmarket
+  product, so they carry another card's price (a common Plinfa 54/236 showed the secret
+  rare Plinfa 239/236's €39.74). The data pipeline finds cards that share exactly the same
+  Cardmarket figures and keeps the price only for the card whose TCGplayer price fits it;
+  the others show TCGplayer converted to euros with "No reliable Cardmarket price". Where it
+  can't tell, the price stays with a warning, and any card worth €3 or more whose Cardmarket
+  and TCGplayer prices are over 4x apart gets "check before you pay". Trading Mode gives
+  no deal verdict on such prices ("Check price").
 - **PSA 10 / 9 / 8:** recent eBay sold prices for graded copies (USD) of the printing
   you selected: a graded reverse holo has its own prices. If only another printing has
   sales, the app says so instead of showing the wrong price. Switch them on or off in ⚙.

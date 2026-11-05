@@ -573,9 +573,15 @@ def write_app_history(con: sqlite3.Connection, root: Path, today: date | None = 
     cal, series, rates = app_series(root, today, ids)
     con.executescript(HISTORY_SCHEMA)
     con.execute("DELETE FROM history")
+    # cards whose Cardmarket price was another card's (pricecheck): their Cardmarket past is too
+    no_cm = set()
+    if con.execute("SELECT 1 FROM sqlite_master WHERE name = 'price_check'").fetchone():
+        no_cm = {r[0] for r in con.execute("SELECT id FROM price_check WHERE status = 'dropped'")}
     rows = []
     for (cid, f), a in series.items():
         if np.isfinite(a).sum() < 2:          # one point is not a line
+            continue
+        if cid in no_cm and f.startswith("cm_"):
             continue
         # float16 halves the size; a price above its range (65,504) keeps the series in float32
         big = np.nanmax(a) > F16_MAX

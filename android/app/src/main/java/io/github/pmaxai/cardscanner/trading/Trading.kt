@@ -163,18 +163,20 @@ data class CartLine(
     val added: Long,
     /** I get (buy, trade in) or I give (sell, trade away); for I give, asking = the vendor's offer */
     val side: Side = Side.GET,
+    /** the Cardmarket price was in doubt (price check): no deal verdict on it */
+    val priceDoubt: Boolean = false,
 ) {
     val market: Double? get() = reference?.let { TradingMath.market(it, condition) }
     /** one piece: the negotiated price, else the asking price (I give: the vendor's offer) */
     val price: Double? get() = negotiated ?: asking
     /** buying: the price against the market value */
     val verdict: Verdict? get() {
-        if (side != Side.GET) return null
+        if (side != Side.GET || priceDoubt) return null
         val p = price ?: return null; val m = market ?: return null; return TradingMath.verdict(p, m)
     }
     /** selling: the vendor's offer against the market value */
     val sellVerdict: SellVerdict? get() {
-        if (side != Side.GIVE) return null
+        if (side != Side.GIVE || priceDoubt) return null
         val p = price ?: return null; val m = market ?: return null; return TradingMath.sellVerdict(p, m)
     }
     val active: Boolean get() = status != LineStatus.DROPPED
@@ -339,7 +341,7 @@ private fun CartLine.toJson() = JSONObject().apply {
     put("image", image ?: JSONObject.NULL); put("printing", printing ?: JSONObject.NULL)
     put("reference", reference ?: JSONObject.NULL); put("condition", condition.name); put("qty", qty)
     put("asking", asking ?: JSONObject.NULL); put("negotiated", negotiated ?: JSONObject.NULL)
-    put("status", status.name); put("added", added); put("side", side.name)
+    put("status", status.name); put("added", added); put("side", side.name); put("priceDoubt", priceDoubt)
 }
 
 private fun JSONObject.str(k: String): String? = if (!has(k) || isNull(k)) null else optString(k)
@@ -363,6 +365,7 @@ private fun lineFromJson(o: JSONObject) = CartLine(
     status = runCatching { LineStatus.valueOf(o.optString("status")) }.getOrDefault(LineStatus.CONSIDERING),
     added = o.optLong("added"),
     side = runCatching { Side.valueOf(o.optString("side", "GET")) }.getOrDefault(Side.GET),
+    priceDoubt = o.optBoolean("priceDoubt", false),
 )
 
 /** Carts on the phone: one JSON file, written whole and swapped in, so a crash never leaves half a file. */

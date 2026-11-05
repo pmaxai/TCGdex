@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
+import io.github.pmaxai.cardscanner.data.PriceCheck
 import io.github.pmaxai.cardscanner.trading.Cart
 import io.github.pmaxai.cardscanner.trading.CartLine
 import io.github.pmaxai.cardscanner.trading.Condition
@@ -90,7 +91,9 @@ fun verdictColor(v: Verdict?): Color = when (v) {
 }
 
 /** A number to type on the pad: what it is for, where it starts, the market value for the quick buttons, its unit. */
-class PadRequest(val title: String, val initial: Double?, val market: Double?, val unit: String = "€", val onDone: (Double?) -> Unit)
+class PadRequest(val title: String, val initial: Double?, val market: Double?, val unit: String = "€",
+                 /** false: the market value is in doubt, so no deal verdict while typing */
+                 val verdicts: Boolean = true, val onDone: (Double?) -> Unit)
 
 private val GiveBlue = Color(0xFF6FA8FF)
 
@@ -274,8 +277,11 @@ private fun CardPrice(s: Shown, state: UiState, vm: ScannerViewModel, onPad: (Pa
 
     // market value for this condition, and where it comes from
     Spacer(Modifier.height(6.dp))
+    val check = s.priceCard.priceCheck
     if (market == null) {
-        Text("No Cardmarket price" + (p?.usd?.let { " · TCGplayer ${usd(it)}" } ?: ""), color = Warn, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        val head = if (check?.status == PriceCheck.Status.DROPPED) "No reliable Cardmarket price" else "No Cardmarket price"
+        val tcg = p?.usd?.let { u -> " · TCGplayer ${usd(u)}" + (p.usdEur?.let { " ≈ ${eur(it)}" } ?: "") } ?: ""
+        Text(head + tcg, color = Warn, fontSize = 15.sp, fontWeight = FontWeight.Bold)
     } else {
         Row(verticalAlignment = Alignment.Bottom) {
             Text(eur(market), color = Gold, fontSize = 30.sp, fontWeight = FontWeight.Black, maxLines = 1)
@@ -301,6 +307,7 @@ private fun CardPrice(s: Shown, state: UiState, vm: ScannerViewModel, onPad: (Pa
 
     // warnings: a thin price is not to be trusted blindly
     val warnings = buildList {
+        check?.let { add(it.message) }
         if (TradingMath.fewSales(p)) add("Few sales – check Cardmarket before you pay")
         if (s.pricedFromEnglish) add("Price of the English version (none for this language)")
         priceAgeDays(s.priceCard.prices?.updated)?.takeIf { it > 3 }?.let { add("Prices are $it days old – update the app before a show") }
@@ -312,11 +319,14 @@ private fun CardPrice(s: Shown, state: UiState, vm: ScannerViewModel, onPad: (Pa
     val give = state.scanTarget == Side.GIVE
     val asking = draft.asking
     val badge: Pair<String, Color>? = if (asking != null && market != null) {
-        if (give) TradingMath.sellVerdict(asking, market)?.let { it.label to sellColor(it) }
-        else TradingMath.verdict(asking, market)?.let { it.label to verdictColor(it) }
+        when {
+            check != null -> "Check price" to Muted          // no deal verdict on a doubtful Cardmarket price
+            give -> TradingMath.sellVerdict(asking, market)?.let { it.label to sellColor(it) }
+            else -> TradingMath.verdict(asking, market)?.let { it.label to verdictColor(it) }
+        }
     } else null
     Row(Modifier.fillMaxWidth().border(1.dp, if (give) GiveBlue else Color(0xFF3A3D45), RoundedCornerShape(10.dp))
-        .clickable { onPad(PadRequest(if (give) "Vendor's offer for your card" else "Asking price", asking, market) { vm.setAsking(it) }) }
+        .clickable { onPad(PadRequest(if (give) "Vendor's offer for your card" else "Asking price", asking, market, verdicts = check == null) { vm.setAsking(it) }) }
         .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(when {
             asking == null && give -> "Type the vendor's offer"
@@ -398,7 +408,7 @@ fun NumberPad(r: PadRequest, onClose: () -> Unit) {
                 val m = r.market
                 if (m != null) {
                     value()?.let { v ->
-                        val vd = TradingMath.verdict(v, m)
+                        val vd = if (r.verdicts) TradingMath.verdict(v, m) else null
                         Text("${(v / m * 100).roundToInt()} % of market ${eur(m)}" + (vd?.let { " · ${it.label}" } ?: ""),
                             color = verdictColor(vd), fontSize = 13.sp)
                     }
@@ -632,7 +642,8 @@ private fun CartLineRow(l: CartLine, selecting: Boolean, selected: Boolean, onCl
             }, color = if (l.price == null) Muted else color.copy(alpha = faded), fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1)
             if (l.negotiated != null && l.asking != null && l.negotiated != l.asking) {
                 Text("${if (l.side == Side.GIVE) "offered" else "asked"} ${eur(l.asking)}", color = Muted, fontSize = 11.sp, maxLines = 1)
-            } else (l.verdict?.label ?: l.sellVerdict?.label)?.let { Text(it, color = Muted, fontSize = 11.sp, maxLines = 1) }
+            } else (l.verdict?.label ?: l.sellVerdict?.label ?: if (l.priceDoubt && l.price != null) "check price" else null)
+                ?.let { Text(it, color = Muted, fontSize = 11.sp, maxLines = 1) }
         }
     }
 }
@@ -767,15 +778,17 @@ private fun LineEditor(c: Cart, l: CartLine, vm: ScannerViewModel, onPad: (PadRe
                     OutlinedButton({ change { it.copy(qty = it.qty + 1) } }) { Text("+") }
                 }
                 PriceField(if (give) "Vendor's offer (each)" else "Asking price (each)", l.asking) {
-                    onPad(PadRequest(if (give) "Vendor's offer" else "Asking price", l.asking, l.market) { v -> change { it.copy(asking = v) } })
+                    onPad(PadRequest(if (give) "Vendor's offer" else "Asking price", l.asking, l.market, verdicts = !l.priceDoubt) { v -> change { it.copy(asking = v) } })
                 }
                 PriceField(if (give) "Agreed (each)" else "Negotiated price (each)", l.negotiated ?: l.asking,
                     note = if (l.negotiated == null && l.asking != null) "= ${if (give) "offer" else "asking"}" else null) {
-                    onPad(PadRequest(if (give) "Agreed price" else "Negotiated price", l.negotiated ?: l.asking, l.market) { v -> change { it.copy(negotiated = v) } })
+                    onPad(PadRequest(if (give) "Agreed price" else "Negotiated price", l.negotiated ?: l.asking, l.market, verdicts = !l.priceDoubt) { v -> change { it.copy(negotiated = v) } })
                 }
                 (l.verdict?.let { it.label to verdictColor(it) } ?: l.sellVerdict?.let { it.label to sellColor(it) })?.let { (t, col) ->
                     Text(t, color = col, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
                 }
+                if (l.priceDoubt) Text("⚠ The Cardmarket price of this card is in doubt – check it before you pay", color = Warn,
+                    fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
                 Text("Status", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     listOf(LineStatus.CONSIDERING, LineStatus.AGREED, LineStatus.DROPPED).forEach { st ->

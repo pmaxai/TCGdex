@@ -420,17 +420,25 @@ private fun PriceBlock(s: Shown) {
         return
     }
     Row(verticalAlignment = Alignment.Bottom) {
-        Text(if (p.eur != null) eur(p.eur) else usd(p.usd), color = Gold, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+        Text(when {
+            p.eur != null -> eur(p.eur)
+            p.usdEur != null -> "≈ ${eur(p.usdEur)}"
+            else -> usd(p.usd)
+        }, color = Gold, fontSize = 30.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.width(8.dp))
-        Text(if (p.eur != null) "Cardmarket trend · ${p.kind.label}" else "TCGplayer · ${p.kind.label}", color = Muted,
-            fontSize = 12.sp, modifier = Modifier.padding(bottom = 6.dp))
+        Text(when {
+            p.eur != null -> "Cardmarket trend · ${p.kind.label}"
+            p.usdEur != null -> "TCGplayer in € · ${p.kind.label}"
+            else -> "TCGplayer · ${p.kind.label}"
+        }, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 6.dp))
     }
     val parts = buildList {
         if (p.eur30 != null) add("30-day avg ${eur(p.eur30)}")
         if (p.eurLow != null) add("from ${eur(p.eurLow)}")
-        if (p.usd != null && p.eur != null) add("TCGplayer ${usd(p.usd)}")
+        if (p.usd != null && (p.eur != null || p.usdEur != null)) add("TCGplayer ${usd(p.usd)}")
     }
     if (parts.isNotEmpty()) Text(parts.joinToString(" · "), color = Color.White, fontSize = 13.sp)
+    s.priceCard.priceCheck?.let { Text("⚠ ${it.message}", color = Warn, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp)) }
     if (s.pricedFromEnglish) Text("Price of the English version (no price for this language)", color = Muted, fontSize = 11.sp)
     s.priceCard.prices?.updated?.let { Text("Prices from ${it.take(10)}", color = Muted, fontSize = 11.sp) }
 }

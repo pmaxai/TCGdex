@@ -273,6 +273,26 @@ class ParityTest {
     }
 
     @Test
+    fun packPriceCheck() {
+        val has = pack.db.rawQuery("SELECT 1 FROM sqlite_master WHERE name = 'price_check'", null).use { it.moveToFirst() }
+        if (!has) { Log.i(TAG, "this data pack has no price check yet"); return }
+        val counts = pack.db.rawQuery("SELECT status, COUNT(*) FROM price_check GROUP BY status", null).use { c ->
+            buildMap { while (c.moveToNext()) put(c.getString(0), c.getInt(1)) }
+        }
+        val cat = Catalog(pack.db)
+        // the two cards reported: commons that carried their secret rare's Cardmarket price
+        val seen = listOf("sm12-54", "sm12-68").map { id ->
+            val card = cat.cardExact(id, "de") ?: cat.cardExact(id, "en")!!
+            id to "${card.name}: ${card.priceCheck?.status}, ${card.printings.map { "${it.kind} ${it.eur} / ${it.usdEur}" }}"
+        }
+        Log.i(TAG, "price check: $counts; $seen")
+        for (id in listOf("sm12-54", "sm12-68")) {
+            val card = cat.cardExact(id, "en")!!
+            assertTrue("$id still has a Cardmarket price over 5 EUR", card.printings.all { (it.eur ?: 0.0) < 5.0 })
+        }
+    }
+
+    @Test
     fun excludedCardsAreNeverMatched() {
         val m = io.github.pmaxai.cardscanner.vision.Matcher(pack.index, pack.n, pack.dim, pack.entryGroup)
         val rnd = java.util.Random(11)

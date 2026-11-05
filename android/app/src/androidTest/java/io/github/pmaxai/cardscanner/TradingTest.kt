@@ -94,6 +94,20 @@ class TradingTest {
     }
 
     @Test
+    fun aDoubtfulPriceGetsNoVerdictAndIsRemembered() {
+        val l = line(7, "Plinfa", 39.74, Condition.NM, 5.0, null)
+        assertEquals(Verdict.GREAT, l.verdict)
+        val doubt = l.copy(priceDoubt = true)
+        assertNull(doubt.verdict)
+        assertNull(doubt.copy(side = Side.GIVE).sellVerdict)
+        val dir = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, "trading-doubt").apply { deleteRecursively() }
+        val store = TradingStore(File(dir, "trading.json"))
+        val (b, cart) = TradingBook().withActive(1)
+        store.save(b.replace(cart.copy(lines = listOf(doubt))))
+        assertTrue(store.load().carts.single().lines.single().priceDoubt)
+    }
+
+    @Test
     fun cartsKeepTheirNumbersAndSurviveARestart() {
         var b = TradingBook().newCart(1).newCart(2)
         assertEquals(listOf("Booth 1", "Booth 2"), b.carts.map { it.name })

@@ -132,7 +132,11 @@ def write_catalog(src_db: Path, dst_db: Path, entries, meta: dict, groups: list[
         INSERT INTO prices SELECT id, updated, trend, avg, low, avg1, avg7, avg30, trend_holo, avg_holo, low_holo,
             avg30_holo FROM src.prices_cardmarket;
         CREATE INDEX cards_id ON cards(id);
+        CREATE TABLE price_check(id TEXT PRIMARY KEY, status TEXT NOT NULL, cm_trend REAL, tp_lo REAL, tp_hi REAL, others TEXT);
     """)
+    # the price check's verdicts (pricecheck.py): Cardmarket prices dropped, uncertain or far from TCGplayer
+    if con.execute("SELECT 1 FROM src.sqlite_master WHERE name = 'price_check'").fetchone():
+        con.execute("INSERT INTO price_check SELECT id, status, cm_trend, tp_lo, tp_hi, others FROM src.price_check")
     # pictures from the second source (altimages) for cards TCGdex has none for, if that step ran
     src_cols = {r[1] for r in con.execute("PRAGMA src.table_info(cards)")}
     alt = "c.image_alt, c.image_alt_large" if "image_alt" in src_cols else "NULL, NULL"

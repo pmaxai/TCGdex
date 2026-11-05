@@ -215,6 +215,10 @@ def fetch_catalog(client: TCGdexClient, out_db: Path, langs: list[str], price_la
     }
     con.executemany("INSERT INTO meta VALUES (?,?)", meta.items())
     con.commit()
+    # Cardmarket prices TCGdex linked to the wrong card: out before anything uses them
+    if cm_rows:
+        from . import pricecheck
+        pricecheck.run(con)
     con.close()
     log.info("catalog written to %s in %.0fs (%d HTTP requests)", out_db, time.time() - t0, client.http_requests)
     return stats

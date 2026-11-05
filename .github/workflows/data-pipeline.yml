@@ -30,6 +30,10 @@ on:
         description: "Fetch PSA 10/9/8 prices (PokemonPriceTracker, needs the POKEMONPRICETRACKER_API_KEY secret)"
         type: boolean
         default: true
+      history_backfill:
+        description: "Fill in Cardmarket price history from PokemonPriceTracker (uses most of the day's credits)"
+        type: boolean
+        default: true
   # fresh prices every morning (a new APK follows automatically)
   schedule:
     - cron: "17 4 * * *"
@@ -59,6 +63,7 @@ jobs:
       MAX_SETS: ${{ inputs.max_sets || '0' }}
       PRICES: ${{ github.event_name != 'workflow_dispatch' || inputs.prices }}
       PSA: ${{ github.event_name != 'workflow_dispatch' || inputs.psa }}
+      HISTORY_BACKFILL: ${{ github.event_name != 'workflow_dispatch' || inputs.history_backfill }}
     steps:
       - uses: actions/checkout@v5
 
@@ -167,7 +172,7 @@ jobs:
           python -m tcgscan history record --db ../out/catalog.sqlite --dir $H
           python -m tcgscan history ecb --dir $H
           python -m tcgscan history backfill --db ../out/catalog.sqlite --dir $H --max-files 160
-          if [ "$PSA" = "true" ]; then
+          if [ "$PSA" = "true" ] && [ "$HISTORY_BACKFILL" = "true" ]; then
             python -m tcgscan history backfill-ppt --db ../out/catalog.sqlite --dir $H --budget 12000 --minutes 50
           fi
           python -m tcgscan history pack-months --dir $H --months $H/months > $H/made.txt

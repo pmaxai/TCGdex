@@ -21,12 +21,48 @@ data class Printing(
     val eur: Double?, val eur30: Double?, val eurLow: Double?,
     /** TCGplayer market price, USD */
     val usd: Double?,
+    /** the TCGplayer price in EUR at the data pack's exchange rate (null: no rate in the pack) */
+    val usdEur: Double? = null,
 ) {
     enum class Kind(val label: String) {
         NORMAL("Normal"), HOLO("Holo"), REVERSE("Reverse holo"), FIRST_EDITION("1st Edition")
     }
-    /** the price to judge this printing by */
-    val value: Double? get() = eur ?: usd
+    /** the price to judge this printing by: Cardmarket, else TCGplayer (in EUR where the rate is known) */
+    val value: Double? get() = eur ?: usdEur ?: usd
+}
+
+/**
+ * What the data pipeline's price check found (pricecheck.py). TCGdex links some cards to the
+ * wrong Cardmarket product, so they carry another card's prices.
+ */
+data class PriceCheck(
+    val status: Status,
+    /** the Cardmarket trend in question, EUR */
+    val cmTrend: Double?,
+    /** the card's TCGplayer prices (lowest and highest printing, not reverse holo), EUR */
+    val tpLo: Double?, val tpHi: Double?,
+    /** the card(s) the Cardmarket price is shared with, e.g. "Plinfa 239/236" */
+    val others: List<String>,
+) {
+    enum class Status {
+        /** the Cardmarket price was another card's and was removed: TCGplayer is shown */
+        DROPPED,
+        /** the Cardmarket price is shared with other cards and may be theirs */
+        UNCERTAIN,
+        /** Cardmarket and TCGplayer are more than 4x apart */
+        DISAGREE,
+    }
+
+    /** a sentence for under the price */
+    val message: String get() = when (status) {
+        Status.DROPPED -> "No reliable Cardmarket price for this card" +
+            (others.firstOrNull()?.let { " (the database gave it the price of $it)" } ?: "")
+        Status.UNCERTAIN -> "This Cardmarket price is shared with " + others.take(2).joinToString(", ").ifEmpty { "another card" } +
+            " and may be theirs – check Cardmarket"
+        Status.DISAGREE -> "Cardmarket and TCGplayer disagree" +
+            (tpHi?.let { " (TCGplayer ≈ " + String.format(java.util.Locale.getDefault(), "%.2f €", it) + ")" } ?: "") +
+            " – check before you pay"
+    }
 }
 
 /**
@@ -116,6 +152,8 @@ data class CardInfo(
     /** picture from the second source (pokemontcg.io) when TCGdex has none: small and large */
     val imageAlt: String? = null,
     val imageAltLarge: String? = null,
+    /** the price check's finding for this card (null: nothing found, or an older pack) */
+    val priceCheck: PriceCheck? = null,
 ) {
     /** release year, "1999" */
     val year: String? get() = releaseDate?.take(4)?.takeIf { it.length == 4 && it.all(Char::isDigit) }
@@ -149,6 +187,9 @@ class Catalog(private val db: SQLiteDatabase) {
     private val hasReleaseDate = columns("sets").contains("release_date")
     private val hasAltImages = columns("cards").contains("image_alt")
     private val hasHistory = tableExists("history")
+    private val hasPriceCheck = tableExists("price_check")
+    /** USD per EUR of the data pack's day (ECB), for showing TCGplayer prices in euros */
+    private val usdPerEur: Double? by lazy { meta("usd_per_eur")?.toDoubleOrNull()?.takeIf { it > 0 } }
 
     private fun meta(key: String): String? = runCatching {
         db.rawQuery("SELECT value FROM meta WHERE key = ?", arrayOf(key)).use { c -> if (c.moveToFirst()) c.getString(0) else null }
@@ -310,7 +351,11 @@ class Catalog(private val db: SQLiteDatabase) {
                 number = c.getString(3) ?: "", imageUrl = c.getString(4), rarity = rarity,
                 setName = c.getString(6) ?: "", setTotal = c.intOrNull(7), series = c.getString(8) ?: "",
                 prices = prices,
-                printings = printings(c.getString(18), rarity, prices, tcgplayer(cardId)),
+                printings = printings(c.getString(18), rarity, prices, tcgplayer(cardId)).map { pr ->
+                    val r = usdPerEur
+                    if (pr.usd != null && r != null) pr.copy(usdEur = Math.round(pr.usd / r * 100) / 100.0) else pr
+                },
+                priceCheck = priceCheck(cardId, c.getString(1)),
                 graded = graded(cardId),
                 population = population(cardId),
                 category = c.getString(19),
@@ -318,6 +363,33 @@ class Catalog(private val db: SQLiteDatabase) {
                 imageAlt = c.getString(21), imageAltLarge = c.getString(22),
             )
         }
+    }
+
+    /** The price check's finding for a card, with the other cards named in [lang] where possible. */
+    private fun priceCheck(id: String, lang: String?): PriceCheck? {
+        if (!hasPriceCheck) return null
+        val row = runCatching {
+            db.rawQuery("SELECT status, cm_trend, tp_lo, tp_hi, others FROM price_check WHERE id = ?", arrayOf(id)).use { c ->
+                if (!c.moveToFirst()) null else listOf(c.getString(0), c.doubleOrNull(1), c.doubleOrNull(2), c.doubleOrNull(3), c.getString(4))
+            }
+        }.getOrNull() ?: return null
+        val status = when (row[0] as String?) {
+            "dropped" -> PriceCheck.Status.DROPPED
+            "uncertain" -> PriceCheck.Status.UNCERTAIN
+            "disagree" -> PriceCheck.Status.DISAGREE
+            else -> return null
+        }
+        val others = (row[4] as String?).orEmpty().split(",").filter { it.isNotBlank() }.map { other ->
+            db.rawQuery("""SELECT c.name, c.local_id, s.official FROM cards c LEFT JOIN sets s ON s.id = c.set_id AND s.lang = c.lang
+                           WHERE c.id = ? ORDER BY CASE c.lang WHEN ? THEN 0 WHEN 'en' THEN 1 ELSE 2 END LIMIT 1""",
+                arrayOf(other, lang ?: "en")).use { c ->
+                if (!c.moveToFirst()) other else {
+                    val total = c.intOrNull(2)
+                    "${c.getString(0)} ${c.getString(1)}" + (if (total != null && total > 0) "/$total" else "")
+                }
+            }
+        }
+        return PriceCheck(status, row[1] as Double?, row[2] as Double?, row[3] as Double?, others)
     }
 
     /** TCGplayer market price (USD) per printing key, e.g. normal, holofoil, reverse-holofoil, 1st-edition. */
