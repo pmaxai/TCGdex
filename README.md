@@ -61,14 +61,16 @@ downgrades), or restore the code from the tag.
 - **Prices:** Cardmarket trend, 30-day average and lowest price (EUR) for the chosen
   printing, plus TCGplayer (USD) where Cardmarket has none.
 - **Price history:** under the price, a 90-day line with the change (Cardmarket, or
-  TCGplayer in euros where Cardmarket has none). Tap it for the full chart: 1 month to 1
+  TCGplayer in euros where Cardmarket's history is still short). Tap it for the full chart: 1 month to 1
   year, Cardmarket trend and TCGplayer (converted at each day's ECB rate), per printing,
   with the high and the low. The history comes with the app (install the latest before a
   show). Where it comes from: the data pipeline saves every card's prices every day (kept
-  as monthly files in the `price-history` release). The past is filled in over the first
-  days: TCGplayer's past year from TCGCSV's daily archives, Cardmarket's last six months
-  from PokemonPriceTracker (about 2,500 cards a day within the plan's daily credits, most
-  valuable cards first).
+  as monthly files in the `price-history` release). The past was filled in from two
+  sources, one per marketplace: TCGplayer's past year from TCGCSV's daily archives
+  (TCGplayer's own market price), Cardmarket's last six months from PokemonPriceTracker
+  (about 2,500 cards a day within the plan's daily credits, most valuable cards first). A
+  single reading far off its neighbours (a glitch) is left out; a day without a reading
+  takes the nearest one within 3 days.
 - **PSA 10 / 9 / 8:** recent eBay sold prices for graded copies (USD) of the printing
   you selected: a graded reverse holo has its own prices. If only another printing has
   sales, the app says so instead of showing the wrong price. Switch them on or off in ⚙.

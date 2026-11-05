@@ -119,7 +119,7 @@ def test_ppt_history_points():
     pts = h._ppt_points(card)
     d1, d2 = date(2026, 5, 9), date(2026, 5, 10)
     assert pts[d1] == {"cm_trend": 31, "cm_avg30": 117, "cm_low": 2, "cm_trend_h": 90, "cm_low_h": 50}
-    assert pts[d2] == {"tp_normal": 28, "tp_first": 492}
+    assert d2 not in pts                       # its TCGplayer history is not used (TCGCSV has it)
     # a holo rare alone on Cardmarket: its price is the standard one
     only = {"cardmarketPrices": {"variants": {"Holofoil": {"history": [{"date": "2026-06-01", "trendEur": 12.5}]}}}}
     assert h._ppt_points(only) == {date(2026, 6, 1): {"cm_trend": 1250}}
@@ -155,3 +155,35 @@ def test_app_series_glitches_and_gaps(tmp_path):
     assert all(d.weekday() == 0 for d in weekly)
     nxt = [d for d in h.calendar(today + timedelta(days=1)) if d < today - timedelta(days=h.DAILY_DAYS)]
     assert set(nxt) <= set(weekly) | {today - timedelta(days=h.DAILY_DAYS)}
+
+
+def test_tcgplayer_only_from_tcgcsv(tmp_path):
+    """TCGplayer prices PokemonPriceTracker wrote are cleared once and TCGCSV reads those days again;
+    a day's own TCGdex snapshot is kept. One reading spread over a few days is not a history."""
+    root, today = tmp_path / "hist", date(2026, 11, 4)
+    arc = h.Archive(root)
+    row = np.full(len(h.FIELDS), -1, dtype=np.int32)
+    row[h.FI["tp_holo"]], row[h.FI["cm_trend"]] = 60000, 50000
+    d_ppt, d_both, d_own = date(2026, 6, 1), date(2026, 10, 1), date(2026, 11, 3)
+    arc.save(d_ppt, ["base1-4"], row[None], "ppt")
+    arc.save(d_both, ["base1-4"], row[None], "ppt")
+    arc.save(d_both, ["base1-4"], row[None], "tcgcsv", prefer_existing=True)
+    arc.save(d_own, ["base1-4"], row[None], "tcgdex")
+    arc.save(d_own, ["base1-4"], row[None], "ppt", prefer_existing=True)
+    assert arc.load(d_both)[2] == "ppt+tcgcsv"
+    arc.save(d_both, ["base1-4"], row[None], "ppt")
+    assert arc.load(d_both)[2] == "ppt+tcgcsv"                 # no repeats
+    done = {d_ppt.isoformat(), d_both.isoformat(), "2026-09-01"}
+    assert h.only_tcgcsv_for_tcgplayer(arc, done) == 2
+    assert done == {"2026-09-01"}
+    for d in (d_ppt, d_both):
+        v = arc.load(d)[1][0]
+        assert v[h.FI["tp_holo"]] == -1 and v[h.FI["cm_trend"]] == 50000
+    assert arc.load(d_own)[1][0][h.FI["tp_holo"]] == 60000
+    # a single Cardmarket reading: no series for the app
+    one = np.full(len(h.FIELDS), -1, dtype=np.int32)
+    one[h.FI["cm_trend"]] = 6
+    arc.save(today, ["sv06-034"], one[None], "tcgdex")
+    _, series, _ = h.app_series(root, today, {"sv06-034", "base1-4"})
+    assert ("sv06-034", "cm_trend") not in series
+    assert ("base1-4", "cm_trend") in series

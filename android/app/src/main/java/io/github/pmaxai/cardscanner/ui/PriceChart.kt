@@ -91,23 +91,35 @@ fun PriceSpark(h: PriceHistory, kind: Printing.Kind?, hasNormal: Boolean, modifi
     val from = h.firstIndex(90)
     val eur = h.eur(kind, hasNormal)?.takeIf { it.finite(from).size >= 2 }
     val usd = h.usdInEur(kind)?.takeIf { it.finite(from).size >= 2 }
-    val line = eur ?: usd ?: return
+    val line = mainLine(h, eur, usd, from) ?: return
+    val isEur = line === eur
     val c = change(line, from) ?: return
     Column(modifier.fillMaxWidth().padding(top = 6.dp).clickable(onClick = onOpen)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("90 days ", color = Muted, fontSize = 11.sp)
             Text(pctText(c), color = if (c.pct > 0.005) Sure else if (c.pct < -0.005) Warn else Color.White, fontSize = 12.sp,
                 fontWeight = FontWeight.Bold)
-            Text(if (eur != null) "  Cardmarket" else "  TCGplayer, in €", color = Muted, fontSize = 11.sp)
+            Text(if (isEur) "  Cardmarket" else "  TCGplayer, in €", color = Muted, fontSize = 11.sp)
             Spacer(Modifier.weight(1f))
             Text("chart ›", color = Gold, fontSize = 12.sp)
         }
         Canvas(Modifier.fillMaxWidth().height(34.dp).padding(top = 2.dp)) {
             val lo = line.finite(from).minOf { line[it] }
             val hi = line.finite(from).maxOf { line[it] }
-            drawSeries(h, line, from, lo, hi, if (eur != null) Gold else UsdLine, dashed = eur == null, width = 2.dp.toPx())
+            drawSeries(h, line, from, lo, hi, if (isEur) Gold else UsdLine, dashed = !isEur, width = 2.dp.toPx())
         }
     }
+}
+
+/**
+ * The line to follow: Cardmarket (the app's reference), unless its history starts more than
+ * two weeks after TCGplayer's in this window (Cardmarket's history fills in over the first days).
+ */
+private fun mainLine(h: PriceHistory, cm: FloatArray?, tp: FloatArray?, from: Int): FloatArray? {
+    if (cm == null || tp == null) return cm ?: tp
+    val cmStart = cm.finite(from).firstOrNull() ?: return tp
+    val tpStart = tp.finite(from).firstOrNull() ?: return cm
+    return if (h.dates[cmStart].toEpochDay() - h.dates[tpStart].toEpochDay() > 14) tp else cm
 }
 
 /** One series as a line over the window: x by date, y between lo and hi; gaps over 14 days break it. */
@@ -172,7 +184,7 @@ fun PriceChartPanel(title: String, h: PriceHistory, printings: List<Printing.Kin
             val from = h.firstIndex(days)
             val cm = h.eur(kind, hasNormal)?.takeIf { it.finite(from).isNotEmpty() }
             val tp = h.usdInEur(kind)?.takeIf { it.finite(from).isNotEmpty() }
-            val main = cm ?: tp
+            val main = mainLine(h, cm, tp, from)
             if (main == null) {
                 Text("No price history for this printing yet.", color = Muted, modifier = Modifier.padding(vertical = 24.dp))
             } else {
@@ -190,7 +202,7 @@ private fun ChartBody(h: PriceHistory, from: Int, cm: FloatArray?, tp: FloatArra
     val loI = idx.minBy { main[it] }
     val c = change(main, from)
     Text(buildString {
-        append(if (cm != null) "Cardmarket trend " else "TCGplayer (in €) ")
+        append(if (main === cm) "Cardmarket trend " else "TCGplayer (in €) ")
         append(eur(main[idx.last()].toDouble()))
         c?.let { append("  ·  ${pctText(it)} since ${fmt.format(h.dates[idx.first()])}") }
     }, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
@@ -241,7 +253,7 @@ private fun ChartBody(h: PriceHistory, from: Int, cm: FloatArray?, tp: FloatArra
         for (i in listOf(hiI, loI)) {
             val x = (h.dates[i].toEpochDay() - d0) / span * plotR
             val y = plotB - (main[i] - lo) / (hi - lo) * plotB
-            drawCircle(if (cm != null) Gold else UsdLine, 4.dp.toPx(), Offset(x, y))
+            drawCircle(if (main === cm) Gold else UsdLine, 4.dp.toPx(), Offset(x, y))
         }
     }
     Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {

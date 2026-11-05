@@ -130,7 +130,11 @@ class Archive:
                 merged = np.vstack([merged, np.array(extra_rows, dtype=np.int32)])
                 merged_ids += extra_ids
             ids, vals = merged_ids, merged
-            source = osrc if osrc == source else f"{osrc}+{source}"
+            source = osrc if source in osrc.split("+") else f"{osrc}+{source}"
+        self.write(d, ids, vals, source)
+
+    def write(self, d: date, ids: list[str], vals: np.ndarray, source: str) -> None:
+        """Writes a day as given (no merge)."""
         tmp = self.path(d).with_suffix(".tmp.npz")
         np.savez_compressed(tmp, ids=np.array(ids), vals=np.asarray(vals, dtype=np.int32), source=np.array(source))
         tmp.replace(self.path(d))
@@ -211,6 +215,29 @@ def parse_tcgcsv(folder: Path, product_to_card: dict[int, str]) -> tuple[list[st
     return ids, (np.stack([rows[i] for i in ids]) if ids else np.zeros((0, len(FIELDS)), np.int32))
 
 
+TP_ONLY_TCGCSV = "tcgplayer-only-from-tcgcsv"     # marker in tcgcsv-done.txt: the clean-up below ran
+
+
+def only_tcgcsv_for_tcgplayer(arc: Archive, done: set[str]) -> int:
+    """TCGplayer history comes from one source, TCGCSV (TCGplayer's own market price):
+    PokemonPriceTracker's TCGplayer figures differ for some cards (Base Set Charizard: $600
+    against $2,200), and a line mixing both jumps. Clears the TCGplayer prices of the days
+    PokemonPriceTracker wrote (not a day's own TCGdex snapshot) and lets TCGCSV read them again."""
+    tp = [FI[f] for f in FIELDS if f.startswith("tp_")]
+    n = 0
+    for d in sorted(arc.have()):
+        ids, vals, src = arc.load(d)
+        parts = src.split("+")
+        if "ppt" not in parts or "tcgdex" in parts:
+            continue
+        vals = vals.copy()
+        vals[:, tp] = -1
+        arc.write(d, ids.tolist(), vals, src)
+        done.discard(d.isoformat())
+        n += 1
+    return n
+
+
 def backfill_tcgcsv(db: Path, root: Path, today: date | None = None, max_files: int = 160, pause: float = 2.0) -> int:
     """TCGplayer prices of the calendar's past days that the archive has no TCGplayer prices for.
     Each TCGCSV archive is downloaded once: a day it was taken from is marked in tcgcsv-done.txt."""
@@ -218,6 +245,11 @@ def backfill_tcgcsv(db: Path, root: Path, today: date | None = None, max_files: 
     arc = Archive(root)
     done_file = Path(root) / "tcgcsv-done.txt"
     done = set(done_file.read_text().split()) if done_file.exists() else set()
+    if TP_ONLY_TCGCSV not in done:
+        n = only_tcgcsv_for_tcgplayer(arc, done)
+        done.add(TP_ONLY_TCGCSV)
+        done_file.write_text("\n".join(sorted(done)) + "\n")
+        log.info("price history: TCGplayer prices from PokemonPriceTracker removed from %d days; TCGCSV reads them again", n)
     want = [d for d in calendar(today) if TCGCSV_START <= d < today and d.isoformat() not in done]
     if not want:
         log.info("price history: TCGplayer backfill complete")
@@ -270,7 +302,7 @@ def backfill_tcgcsv(db: Path, root: Path, today: date | None = None, max_files: 
 
 def _ppt_points(card: dict) -> dict[date, dict[str, int]]:
     """PokemonPriceTracker's history of one card -> {date: {field: cents}}: Cardmarket (EUR) per
-    printing, TCGplayer (USD) Near Mint per printing."""
+    printing. (Its TCGplayer history is not used: TCGCSV has TCGplayer's own prices.)"""
     out: dict[date, dict[str, int]] = {}
 
     def put(d: str | None, field: str, v) -> None:
@@ -297,19 +329,12 @@ def _ppt_points(card: dict) -> dict[date, dict[str, int]]:
             put(pnt.get("date"), "cm_trend" + suffix, pnt.get("trendEur"))
             put(pnt.get("date"), "cm_avg30" + suffix, pnt.get("avg30Eur"))
             put(pnt.get("date"), "cm_low" + suffix, pnt.get("lowEur"))
-    tp = ((card.get("priceHistory") or {}).get("variants") or {})
-    for printing, conds in tp.items():
-        field = tp_field(printing)
-        if not field or not isinstance(conds, dict):
-            continue
-        for pnt in ((conds.get("Near Mint") or {}).get("history") or []):
-            put(pnt.get("date"), field, pnt.get("market"))
     return out
 
 
 def backfill_ppt(db: Path, root: Path, budget: int = 12000, minutes: float = 25, days: int = 180,
                  key: str | None = None, reserve: int = 1500) -> int:
-    """Cardmarket (EUR) and TCGplayer (USD) history of the last [days] from PokemonPriceTracker,
+    """Cardmarket (EUR) history of the last [days] from PokemonPriceTracker,
     one card per call (6 credits for 180 days), most valuable cards first, a share of the day's
     credits per run. Cards done are listed in ppt-done.txt and never asked again."""
     import os
@@ -348,7 +373,8 @@ def backfill_ppt(db: Path, root: Path, budget: int = 12000, minutes: float = 25,
             before = client.daily_remaining
             resp = client.get("cards", {"tcgPlayerId": str(tp), "includeHistory": "true", "includeCardmarket": "true",
                                         "days": str(days)})
-            spent += (before - client.daily_remaining) if (before is not None and client.daily_remaining is not None) else 6
+            used = (before - client.daily_remaining) if (before is not None and client.daily_remaining is not None) else 6
+            spent += used if 0 <= used <= 60 else 6          # the day's allowance resets at midnight UTC
             card = resp.get("data") if isinstance(resp, dict) else None
             if isinstance(card, list):
                 card = card[0] if card else None
@@ -370,7 +396,7 @@ def backfill_ppt(db: Path, root: Path, budget: int = 12000, minutes: float = 25,
         ids = sorted(rows)
         arc.save(d, ids, np.stack([rows[i] for i in ids]), "ppt", prefer_existing=True)
     done_file.write_text("\n".join(sorted(done)) + "\n")
-    log.info("price history: EUR/USD history of %d cards from PokemonPriceTracker (%d credits, %d days written), %d cards left",
+    log.info("price history: Cardmarket history of %d cards from PokemonPriceTracker (%d credits, %d days written), %d cards left",
              n, spent, len(per_day), len(todo) - n)
     return n
 
@@ -516,6 +542,7 @@ def app_series(root: Path, today: date | None = None, ids: set[str] | None = Non
         x = m[c, f]
         obs = np.flatnonzero(np.isfinite(x))
         x[obs[~_despike(x[obs])]] = np.nan
+    readings = np.isfinite(m).sum(axis=2)
     # the calendar: the day's price, else the nearest within 3 days (earlier first)
     j = np.array([(d - first).days for d in cal])
     out = np.full((len(index), len(APP_FIELDS), len(cal)), np.nan, dtype=np.float32)
@@ -526,7 +553,7 @@ def app_series(root: Path, today: date | None = None, ids: set[str] | None = Non
         take = np.isnan(out) & np.isfinite(cand) & valid[None, None, :]
         out[take] = cand[take]
     series: dict[tuple[str, str], np.ndarray] = {}
-    ok = np.isfinite(out).sum(axis=2) >= 1
+    ok = (readings >= 2) & (np.isfinite(out).sum(axis=2) >= 2)     # one reading is not a history
     names = list(index)
     for c, f in zip(*np.nonzero(ok)):
         series[(names[c], APP_FIELDS[f])] = out[c, f].copy()
