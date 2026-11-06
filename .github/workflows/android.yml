@@ -88,6 +88,7 @@ jobs:
           gh release upload app-latest version.json --clobber
 
       - uses: actions/upload-artifact@v4
+        continue-on-error: true      # a hiccup of GitHub's artifact store doesn't fail a good build
         with:
           name: apk
           path: CardScanner.apk
@@ -112,6 +113,7 @@ jobs:
           script: ./gradlew --no-daemon connectedDebugAndroidTest; s=$?; adb logcat -d -s ParityTest:I CardScanner:W AndroidRuntime:E; exit $s
 
       - uses: actions/upload-artifact@v4
+        continue-on-error: true      # a hiccup of GitHub's artifact store doesn't fail a good build
         if: always()
         with:
           name: test-reports
@@ -119,6 +121,7 @@ jobs:
           if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
+        continue-on-error: true      # a hiccup of GitHub's artifact store doesn't fail a good build
         if: always()
         with:
           name: screenshots
