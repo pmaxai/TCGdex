@@ -164,6 +164,14 @@ class ShopApiTest {
         assertSigned(r)
     }
 
+    @Test
+    fun theMinimumPriceIsAFloorForTheSuggestion() {
+        assertEquals(0.50, io.github.pmaxai.cardscanner.ui.suggestedPrice(0.08, 0.50)!!, 1e-9)    // a few cents -> the minimum
+        assertEquals(3.20, io.github.pmaxai.cardscanner.ui.suggestedPrice(3.20, 0.50)!!, 1e-9)    // worth more: its market value
+        assertEquals(0.08, io.github.pmaxai.cardscanner.ui.suggestedPrice(0.08, null)!!, 1e-9)    // no minimum set
+        assertNull(io.github.pmaxai.cardscanner.ui.suggestedPrice(null, 0.50))                    // no market value: no guess
+    }
+
     companion object {
         const val PRODUCT = """{"sku":"sv03.5-199-DE-NM-H","external_id":null,"card_ref":"sv03.5-199","set_code":"sv03.5",
             "set_name_de":"151","set_name_en":"151","card_number":"199/165","name_de":"Glurak-ex","name_en":"Charizard ex",

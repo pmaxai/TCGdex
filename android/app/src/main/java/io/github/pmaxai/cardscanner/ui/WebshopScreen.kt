@@ -323,10 +323,12 @@ private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadReque
         Text(f.price?.let { eur(it) } ?: "tap to set", color = if (f.price != null) Color.White else Muted, fontSize = 20.sp,
             fontWeight = FontWeight.Bold, maxLines = 1)
         Spacer(Modifier.width(10.dp))
+        val market = vm.marketValue(s, f.condition)
         Text(when {
             match != null && !f.priceByUser -> "the shop's price"
             match != null -> "replaces the shop's ${match.price?.let { eur(it.euros) } ?: ""}"
             f.priceByUser -> "your price"
+            market != null && shop.minPrice != null && market < shop.minPrice -> "your minimum (market ${eur(market)})"
             else -> "market value for ${f.condition}"
         }, color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
         Text("✎", color = Muted, fontSize = 16.sp)

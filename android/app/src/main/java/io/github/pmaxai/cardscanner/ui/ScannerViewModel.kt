@@ -194,6 +194,13 @@ data class ShopForm(
     val comment: String = "",
 )
 
+/**
+ * The price a new product is suggested at: its market value, but never below the minimum selling
+ * price. Without a market value there is no suggestion (the card may be worth anything).
+ */
+fun suggestedPrice(market: Double?, minPrice: Double?): Double? =
+    market?.let { m -> if (minPrice != null && m < minPrice) minPrice else m }
+
 /** A booking done in this session, for its confirmation and Undo. */
 data class ShopBooking(val text: String, val warnings: List<String>, val sku: String, val delta: Int, val box: String,
                        val undone: Boolean = false)
@@ -204,6 +211,8 @@ data class ShopState(
     val host: String = "",
     val keyId: String = "",
     val hasSecret: Boolean = false,
+    /** the lowest price a new product is suggested at, EUR (null: none) */
+    val minPrice: Double? = null,
     /** the last connection test: its text, and whether it worked (null: not tested) */
     val connection: String? = null,
     val connectionOk: Boolean? = null,
@@ -558,7 +567,15 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     private fun updateShop(f: (ShopState) -> ShopState) = _state.update { it.copy(shop = f(it.shop)) }
 
     private fun loadShopConnection() = updateShop {
-        it.copy(configured = shopStore.credentials() != null, host = shopStore.host, keyId = shopStore.keyId, hasSecret = shopStore.hasSecret)
+        it.copy(configured = shopStore.credentials() != null, host = shopStore.host, keyId = shopStore.keyId, hasSecret = shopStore.hasSecret,
+            minPrice = shopStore.minPrice)
+    }
+
+    /** Settings → Webshop: the minimum selling price (null or 0: none). The form's suggestion follows at once. */
+    fun setShopMinPrice(v: Double?) {
+        shopStore.minPrice = v?.let { TradingMath.round2(it) }?.takeIf { it > 0 }
+        updateShop { it.copy(minPrice = shopStore.minPrice) }
+        _state.value.shown?.let { s -> updateShop { it.copy(form = withSuggestedPrice(it.form, s, it.products)) } }
     }
 
     /** Saves the connection (an empty [secret] keeps the stored one) and tests it. */
@@ -594,7 +611,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     fun disconnectShop() {
         shopStore.clear()
         shopClient = null
-        updateShop { ShopState() }
+        updateShop { ShopState(minPrice = shopStore.minPrice) }        // the minimum price is a setting, not part of the key
     }
 
     /** The shown card changed (Webshop Mode): fill in the form and look the card up in the shop. */
@@ -642,10 +659,12 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         if (f.priceByUser) return f
         val finish = ShopTerms.finishOf(s.printing)
         val existing = products?.firstOrNull { it.cardLanguage == f.language && it.condition == f.condition && it.finish == finish && it.grading == null }
-        val p = s.selected
-        val market = (p?.eur ?: p?.usdEur)?.let { TradingMath.round2(it * ShopTerms.share(f.condition)) }
-        return f.copy(price = existing?.price?.euros ?: market)
+        return f.copy(price = existing?.price?.euros ?: suggestedPrice(marketValue(s, f.condition), _state.value.shop.minPrice))
     }
+
+    /** The market value of the shown printing in [condition] (Cardmarket, else TCGplayer in euros). */
+    fun marketValue(s: Shown, condition: String): Double? =
+        s.selected?.let { p -> (p.eur ?: p.usdEur)?.let { TradingMath.round2(it * ShopTerms.share(condition)) } }
 
     /** Filling in the form: the camera waits, so another card in view can't replace this one meanwhile. */
     private fun holdCard() {

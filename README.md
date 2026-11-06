@@ -195,8 +195,9 @@ downgrades), or restore the code from the tag.
   TCGplayer, PSA) and what the shop holds of it: one line per product (language ·
   condition · finish) with price, stock per box and status. Pick language (from the scan,
   any of the shop's 15 can be chosen), condition (M … PO), copies, selling price (suggested:
-  the shop's price, else the market value for the condition) and storage box (1–999, the
-  last one is remembered); a new product can get a comment (shown on its product page).
+  the shop's price, else the market value for the condition, but never below your
+  **minimum selling price** from ⚙ → Webshop, for cards worth only a few cents) and
+  storage box (1–999, the last one is remembered); a new product can get a comment (shown on its product page).
   **Scanning books nothing**: the stock changes only with **Add to stock** (the product
   exists) or **Create in the shop** (it doesn't). **Undo** takes the copies out again.
   While you fill in, the camera keeps the card. A card the shop's card list doesn't know

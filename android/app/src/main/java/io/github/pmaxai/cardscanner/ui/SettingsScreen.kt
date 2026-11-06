@@ -262,6 +262,22 @@ private fun WebshopPage(state: UiState, vm: ScannerViewModel) {
     if (shop.configured || shop.hasSecret) {
         TextButton(onClick = { vm.disconnectShop(); host = ""; keyId = ""; secret = "" }) { Text("Disconnect (delete the key from this phone)") }
     }
+    Heading("Prices")
+    var min by rememberSaveable { mutableStateOf(shop.minPrice?.let { "%.2f".format(it) } ?: "") }
+    Setting("Minimum selling price", "a new product is suggested at least at this price, even if the card is worth only " +
+        "a few cents (empty: no minimum). Your own price and the shop's price of a product stay as they are.") {
+        OutlinedTextField(value = min, singleLine = true, modifier = Modifier.width(160.dp),
+            label = { Text("e.g. 0.50") }, suffix = { Text("€") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            onValueChange = { v ->
+                val t = v.replace(',', '.').filter { it.isDigit() || it == '.' }.let { x ->
+                    val i = x.indexOf('.'); if (i < 0) x.take(5) else x.take(i + 1) + x.substring(i + 1).replace(".", "").take(2)
+                }
+                min = t
+                vm.setShopMinPrice(t.toDoubleOrNull())
+            })
+    }
+
     Heading("How booking works")
     Hint("Scanning a card only looks it up: you see its prices and what the shop holds of it. Stock changes only when you " +
         "press Add to stock / Create in the shop, after choosing language, condition, copies, price and box. Undo takes the copies out again.")

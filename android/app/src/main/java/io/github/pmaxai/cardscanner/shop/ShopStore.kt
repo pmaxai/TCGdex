@@ -27,6 +27,14 @@ class ShopStore(ctx: Context) {
         get() = prefs.getInt("last_box", 0).takeIf { it in 1..999 }
         set(v) { prefs.edit().putInt("last_box", v ?: 0).apply() }
 
+    /**
+     * The lowest price a new product is offered for (EUR; null: none). A card worth a few cents
+     * is still sold for this: the suggested price is never below it.
+     */
+    var minPrice: Double?
+        get() = prefs.getFloat("min_price", 0f).toDouble().takeIf { it > 0 }?.let { Math.round(it * 100) / 100.0 }
+        set(v) { prefs.edit().putFloat("min_price", (v?.takeIf { it > 0 } ?: 0.0).toFloat()).apply() }
+
     /** the last condition picked (most cards of a batch are in the same condition) */
     var lastCondition: String
         get() = prefs.getString("last_condition", "NM") ?: "NM"
