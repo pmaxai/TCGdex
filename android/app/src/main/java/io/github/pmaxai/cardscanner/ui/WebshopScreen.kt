@@ -296,41 +296,41 @@ private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadReque
                     .clickable { vm.setShopCondition(g.code) }.padding(horizontal = 11.dp, vertical = 6.dp))
         }
     }
-    Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.Bottom) {
         // quantity
-        Column {
+        Column(Modifier.weight(1f)) {
             FieldLabel("Copies")
             Row(verticalAlignment = Alignment.CenterVertically) {
                 StepButton("−", f.quantity > 1) { vm.setShopQuantity(f.quantity - 1) }
-                Text("${f.quantity}", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 10.dp))
+                Text("${f.quantity}", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 12.dp))
                 StepButton("+", true) { vm.setShopQuantity(f.quantity + 1) }
             }
         }
-        Spacer(Modifier.width(14.dp))
-        // selling price: tap for the number pad
-        Column(Modifier.weight(1f)) {
-            FieldLabel("Price")
-            Text(f.price?.let { eur(it) } ?: "tap to set", color = if (f.price != null) Color.White else Muted, fontSize = 18.sp,
-                fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFF3A3D45), RoundedCornerShape(8.dp))
-                    .clickable { onPad(PadRequest("Selling price", f.price, null, verdicts = false) { vm.setShopPrice(it) }) }
-                    .padding(horizontal = 10.dp, vertical = 6.dp))
-        }
-        Spacer(Modifier.width(10.dp))
         // storage box 1–999
-        Column(Modifier.width(92.dp)) {
-            FieldLabel("Box")
+        Column(Modifier.width(120.dp)) {
+            FieldLabel("Box (1–999)")
             var text by remember(f.box) { mutableStateOf(f.box?.toString() ?: "") }
-            OutlinedTextField(value = text, singleLine = true, placeholder = { Text("1–999") },
+            OutlinedTextField(value = text, singleLine = true, placeholder = { Text("e.g. 14") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 onValueChange = { v -> val d = v.filter(Char::isDigit).take(3); text = d; vm.setShopBox(d.toIntOrNull()) })
         }
     }
-    Text(when {
-        match != null && !f.priceByUser -> "price: the shop's"
-        match != null -> "the new price replaces the shop's ${match.price?.let { eur(it.euros) } ?: ""}"
-        f.priceByUser -> "your price"
-        else -> "suggested: market value for ${f.condition} – tap to change"
-    }, color = Muted, fontSize = 11.sp)
+    // selling price: tap for the number pad
+    FieldLabel("Selling price")
+    Row(Modifier.fillMaxWidth().border(1.dp, Color(0xFF3A3D45), RoundedCornerShape(8.dp))
+        .clickable { onPad(PadRequest("Selling price", f.price, null, verdicts = false) { vm.setShopPrice(it) }) }
+        .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(f.price?.let { eur(it) } ?: "tap to set", color = if (f.price != null) Color.White else Muted, fontSize = 20.sp,
+            fontWeight = FontWeight.Bold, maxLines = 1)
+        Spacer(Modifier.width(10.dp))
+        Text(when {
+            match != null && !f.priceByUser -> "the shop's price"
+            match != null -> "replaces the shop's ${match.price?.let { eur(it.euros) } ?: ""}"
+            f.priceByUser -> "your price"
+            else -> "market value for ${f.condition}"
+        }, color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        Text("✎", color = Muted, fontSize = 16.sp)
+    }
     if (match == null) {
         OutlinedTextField(value = f.comment, onValueChange = vm::setShopComment, modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
             label = { Text("Comment (optional, on the product page)") }, maxLines = 4)
