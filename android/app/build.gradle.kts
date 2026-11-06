@@ -6,6 +6,12 @@ plugins {
 
 // CI sets GITHUB_RUN_NUMBER, so every build installs as an update of the previous one
 val buildNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+// version name <line>.<builds since the line started> (version.properties; a release moves to the next line)
+val versionProps = java.util.Properties().apply {
+    rootProject.file("version.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+val versionLine: String = versionProps.getProperty("line", "1.2").trim()
+val versionBase: Int = versionProps.getProperty("base", "0").trim().toInt()
 
 android {
     namespace = "io.github.pmaxai.cardscanner"
@@ -16,7 +22,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = buildNumber
-        versionName = "1.1.$buildNumber"
+        versionName = "$versionLine.${(buildNumber - versionBase).coerceAtLeast(0)}"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // screenshots from the tests land in build/outputs/connected_android_test_additional_output
         testInstrumentationRunnerArguments["useTestStorageService"] = "true"

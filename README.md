@@ -8,10 +8,15 @@ for flea markets.
 
 ## Install the app
 
-The current release is **Version 1.1**: **github.com/pmaxai/TCGdex/releases/tag/v1.1**
-(releases stay as they are; v1.0 is still there). **app-latest** is always the newest
-build, with whatever is being worked on since. The version (1.1.*build*) is shown at the
-bottom of ⚙.
+The current release is **Version 1.1.6**: **github.com/pmaxai/TCGdex/releases/tag/v1.1.6**
+(releases stay as they are; v1.0 and v1.1 are still there). **app-latest** is always the
+newest build, with whatever is being worked on since. The version is shown at the bottom
+of ⚙.
+
+**Version numbers:** builds count on the current version line: 1.2.1, 1.2.2, 1.2.3, …
+A release moves to the next line, so after releasing 1.2.9 the builds are 1.3.1, 1.3.2, …
+(the line is in `android/version.properties`; Android's hidden version code keeps
+counting all builds, so every build installs over the one before).
 
 1. On your phone, open **github.com/pmaxai/TCGdex/releases/tag/v1.1** (or `app-latest`)
    and tap **CardScanner.apk**.
@@ -35,10 +40,11 @@ pipeline starts at 00:40 CET and the new APK (with that day's prices) is out at 
 
 ## Restore points
 
-Go to **Actions → Restore point → Run workflow** and give it a name like `v0.2`
-(tick *latest* for a shipped version such as `v1.0`: it becomes the Latest release). That
-freezes the code (a git tag), the current APK and the current data pack as a release
-that later builds never touch. They're listed under **Releases**. To go back, either
+Go to **Actions → Restore point → Run workflow**. Leave the name empty to name it after
+the current build (`v1.2.9`), or give one. Tick *latest* for a release: it becomes the
+Latest release and the next builds start the next version line (1.3.1, …); without it,
+it's only a restore point and the numbering goes on. That freezes the code (a git tag),
+the current APK and the current data pack as a release that later builds never touch. They're listed under **Releases**. To go back, either
 install the APK from that release (uninstall the app first, since Android blocks
 downgrades), or restore the code from the tag.
 

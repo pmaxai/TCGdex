@@ -68,16 +68,18 @@ jobs:
           gh release upload app-latest CardScanner.apk --clobber
           # what the app's update check reads (after the APK, so it never points at a missing one)
           python3 - <<'EOF' > version.json
-          import json, os, re, sqlite3
+          import json, os, sqlite3
           from datetime import datetime, timezone
           pack = "android/app/src/main/assets/pack"
           n = int(os.environ["GITHUB_RUN_NUMBER"])
-          gradle = open("android/app/build.gradle.kts", encoding="utf-8").read()
-          prefix = re.search(r'versionName = "([^"$]*)\$buildNumber"', gradle).group(1)
+          # the same name as build.gradle.kts gives the app: <line>.<builds since the line started>
+          props = dict(l.split("=", 1) for l in open("android/version.properties", encoding="utf-8").read().splitlines()
+                       if "=" in l and not l.lstrip().startswith("#"))
+          name = f"{props['line'].strip()}.{max(0, n - int(props['base'].strip()))}"
           con = sqlite3.connect(f"{pack}/catalog.sqlite")
           prices = con.execute("SELECT MAX(updated) FROM prices").fetchone()[0]
           print(json.dumps({
-              "versionCode": n, "versionName": f"{prefix}{n}",
+              "versionCode": n, "versionName": name,
               "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
               "pack": json.load(open(f"{pack}/pack.json"))["version"], "prices": prices,
               "apk": "CardScanner.apk"}, indent=1))
