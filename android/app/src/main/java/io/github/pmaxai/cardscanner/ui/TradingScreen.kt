@@ -383,7 +383,7 @@ private fun Tray(state: UiState, vm: ScannerViewModel) {
 }
 
 // ---------------------------------------------------------------------------------- number pad
-/** Big keys for prices: two or three taps; quick buttons from the market value. */
+/** Big keys for prices: two or three taps; quick buttons from the market value. Clear starts over, OK takes it. */
 @Composable
 fun NumberPad(r: PadRequest, onClose: () -> Unit) {
     val comma = java.text.DecimalFormatSymbols.getInstance().decimalSeparator
@@ -430,7 +430,8 @@ fun NumberPad(r: PadRequest, onClose: () -> Unit) {
                     }
                 }
                 Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton({ r.onDone(null); onClose() }) { Text("Clear") }
+                    // Clear empties the field and stays open for the new price (OK on an empty field removes the price)
+                    OutlinedButton({ text = "" }) { Text("Clear") }
                     Button({ r.onDone(value()?.let { TradingMath.round2(it) }); onClose() }) { Text("OK", fontWeight = FontWeight.Bold) }
                 }
             }
