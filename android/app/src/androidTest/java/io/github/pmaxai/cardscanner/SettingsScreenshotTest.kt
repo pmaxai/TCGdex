@@ -51,16 +51,12 @@ class SettingsScreenshotTest {
                 key(page) { SettingsScreen(state, vm, page) }
             }
         }
-        val shown = runCatching {
-            compose.waitUntil(15_000) { runCatching { compose.onAllNodes(isRoot()).fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false) }
-        }.isSuccess
-        if (!shown) { Log.w("SettingsScreenshot", "skipped: the test screen didn't come up"); return }
+        if (!Screenshots.ready(compose)) { Log.w("SettingsScreenshot", "skipped: the test screen didn't come up"); return }
         for (p in SettingsPage.values()) {
             compose.runOnIdle { page = p }
             compose.waitForIdle()
             compose.onNodeWithText("  ·  ${p.title}").assertExists()
-            val bmp = compose.onRoot().captureToImage().asAndroidBitmap()
-            TestStorage().openOutputFile("settings-${p.ordinal + 1}-${p.name.lowercase()}.png").use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            Screenshots.save(compose, "settings-${p.ordinal + 1}-${p.name.lowercase()}.png")
         }
     }
 }

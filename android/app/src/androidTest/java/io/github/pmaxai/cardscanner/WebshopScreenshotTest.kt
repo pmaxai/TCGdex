@@ -17,7 +17,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.isRoot
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
 import androidx.test.core.app.ApplicationProvider
@@ -96,15 +100,16 @@ class WebshopScreenshotTest {
                 }
             }
         }
-        val shownUp = runCatching {
-            compose.waitUntil(15_000) { runCatching { compose.onAllNodes(isRoot()).fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false) }
-        }.isSuccess
-        if (!shownUp) { Log.w("WebshopScreenshot", "skipped: the test screen didn't come up"); return }
+        if (!Screenshots.ready(compose)) { Log.w("WebshopScreenshot", "skipped: the test screen didn't come up"); return }
         for ((name, st) in states) {
             compose.runOnIdle { current = st }
             compose.waitForIdle()
-            val bmp = compose.onRoot().captureToImage().asAndroidBitmap()
-            TestStorage().openOutputFile("webshop-$name.png").use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            Screenshots.save(compose, "webshop-$name.png")
+            // the form further down: scroll the panel to its end
+            runCatching {
+                repeat(3) { compose.onAllNodes(hasScrollAction()).onFirst().performTouchInput { swipeUp() } }
+                Screenshots.save(compose, "webshop-$name-form.png")
+            }.onFailure { Log.w("WebshopScreenshot", "$name: no scrolled picture: ${it.message}") }
         }
     }
 }

@@ -77,15 +77,8 @@ class ChartScreenshotTest {
                 }
             }
         }
-        // right after the emulator boots, the test activity can take a moment to show anything
-        val shown = runCatching {
-            compose.waitUntil(15_000) { runCatching { compose.onAllNodes(isRoot()).fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false) }
-        }.isSuccess
-        if (!shown) { Log.w(TAG, "chart-$name.png skipped: the test screen didn't come up"); return }
-        compose.waitForIdle()
-        val bmp = compose.onRoot().captureToImage().asAndroidBitmap()
-        TestStorage().openOutputFile("chart-$name.png").use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        Log.i(TAG, "chart-$name.png: $id, ${h.series.keys.sorted()}")
+        if (!Screenshots.ready(compose)) { Log.w(TAG, "chart-$name.png skipped: the test screen didn't come up"); return }
+        if (Screenshots.save(compose, "chart-$name.png")) Log.i(TAG, "chart-$name.png: $id, ${h.series.keys.sorted()}")
     }
 
     @Test fun charizardBaseSetYear() = shoot("base1-4-1y", "base1-4", listOf(Printing.Kind.HOLO, Printing.Kind.FIRST_EDITION), Printing.Kind.HOLO, 365)
