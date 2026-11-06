@@ -39,17 +39,20 @@ import io.github.pmaxai.cardscanner.ui.ScannerViewModel
 import io.github.pmaxai.cardscanner.ui.Settings
 import io.github.pmaxai.cardscanner.ui.ShopBooking
 import io.github.pmaxai.cardscanner.ui.ShopForm
+import io.github.pmaxai.cardscanner.ui.ShopOrderLine
+import io.github.pmaxai.cardscanner.ui.ShopSale
 import io.github.pmaxai.cardscanner.ui.ShopState
 import io.github.pmaxai.cardscanner.ui.Shown
 import io.github.pmaxai.cardscanner.ui.UiState
 import io.github.pmaxai.cardscanner.ui.WebshopPanel
+import io.github.pmaxai.cardscanner.ui.OrderSheet
 import org.json.JSONObject
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 
-/** The Webshop panel for a real card of the data pack, in three states, saved as pictures (the CI prints them). */
+/** The Webshop panel for a real card of the data pack, in its states (Stock in and Sell), saved as pictures (the CI prints them). */
 @RunWith(AndroidJUnit4::class)
 class WebshopScreenshotTest {
     @get:Rule val compose = createComposeRule()
@@ -75,6 +78,8 @@ class WebshopScreenshotTest {
         val enDraft = ShopProduct.from(JSONObject(ShopApiTest.PRODUCT.replace("sv03.5-199-DE-NM-H", "sv03.5-199-EN-EX-H")
             .replace("\"card_language\":\"DE\"", "\"card_language\":\"EN\"").replace("\"condition\":\"NM\"", "\"condition\":\"EX\"")
             .replace("\"status\":\"active\"", "\"status\":\"draft\"")))
+        val order = listOf(ShopOrderLine("sv1-1-DE-NM-N", "Pikachu", "DE · NM · Normal · 1/198", "003", 1, 0.50),
+            ShopOrderLine(inShop.sku, "Glurak-ex", "DE · NM · Holo · 199/165", "014", 2, 129.0))
         val base = UiState(loading = false, shown = shown, settings = Settings(webshop = true),
             packInfo = "21094 card images · data 2026-11-06 · PSA prices")
         val states = listOf(
@@ -87,6 +92,12 @@ class WebshopScreenshotTest {
                 booking = ShopBooking("Added: 1 × Pikachu (DE · NM · Normal) to box 014 · now 3 in stock · 0.50 € · for sale",
                     listOf("No picture: it stays a draft (not visible in the shop)"), "sv1-1-DE-NM-N", 1, "014"))),
             "3-not-connected" to base.copy(shop = ShopState()),
+            "4-sell" to base.copy(shop = ShopState(configured = true, host = "staging.pokemonkarten.at", connectionOk = true,
+                cardRef = "sv03.5-199", products = listOf(inShop, enDraft), selling = true,
+                sellSku = inShop.sku, sellBox = "014", sellQty = 2, order = order.take(1))),
+            "5-sold" to base.copy(shop = ShopState(configured = true, host = "staging.pokemonkarten.at", connectionOk = true,
+                cardRef = "sv03.5-199", products = emptyList(), selling = true,
+                sale = ShopSale("Sold 3 cards · 258.50 € – taken out of stock", order))),
         )
         lateinit var vm: ScannerViewModel
         InstrumentationRegistry.getInstrumentation().runOnMainSync {
@@ -111,5 +122,27 @@ class WebshopScreenshotTest {
                 Screenshots.save(compose, "webshop-$name-form.png")
             }.onFailure { Log.w("WebshopScreenshot", "$name: no scrolled picture: ${it.message}") }
         }
+    }
+
+    /** The customer's order, with a line the shop refused. */
+    @Test
+    fun orderDialog() {
+        lateinit var vm: ScannerViewModel
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            vm = ScannerViewModel(ApplicationProvider.getApplicationContext<Application>())
+        }
+        val st = UiState(loading = false, settings = Settings(webshop = true), shop = ShopState(configured = true,
+            host = "staging.pokemonkarten.at", connectionOk = true, selling = true, order = listOf(
+                ShopOrderLine("sv1-1-DE-NM-N", "Pikachu", "DE · NM · Normal · 1/198", "003", 1, 0.50),
+                ShopOrderLine("sv03.5-199-DE-NM-H", "Glurak-ex", "DE · NM · Holo · 199/165", "014", 2, 129.0,
+                    error = "Box 014 holds only 1 – nothing was taken out"),
+                ShopOrderLine("sv2-12-EN-EX-R", "Oinkologne", "EN · EX · Reverse Holo · 12/193", "120", 3, null))))
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Gold, onPrimary = Ink, background = Ink, surface = Panel)) {
+                Box(Modifier.fillMaxSize().background(Panel)) { OrderSheet(st, vm) {} }
+            }
+        }
+        if (!Screenshots.ready(compose)) { Log.w("WebshopScreenshot", "skipped: the test screen didn't come up"); return }
+        Screenshots.save(compose, "webshop-6-order.png")
     }
 }

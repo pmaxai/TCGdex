@@ -26,6 +26,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -33,6 +34,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -47,27 +49,32 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import io.github.pmaxai.cardscanner.data.Printing
 import io.github.pmaxai.cardscanner.shop.ShopClient
 import io.github.pmaxai.cardscanner.shop.ShopProduct
 import io.github.pmaxai.cardscanner.shop.ShopTerms
 
 private val ShopGreen = Color(0xFF5BC98A)
+private val SellBlue = Color(0xFF6FA8FF)
 
 /**
  * Webshop Mode: scan or search a card, see its prices and what the Pokeshop holds of it, and
- * book copies into the shop (language, condition, quantity, price, box). A scan books nothing:
- * stock changes only with the button.
+ * book copies into the shop (language, condition, quantity, price, box) – or, in Sell, collect a
+ * customer's order and take it out of stock. A scan changes nothing: stock changes only with a button.
  */
 @Composable
 fun WebshopScreen(state: UiState, vm: ScannerViewModel) {
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     var torch by rememberSaveable { mutableStateOf(false) }
     var pad by remember { mutableStateOf<PadRequest?>(null) }
+    var orderOpen by rememberSaveable { mutableStateOf(false) }
 
-    val topBar: @Composable () -> Unit = { WebshopTopBar(state, vm, torch) { torch = it } }
+    val topBar: @Composable () -> Unit = { WebshopTopBar(state, vm, torch, { torch = it }) { orderOpen = true } }
     val camera: @Composable (Modifier) -> Unit = { m ->
         CameraArea(state, vm, torch, video = false, modifier = m) {
             if (!state.paused) {
@@ -102,24 +109,33 @@ fun WebshopScreen(state: UiState, vm: ScannerViewModel) {
     }
     pad?.let { r -> NumberPad(r) { pad = null } }
     state.shop.unknownCard?.let { (de, en) -> UnknownCardDialog(de, en, vm) }
+    if (orderOpen) OrderDialog(state, vm) { orderOpen = false }
 }
 
 @Composable
-private fun WebshopTopBar(state: UiState, vm: ScannerViewModel, torch: Boolean, onTorch: (Boolean) -> Unit) {
+private fun WebshopTopBar(state: UiState, vm: ScannerViewModel, torch: Boolean, onTorch: (Boolean) -> Unit, onOrder: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
     val shop = state.shop
-    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("🔍  Search", color = Muted, fontSize = 15.sp, maxLines = 1, softWrap = false,
-            modifier = Modifier.padding(end = 6.dp).background(Panel, RoundedCornerShape(20.dp))
-                .clickable { vm.openSearch(SearchMode.LOOK_UP) }.padding(horizontal = 12.dp, vertical = 8.dp))
-        // the shop it books into; tap for the connection settings
-        val ok = shop.configured && shop.connectionOk != false
-        Row(Modifier.weight(1f).background((if (ok) ShopGreen else Warn).copy(alpha = 0.15f), RoundedCornerShape(20.dp))
-            .clickable { vm.openSettings(SettingsPage.WEBSHOP) }.padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            Text("🏪 ", fontSize = 14.sp)
-            FitText(if (shop.configured) shop.host.removePrefix("https://") else "Shop not connected", 15.sp,
-                if (ok) Color.White else Warn, Modifier.weight(1f), weight = FontWeight.Bold)
+    Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("🔍", fontSize = 18.sp, modifier = Modifier.background(Panel, RoundedCornerShape(20.dp))
+            .clickable { vm.openSearch(SearchMode.LOOK_UP) }.padding(horizontal = 12.dp, vertical = 7.dp))
+        Spacer(Modifier.width(6.dp))
+        // Stock in: book copies into the shop · Sell: collect a customer's order, take it out of stock
+        Row(Modifier.weight(1f).background(Panel, RoundedCornerShape(20.dp)).padding(3.dp)) {
+            listOf(false to "Stock in", true to "Sell").forEach { (sell, label) ->
+                val on = shop.selling == sell
+                Text(label, color = if (on) Ink else Color.White, fontSize = 14.sp, fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
+                    maxLines = 1, textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f).background(if (on) (if (sell) SellBlue else Gold) else Color.Transparent, RoundedCornerShape(17.dp))
+                        .clickable { vm.setShopSelling(sell) }.padding(vertical = 6.dp))
+            }
+        }
+        if (shop.order.isNotEmpty() || shop.selling) {
+            Spacer(Modifier.width(6.dp))
+            Text("🧾 ${shop.orderCopies}" + (if (shop.orderTotal > 0) " · ${eur(shop.orderTotal)}" else ""), color = Color.White,
+                fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1,
+                modifier = Modifier.background(SellBlue.copy(alpha = if (shop.order.isEmpty()) 0.25f else 0.6f), RoundedCornerShape(20.dp))
+                    .clickable(onClick = onOrder).padding(horizontal = 10.dp, vertical = 7.dp))
         }
         Box {
             TextButton({ menu = true }) { Text("⚙", color = Color.White, fontSize = 20.sp) }
@@ -127,6 +143,7 @@ private fun WebshopTopBar(state: UiState, vm: ScannerViewModel, torch: Boolean, 
                 DropdownMenuItem(text = { Text(if (torch) "Light off" else "Light on") }, onClick = { menu = false; onTorch(!torch) })
                 DropdownMenuItem(text = { Text("Look up again in the shop") }, enabled = state.shown != null,
                     onClick = { menu = false; vm.lookupShop() })
+                DropdownMenuItem(text = { Text("Customer's order…") }, onClick = { menu = false; onOrder() })
                 HorizontalDivider()
                 DropdownMenuItem(text = { Text("Settings…") }, onClick = { menu = false; vm.openSettings(SettingsPage.WEBSHOP) })
             }
@@ -142,19 +159,25 @@ internal fun WebshopPanel(state: UiState, vm: ScannerViewModel, modifier: Modifi
             Text("Connect your Pokeshop first: host, key id and secret (from the shop's admin → API-Schlüssel).", color = Muted)
             Button(onClick = { vm.openSettings(SettingsPage.WEBSHOP) }, modifier = Modifier.padding(top = 8.dp)) { Text("Connect the shop") }
             Spacer(Modifier.height(12.dp))
+        } else {
+            val ok = shop.connectionOk != false
+            Text("🏪 " + shop.host.removePrefix("https://") + if (shop.selling) "  ·  Sell: the customer's order" else "  ·  Stock in",
+                color = if (ok) Muted else Warn, fontSize = 12.sp, maxLines = 1,
+                modifier = Modifier.clickable { vm.openSettings(SettingsPage.WEBSHOP) }.padding(bottom = 4.dp))
         }
         val s = state.shown
         if (s == null) {
-            Text("Show a card, or search one: its prices and what your shop holds of it appear here. " +
+            Text(if (shop.selling) "Scan or search each card the customer wants: it goes into the order. Nothing leaves the stock " +
+                "until you complete the sale." else "Show a card, or search one: its prices and what your shop holds of it appear here. " +
                 "Nothing is booked until you press the button.", color = Muted)
         } else {
             CardAndPrices(s, state, vm)
             if (shop.configured) {
                 ShopEntries(state, vm)
-                ShopFormBlock(state, vm, onPad)
+                if (shop.selling) SellBlock(state, vm) else ShopFormBlock(state, vm, onPad)
             }
         }
-        shop.booking?.let { BookingBanner(state, vm) }
+        if (shop.selling) shop.sale?.let { SaleBanner(state, vm) } else shop.booking?.let { BookingBanner(state, vm) }
         Spacer(Modifier.height(8.dp))
         Text(state.packInfo, color = Muted, fontSize = 11.sp)
     }
@@ -227,10 +250,13 @@ private fun ShopEntries(state: UiState, vm: ScannerViewModel) {
         else -> {
             val match = vm.shopMatch(state)
             shop.products.orEmpty().sortedWith(compareBy({ it.cardLanguage != shop.form.language }, { it.condition })).forEach { p ->
-                ProductRow(p, selected = p.sku == match?.sku) {
-                    vm.setShopLanguage(p.cardLanguage)
-                    vm.setShopCondition(p.condition)
-                    kindOf(p.finish)?.let { k -> if (state.shown?.priceCard?.printings?.any { it.kind == k } == true) vm.choosePrinting(k) }
+                ProductRow(p, selected = if (shop.selling) p.sku == shop.sellSku else p.sku == match?.sku) {
+                    if (shop.selling) vm.selectSellProduct(p.sku)
+                    else {
+                        vm.setShopLanguage(p.cardLanguage)
+                        vm.setShopCondition(p.condition)
+                        kindOf(p.finish)?.let { k -> if (state.shown?.priceCard?.printings?.any { it.kind == k } == true) vm.choosePrinting(k) }
+                    }
                 }
             }
         }
@@ -354,6 +380,133 @@ private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadReque
             Text("⚠ $e", color = Warn, fontSize = 13.sp, modifier = Modifier.weight(1f))
             if (shop.retryable) TextButton({ vm.retryShop() }) { Text("Retry") }
         }
+    }
+}
+
+/** Sell: which product and box the copies come from, how many, then into the customer's order. */
+@Composable
+internal fun SellBlock(state: UiState, vm: ScannerViewModel) {
+    val shop = state.shop
+    SectionTitle("Sell")
+    val p = shop.products?.firstOrNull { it.sku == shop.sellSku }
+    if (shop.loading) return
+    if (p == null) {
+        Text(if (shop.products.isNullOrEmpty()) "Not in the shop – nothing to take out of stock" else "None of these has copies in stock",
+            color = Muted, fontSize = 14.sp)
+        return
+    }
+    Text("${p.cardLanguage} · ${p.condition} · ${ShopTerms.finishLabel(p.finish)} · ${p.price?.let { eur(it.euros) } ?: "no price"}",
+        color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+    if (p.stock.quantity <= 0) {
+        Text("No copies of this one in stock", color = Muted, fontSize = 14.sp)
+        return
+    }
+    FieldLabel("Out of box")
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        p.stock.boxes.filter { it.quantity > 0 }.forEach { b ->
+            FilterChip(selected = b.box == shop.sellBox, onClick = { vm.setSellBox(b.box) },
+                label = { Text("box ${b.box} · ${b.quantity}" + if (b.reserved > 0) " (${b.reserved} held)" else "") })
+        }
+    }
+    val box = p.stock.boxes.firstOrNull { it.box == shop.sellBox }
+    val inOrder = shop.order.filter { it.sku == p.sku && it.box == shop.sellBox }.sumOf { it.quantity }
+    Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        FieldLabel("Copies")
+        StepButton("−", shop.sellQty > 1) { vm.setSellQty(shop.sellQty - 1) }
+        Text("${shop.sellQty}", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 12.dp))
+        StepButton("+", box != null && shop.sellQty < box.quantity) { vm.setSellQty(shop.sellQty + 1) }
+        p.price?.let { Text("  = ${eur(it.euros * shop.sellQty)}", color = Gold, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+    }
+    if (box != null && shop.sellQty + inOrder > box.quantity - box.reserved && box.reserved > 0)
+        Text("⚠ ${box.reserved} of box ${box.box} is held by an online checkout – selling it shows the product as sold out " +
+            "and the shop tells the admin", color = Warn, fontSize = 12.sp)
+    if (inOrder > 0) Text("$inOrder already in the order from box ${shop.sellBox}", color = Muted, fontSize = 12.sp)
+    Button(onClick = { vm.addToOrder() }, enabled = box != null && inOrder < box.quantity,
+        colors = ButtonDefaults.buttonColors(containerColor = SellBlue, contentColor = Ink),
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(50.dp)) {
+        Text("Add to the order", fontSize = 17.sp, fontWeight = FontWeight.Bold)
+    }
+    Text("Nothing leaves the stock yet: the order is taken out of stock when you complete the sale (🧾 at the top).",
+        color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+}
+
+/** The last sale: what was taken out, and Undo. */
+@Composable
+private fun SaleBanner(state: UiState, vm: ScannerViewModel) {
+    val sale = state.shop.sale ?: return
+    Row(Modifier.fillMaxWidth().padding(top = 10.dp).background(Color(0xFF1E2633), RoundedCornerShape(10.dp)).padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text((if (sale.undone) "↩ " else "✓ ") + sale.text, color = if (sale.undone) Muted else SellBlue, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        if (!sale.undone) TextButton({ vm.undoSale() }, enabled = !state.shop.orderBusy) { Text("Undo") }
+    }
+}
+
+/** The customer's order: its lines, the total, and the one button that takes it out of stock. */
+@Composable
+internal fun OrderDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(shape = RoundedCornerShape(18.dp), color = Panel, modifier = Modifier.fillMaxWidth(0.95f)) {
+            OrderSheet(state, vm, onClose)
+        }
+    }
+}
+
+/** The order dialog's content. */
+@Composable
+internal fun OrderSheet(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) {
+    val shop = state.shop
+    var confirmClear by remember { mutableStateOf(false) }
+    Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Customer's order", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            TextButton(onClose) { Text("Close") }
+        }
+        if (shop.order.isEmpty()) Text("Empty. In Sell, scan each card the customer wants and add it.", color = Muted, fontSize = 14.sp)
+        shop.order.forEachIndexed { i, l ->
+            Column(Modifier.fillMaxWidth().padding(top = 8.dp).border(1.dp, if (l.error != null) Warn else Color(0xFF2E3138), RoundedCornerShape(10.dp))
+                .padding(horizontal = 10.dp, vertical = 6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(l.name, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                        Text("${l.detail} · box ${l.box}", color = Muted, fontSize = 12.sp, maxLines = 2)
+                    }
+                    Text(l.total?.let { eur(it) } ?: "no price", color = if (l.price != null) Gold else Warn, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    StepButton("−", l.quantity > 1) { vm.setOrderLineQty(i, l.quantity - 1) }
+                    Text("${l.quantity}", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 10.dp))
+                    StepButton("+", true) { vm.setOrderLineQty(i, l.quantity + 1) }
+                    Text(l.price?.let { "  × ${eur(it)}" } ?: "", color = Muted, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    TextButton({ vm.removeOrderLine(i) }) { Text("Remove", color = Warn) }
+                }
+                l.error?.let { Text("⚠ $it", color = Warn, fontSize = 12.sp) }
+            }
+        }
+        if (shop.order.isNotEmpty()) {
+            Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.Bottom) {
+                Text("${shop.orderCopies} cards", color = Muted, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                Text(eur(shop.orderTotal), color = Gold, fontSize = 26.sp, fontWeight = FontWeight.Black)
+            }
+            if (shop.order.any { it.price == null }) Text("Cards without a price aren't in the total", color = Warn, fontSize = 12.sp)
+            Button(onClick = { vm.completeSale() }, enabled = !shop.orderBusy,
+                colors = ButtonDefaults.buttonColors(containerColor = SellBlue, contentColor = Ink),
+                modifier = Modifier.fillMaxWidth().padding(top = 10.dp).height(52.dp)) {
+                if (shop.orderBusy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Ink)
+                else Text("Complete sale: take ${shop.orderCopies} out of stock", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
+            shop.orderError?.let { e ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("⚠ $e", color = Warn, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    if (shop.orderRetryable) TextButton({ vm.retrySale() }) { Text("Retry") }
+                }
+            }
+            if (confirmClear) Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Empty the order? Nothing changes in the shop.", color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                TextButton({ vm.clearOrder(); confirmClear = false }) { Text("Empty", color = Warn) }
+                TextButton({ confirmClear = false }) { Text("Keep") }
+            } else TextButton({ confirmClear = true }) { Text("Empty the order") }
+        }
+        shop.sale?.let { SaleBanner(state, vm) }
     }
 }
 

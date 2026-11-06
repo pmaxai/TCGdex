@@ -241,6 +241,16 @@ class ShopClient(
     /** POST /products/{sku}/stock: add, remove, set or move copies. Returns the new stock. */
     fun stock(w: PendingWrite): Stock = Stock.from(write(w).first)
 
+    /** One result of POST /batch: the status the single call would have had, and its body (the new stock, or the error). */
+    data class BatchResult(val status: Int, val body: JSONObject?) {
+        val ok: Boolean get() = status in 200..299
+        val error: ShopException? get() = if (ok) null else ShopException(status, body?.str("error") ?: "http_$status", body?.str("message"))
+    }
+
+    /** POST /batch: up to 100 operations under one Idempotency-Key, each on its own (one failing doesn't undo the others). */
+    fun batch(w: PendingWrite): List<BatchResult> =
+        write(w).first.optJSONArray("results").objects().map { BatchResult(it.optInt("status"), it.optJSONObject("body")) }
+
     /** A write with its Idempotency-Key; the response and whether it was a replay of an earlier one. */
     fun write(w: PendingWrite): Pair<JSONObject, Boolean> {
         var replayed = false
@@ -313,6 +323,15 @@ class ShopClient(
                 nameDe?.takeIf { it.isNotBlank() }?.let { put("name_de", it.trim()) }
                 nameEn?.takeIf { it.isNotBlank() }?.let { put("name_en", it.trim()) }
             }
+
+        /** The body of POST /batch changing the stock of several products: (sku, box, delta) each, with a reason. */
+        fun stockBatchBody(changes: List<Triple<String, String, Int>>, reason: String): JSONObject =
+            JSONObject().put("operations", JSONArray().apply {
+                changes.forEach { (sku, box, delta) ->
+                    put(JSONObject().put("op", "stock").put("sku", sku)
+                        .put("body", JSONObject().put("delta", delta).put("storage_location", box).put("reason", reason)))
+                }
+            })
 
         /** A storage box as the shop wants it: "014" for 14 (1–999). */
         fun box(n: Int): String = "%03d".format(n)

@@ -35,6 +35,11 @@ class ShopStore(ctx: Context) {
         get() = prefs.getFloat("min_price", 0f).toDouble().takeIf { it > 0 }?.let { Math.round(it * 100) / 100.0 }
         set(v) { prefs.edit().putFloat("min_price", (v?.takeIf { it > 0 } ?: 0.0).toFloat()).apply() }
 
+    /** Webshop Mode was last on Sell (a customer's order) rather than Stock in */
+    var selling: Boolean
+        get() = prefs.getBoolean("selling", false)
+        set(v) { prefs.edit().putBoolean("selling", v).apply() }
+
     /** the last condition picked (most cards of a batch are in the same condition) */
     var lastCondition: String
         get() = prefs.getString("last_condition", "NM") ?: "NM"

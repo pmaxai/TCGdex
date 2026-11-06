@@ -175,7 +175,7 @@ data class Settings(
 enum class AppMode(val label: String, val about: String) {
     SCANNER("Scanner", "flea market: spot the valuable card fast"),
     TRADING("Trading", "card show: judge prices, negotiate, carts per booth"),
-    WEBSHOP("Webshop", "your Pokeshop: see what's in stock, add copies with price and box"),
+    WEBSHOP("Webshop", "your Pokeshop: see what's in stock, add copies with price and box, sell a customer's order"),
     YOUTUBE("YouTube", "full screen, price reveal, pack value"),
 }
 
@@ -200,6 +200,33 @@ data class ShopForm(
  */
 fun suggestedPrice(market: Double?, minPrice: Double?): Double? =
     market?.let { m -> if (minPrice != null && m < minPrice) minPrice else m }
+
+/** Webshop Mode, Sell: one line of a customer's order (copies of one product out of one box). */
+data class ShopOrderLine(
+    val sku: String,
+    val name: String,
+    /** "DE · NM · Holo" */
+    val detail: String,
+    val box: String,
+    val quantity: Int,
+    /** the shop's price of one copy, EUR (null: none) */
+    val price: Double?,
+    /** the last attempt to take it out failed: why */
+    val error: String? = null,
+) {
+    val total: Double? get() = price?.let { it * quantity }
+
+    fun toJson(): org.json.JSONObject = org.json.JSONObject().put("sku", sku).put("name", name).put("detail", detail).put("box", box)
+        .put("quantity", quantity).put("price", price ?: org.json.JSONObject.NULL)
+
+    companion object {
+        fun from(o: org.json.JSONObject) = ShopOrderLine(o.getString("sku"), o.optString("name"), o.optString("detail"), o.getString("box"),
+            o.optInt("quantity", 1), if (o.isNull("price")) null else o.optDouble("price"))
+    }
+}
+
+/** A completed sale: what was taken out (for Undo). */
+data class ShopSale(val text: String, val lines: List<ShopOrderLine>, val undone: Boolean = false)
 
 /** A booking done in this session, for its confirmation and Undo. */
 data class ShopBooking(val text: String, val warnings: List<String>, val sku: String, val delta: Int, val box: String,
@@ -231,7 +258,24 @@ data class ShopState(
     val booking: ShopBooking? = null,
     /** the shop doesn't know the card: names to send along (German, English), for the user to confirm */
     val unknownCard: Pair<String, String>? = null,
-)
+    /** Sell: a customer's order is collected (copies come out of stock), instead of Stock in */
+    val selling: Boolean = false,
+    /** Sell: the product, box and copies picked for the shown card */
+    val sellSku: String? = null,
+    val sellBox: String? = null,
+    val sellQty: Int = 1,
+    /** Sell: the customer's order so far (kept on the phone until it's sold or cleared) */
+    val order: List<ShopOrderLine> = emptyList(),
+    val orderBusy: Boolean = false,
+    /** the sale failed as a whole; [orderRetryable]: sending it again (same key) may work */
+    val orderError: String? = null,
+    val orderRetryable: Boolean = false,
+    /** the last completed sale, for its confirmation and Undo */
+    val sale: ShopSale? = null,
+) {
+    val orderCopies: Int get() = order.sumOf { it.quantity }
+    val orderTotal: Double get() = order.sumOf { it.total ?: 0.0 }
+}
 
 /** A newer build of the app on GitHub, and how far its download / install has got. */
 data class UpdateState(
@@ -332,6 +376,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     /** Webshop Mode: the shop connection (secret encrypted by the Android Keystore) and the shop's clock */
     private val shopStore = ShopStore(app)
     private val shopClock = ServerClock()
+    /** Webshop Mode, Sell: the customer's order, kept until it's sold or cleared */
+    private val orderFile = java.io.File(app.filesDir, "shop-order.json")
     private var serial = 0
     private var lastAlerted: String? = null
     private var lastText: CardText? = null
@@ -372,6 +418,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(book = book) }
         }
         loadShopConnection()
+        loadShopOrder()
         // Webshop Mode: a new card (or language, printing) -> look it up in the shop, fill in the form
         viewModelScope.launch {
             state.map { s -> if (s.settings.webshop) s.shown?.let { Triple(it.version.id, it.version.lang, it.printing) } else null }
@@ -623,7 +670,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val form = if (newCard) ShopForm(language = lang, condition = shopStore.lastCondition, box = shopStore.lastBox)
             else shop.form.let { f -> if (f.languageByUser) f else f.copy(language = lang) }
         updateShop { it.copy(form = withSuggestedPrice(form, s, if (newCard) null else it.products),
-            error = if (newCard) null else it.error, unknownCard = null) }
+            error = if (newCard) null else it.error, unknownCard = null,
+            sellSku = if (newCard) null else it.sellSku, sellBox = if (newCard) null else it.sellBox) }
         if (newCard) lookupShop(s.version.id)
     }
 
@@ -638,7 +686,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             updateShop { st ->
                 if (st.cardRef != cardRef) st          // another card meanwhile
                 else r.fold(
-                    { list -> st.copy(loading = false, products = list, form = _state.value.shown?.let { withSuggestedPrice(st.form, it, list) } ?: st.form) },
+                    { list -> withSellDefaults(st.copy(loading = false, products = list,
+                        form = _state.value.shown?.let { withSuggestedPrice(st.form, it, list) } ?: st.form)) },
                     { e -> st.copy(loading = false, lookupError = (e as? ShopException)?.friendly ?: (e.message ?: "lookup failed")) },
                 )
             }
@@ -762,6 +811,181 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun dismissUnknownCard() = updateShop { it.copy(unknownCard = null) }
+
+    // ---------------------------------------------------------------- Webshop Mode: Sell
+    /** the sale last sent: a retry sends the same batch with the same idempotency key */
+    private var pendingSale: Pair<PendingWrite, List<ShopOrderLine>>? = null
+
+    private fun loadShopOrder() {
+        val o = runCatching { org.json.JSONObject(orderFile.readText()) }.getOrNull()
+        val lines = o?.optJSONArray("lines")?.let { a -> (0 until a.length()).mapNotNull { runCatching { ShopOrderLine.from(a.getJSONObject(it)) }.getOrNull() } }
+        updateShop { it.copy(order = lines.orEmpty(), selling = shopStore.selling) }
+    }
+
+    private fun saveShopOrder(order: List<ShopOrderLine>) {
+        runCatching {
+            orderFile.writeText(org.json.JSONObject().put("lines", org.json.JSONArray().apply { order.forEach { put(it.toJson()) } }).toString())
+        }.onFailure { Log.w(TAG, "order not saved", it) }
+    }
+
+    /** Stock in (book copies into the shop) or Sell (collect a customer's order, take it out of stock). */
+    fun setShopSelling(on: Boolean) {
+        shopStore.selling = on
+        updateShop { withSellDefaults(it.copy(selling = on)) }
+    }
+
+    /** The product and box a sale takes from, picked for the shown card: the scanned language and printing first, a box with free copies. */
+    private fun withSellDefaults(st: ShopState): ShopState {
+        val products = st.products.orEmpty().filter { it.stock.quantity > 0 }
+        if (products.isEmpty()) return st.copy(sellSku = null, sellBox = null, sellQty = 1)
+        st.sellSku?.let { sku -> products.firstOrNull { it.sku == sku } }?.let { keep ->
+            if (keep.stock.boxes.any { it.box == st.sellBox && it.quantity > 0 }) return st
+        }
+        val s = _state.value.shown
+        val lang = s?.let { ShopTerms.languageOf(it.version.lang) }
+        val finish = s?.let { ShopTerms.finishOf(it.printing) }
+        val p = products.sortedWith(compareBy({ it.cardLanguage != lang }, { it.finish != finish }, { -it.stock.available })).first()
+        return st.copy(sellSku = p.sku, sellBox = bestBox(p), sellQty = 1)
+    }
+
+    /** the box with the most free copies (not held by online checkouts), else the fullest */
+    private fun bestBox(p: ShopProduct): String? =
+        p.stock.boxes.filter { it.quantity > 0 }.maxWithOrNull(compareBy({ it.quantity - it.reserved }, { it.quantity }))?.box
+
+    fun selectSellProduct(sku: String) {
+        holdCard()
+        updateShop { st ->
+            val p = st.products?.firstOrNull { it.sku == sku } ?: return@updateShop st
+            st.copy(sellSku = sku, sellBox = bestBox(p), sellQty = 1)
+        }
+    }
+
+    fun setSellBox(box: String) { holdCard(); updateShop { it.copy(sellBox = box, sellQty = 1) } }
+
+    fun setSellQty(n: Int) {
+        holdCard()
+        updateShop { st ->
+            val max = st.products?.firstOrNull { it.sku == st.sellSku }?.stock?.boxes?.firstOrNull { it.box == st.sellBox }?.quantity ?: 1
+            st.copy(sellQty = n.coerceIn(1, max.coerceAtLeast(1)))
+        }
+    }
+
+    /** The picked copies go into the customer's order (nothing leaves the stock yet). */
+    fun addToOrder() {
+        val st = _state.value.shop
+        val p = st.products?.firstOrNull { it.sku == st.sellSku } ?: return
+        val box = st.sellBox ?: return
+        val inBox = p.stock.boxes.firstOrNull { it.box == box }?.quantity ?: 0
+        val s = _state.value.shown
+        val name = (if (p.cardLanguage == "DE") p.nameDe else p.nameEn).ifBlank { s?.version?.name ?: p.sku }
+        val detail = "${p.cardLanguage} · ${p.condition} · ${ShopTerms.finishLabel(p.finish)}" + (p.grading?.let { " · $it" } ?: "") +
+            " · ${p.cardNumber}"
+        val order = st.order.toMutableList()
+        val i = order.indexOfFirst { it.sku == p.sku && it.box == box }
+        if (i >= 0) order[i] = order[i].copy(quantity = (order[i].quantity + st.sellQty).coerceAtMost(inBox), error = null)
+        else order += ShopOrderLine(p.sku, name, detail, box, st.sellQty.coerceAtMost(inBox), p.price?.euros)
+        saveShopOrder(order)
+        updateShop { it.copy(order = order, sellQty = 1, orderError = null) }
+        _state.update { it.copy(message = "In the order: ${order.sumOf { l -> l.quantity }} cards") }
+        // on to the next card the customer wants
+        if (_state.value.paused && _state.value.shown?.fromPhoto != true) resume()
+    }
+
+    fun setOrderLineQty(i: Int, n: Int) = updateShop { st ->
+        if (i !in st.order.indices) return@updateShop st
+        val order = st.order.toMutableList().also { it[i] = it[i].copy(quantity = n.coerceIn(1, 999)) }
+        saveShopOrder(order)
+        st.copy(order = order)
+    }
+
+    fun removeOrderLine(i: Int) = updateShop { st ->
+        if (i !in st.order.indices) return@updateShop st
+        val order = st.order.filterIndexed { j, _ -> j != i }
+        saveShopOrder(order)
+        st.copy(order = order)
+    }
+
+    fun clearOrder() {
+        pendingSale = null
+        saveShopOrder(emptyList())
+        updateShop { it.copy(order = emptyList(), orderError = null) }
+    }
+
+    /**
+     * The user's go: take the whole order out of stock (one POST /batch, reason "sold in person").
+     * Lines the shop refuses (e.g. the box no longer holds them) stay in the order with the reason.
+     */
+    fun completeSale() {
+        val st = _state.value.shop
+        if (st.orderBusy || st.order.isEmpty()) return
+        val lines = st.order.map { it.copy(error = null) }
+        // the same order after a failed attempt: the same key, so it can't be taken out twice
+        val w = pendingSale?.takeIf { it.second == lines }?.first ?: PendingWrite.json("POST", "/batch",
+            ShopClient.stockBatchBody(lines.map { Triple(it.sku, it.box, -it.quantity) }, "sold in person (scanner app)"))
+        pendingSale = w to lines
+        sendSale(w, lines)
+    }
+
+    /** Sends the failed sale again: the same batch, the same key (nothing is taken out twice). */
+    fun retrySale() { pendingSale?.let { (w, lines) -> sendSale(w, lines) } }
+
+    private fun sendSale(w: PendingWrite, lines: List<ShopOrderLine>) {
+        val c = client() ?: run { updateShop { it.copy(orderError = "Connect the shop first (⚙ → Webshop)", orderRetryable = false) }; return }
+        updateShop { it.copy(orderBusy = true, orderError = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val results = c.batch(w)
+                pendingSale = null
+                val sold = mutableListOf<ShopOrderLine>()
+                val left = mutableListOf<ShopOrderLine>()
+                lines.forEachIndexed { i, l ->
+                    val r = results.getOrNull(i)
+                    if (r?.ok == true) sold += l
+                    else left += l.copy(error = r?.error?.friendly ?: "no answer for this card")
+                }
+                val total = sold.sumOf { it.total ?: 0.0 }
+                val text = if (sold.isEmpty()) "Nothing was taken out" else
+                    "Sold ${sold.sumOf { it.quantity }} cards" + (if (total > 0) " · " + String.format(Locale.getDefault(), "%.2f €", total) else "") +
+                        " – taken out of stock" + if (left.isNotEmpty()) " · ${left.size} line(s) failed, see the order" else ""
+                saveShopOrder(left)
+                updateShop { it.copy(orderBusy = false, order = left, sale = if (sold.isEmpty()) it.sale else ShopSale(text, sold),
+                    orderError = if (sold.isEmpty() && left.isNotEmpty()) "Nothing was taken out – see the lines" else null) }
+                lookupShop()                                       // the shown card's stock, fresh
+            } catch (e: ShopException) {
+                if (e.status in 400..499) pendingSale = null
+                updateShop { it.copy(orderBusy = false, orderError = e.friendly, orderRetryable = e.status == 0 || e.status >= 500) }
+            } catch (t: Throwable) {
+                Log.w(TAG, "sale failed", t)
+                updateShop { it.copy(orderBusy = false, orderError = t.message ?: "failed", orderRetryable = true) }
+            }
+        }
+    }
+
+    /** the undo last sent, for its sale: pressing Undo again after a failure reuses its key */
+    private var pendingUndo: Pair<ShopSale, PendingWrite>? = null
+
+    /** Undo the last sale: the copies go back into their boxes. */
+    fun undoSale() {
+        val sale = _state.value.shop.sale?.takeIf { !it.undone } ?: return
+        val c = client() ?: return
+        val w = pendingUndo?.takeIf { it.first == sale }?.second ?: PendingWrite.json("POST", "/batch",
+            ShopClient.stockBatchBody(sale.lines.map { Triple(it.sku, it.box, it.quantity) }, "sale undone (scanner app)"))
+        pendingUndo = sale to w
+        updateShop { it.copy(orderBusy = true, orderError = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { c.batch(w) }
+            val results = r.getOrNull()
+            if (results != null) pendingUndo = null
+            // lines put back are done; only the others are left to undo
+            val left = if (results == null) sale.lines else sale.lines.filterIndexed { i, _ -> results.getOrNull(i)?.ok != true }
+            updateShop { st ->
+                if (left.isEmpty()) st.copy(orderBusy = false, sale = sale.copy(undone = true, text = "Undone: the cards are back in their boxes"))
+                else st.copy(orderBusy = false, sale = sale.copy(lines = left), orderError = "Undo failed for ${left.size} line(s): " +
+                    (r.exceptionOrNull()?.let { (it as? ShopException)?.friendly ?: it.message } ?: results?.firstNotNullOfOrNull { it.error?.friendly } ?: ""))
+            }
+            lookupShop()
+        }
+    }
 
     /** Undo the last booking: take the copies out of the box again (a stock correction). */
     fun undoShopBooking() {

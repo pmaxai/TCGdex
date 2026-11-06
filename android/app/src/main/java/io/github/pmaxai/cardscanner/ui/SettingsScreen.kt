@@ -281,6 +281,10 @@ private fun WebshopPage(state: UiState, vm: ScannerViewModel) {
     Heading("How booking works")
     Hint("Scanning a card only looks it up: you see its prices and what the shop holds of it. Stock changes only when you " +
         "press Add to stock / Create in the shop, after choosing language, condition, copies, price and box. Undo takes the copies out again.")
+    Heading("How selling works")
+    Hint("Switch to Sell at the top of Webshop Mode. Scan each card the customer wants and add it to the order (🧾): nothing leaves " +
+        "the stock yet. Complete sale takes the whole order out of stock at once, with the reason \"sold in person\"; Undo puts it back. " +
+        "The shop has no orders for this: the sale shows there as stock changes.")
 }
 
 @Composable

@@ -165,6 +165,47 @@ class ShopApiTest {
     }
 
     @Test
+    fun aSaleIsOneBatchAndEachLineGetsItsOwnResult() {
+        server.enqueue(json(200, """{"results":[
+            {"status":200,"body":{"quantity":1,"reserved":0,"available":1,"boxes":[{"storage_location":"014","quantity":1,"reserved":0}]}},
+            {"status":409,"body":{"error":"insufficient_stock","message":"box 003 holds 1"}}]}"""))
+        val body = ShopClient.stockBatchBody(listOf(Triple("sv03.5-199-DE-NM-H", "014", -1), Triple("sv1-1-DE-NM-N", "003", -2)),
+            "sold in person (scanner app)")
+        val results = client().batch(PendingWrite.json("POST", "/batch", body))
+        assertEquals(2, results.size)
+        assertTrue(results[0].ok)
+        assertNull(results[0].error)
+        assertEquals(1, results[0].body!!.getInt("quantity"))
+        assertFalse(results[1].ok)
+        assertEquals("insufficient_stock", results[1].error!!.code)
+
+        val r = server.takeRequest()
+        assertEquals("/api/v1/batch", r.path)
+        assertSigned(r)
+        assertTrue(r.getHeader("Idempotency-Key")!!.isNotBlank())
+        val ops = JSONObject(r.body.readUtf8()).getJSONArray("operations")
+        assertEquals(2, ops.length())
+        ops.getJSONObject(1).let { op ->
+            assertEquals("stock", op.getString("op"))
+            assertEquals("sv1-1-DE-NM-N", op.getString("sku"))
+            val b = op.getJSONObject("body")
+            assertEquals(-2, b.getInt("delta"))
+            assertEquals("003", b.getString("storage_location"))      // the box as the shop writes it
+            assertEquals("sold in person (scanner app)", b.getString("reason"))
+        }
+    }
+
+    @Test
+    fun anOrderSurvivesARestart() {
+        val lines = listOf(io.github.pmaxai.cardscanner.ui.ShopOrderLine("sv03.5-199-DE-NM-H", "Glurak-ex", "DE · NM · Holo · 199/165", "014", 2, 129.0),
+            io.github.pmaxai.cardscanner.ui.ShopOrderLine("sv1-1-DE-NM-N", "Pikachu", "DE · NM · Normal · 1/198", "003", 1, null))
+        val back = lines.map { io.github.pmaxai.cardscanner.ui.ShopOrderLine.from(JSONObject(it.toJson().toString())) }
+        assertEquals(lines, back)
+        assertEquals(258.0, back[0].total!!, 1e-9)
+        assertNull(back[1].total)                                              // no price: not in the total
+    }
+
+    @Test
     fun theMinimumPriceIsAFloorForTheSuggestion() {
         assertEquals(0.50, io.github.pmaxai.cardscanner.ui.suggestedPrice(0.08, 0.50)!!, 1e-9)    // a few cents -> the minimum
         assertEquals(3.20, io.github.pmaxai.cardscanner.ui.suggestedPrice(3.20, 0.50)!!, 1e-9)    // worth more: its market value

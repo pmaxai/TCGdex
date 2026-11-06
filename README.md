@@ -202,14 +202,26 @@ downgrades), or restore the code from the tag.
   exists) or **Create in the shop** (it doesn't). **Undo** takes the copies out again.
   While you fill in, the camera keeps the card. A card the shop's card list doesn't know
   is created with its German and English names (shown for you to check).
+  - **Sell** (the *Stock in | Sell* switch at the top): a customer at your table. Scan or
+    search each card they want; the app picks the matching product (scanned language and
+    printing first; tap another line to change it) and the box with the most free copies.
+    Pick the box and copies and press **Add to the order**: nothing leaves the stock yet.
+    The **🧾** button shows the order (cards and total, kept if the app is closed): change
+    copies, remove lines, then **Complete sale** takes everything out of stock in one go
+    (one `/batch` request, reason "sold in person (scanner app)"). A line the shop refuses
+    (e.g. the box holds fewer copies by now) stays in the order with the reason; the rest is
+    taken out. **Undo** puts the sold copies back into their boxes. Copies held by an online
+    checkout are marked: selling them shows the product as sold out and the shop tells the
+    admin. The shop's API has no orders, so a sale appears in the shop as stock changes with
+    that reason (not as an order with a customer or a payment).
   - **Connect** in ⚙ → Webshop: host (e.g. `pokemonkarten.at`, or `staging.pokemonkarten.at`
     for the test shop), key id and secret from the shop's admin (Admin → API-Schlüssel; one
     key per phone, no IP allowlist). The secret is stored encrypted with a key of the
     Android Keystore and is never shown again, never in the APK or a log. *Save & test*
     checks key, secret and clock.
-  - Every request is signed (HMAC-SHA256); every booking has an idempotency key that
-    stays the same when it's sent again, so a retry after a dropped connection never books
-    twice. The phone's clock is corrected from the shop's.
+  - Every request is signed (HMAC-SHA256); every booking and sale has an idempotency key
+    that stays the same when it's sent again, so a retry after a dropped connection never
+    books or sells twice. The phone's clock is corrected from the shop's.
 - **YouTube mode** (⚙ → Mode → YouTube): a clean screen for screen-recorded opening and
   price-check videos, in portrait or landscape (see *Screen orientation*). The card box
   keeps the same look in both: it is scaled as a whole instead of wrapping text, and long

@@ -19,7 +19,7 @@ import org.junit.runner.RunWith
 /**
  * Real calls against the staging shop (own database, test bookings never touch real stock).
  * Runs only with the repository secrets POKESHOP_STAGING_KEY_ID / _SECRET; skipped otherwise.
- * Books one copy into test box 998 and takes it out again.
+ * Books one copy into test box 998, sells it in a batch, undoes the sale, and takes it out again.
  */
 @RunWith(AndroidJUnit4::class)
 class ShopStagingTest {
@@ -48,6 +48,23 @@ class ShopStagingTest {
             "again replayed=${again.replayed} stock ${again.product.stock.quantity}")
         assertTrue("same key: replayed", again.replayed)
         assertEquals(first.product.stock.quantity, again.product.stock.quantity)
+
+        // a customer's order: one batch, each line on its own (one copy sold, one line asking too much refused)
+        val sku = first.product.sku
+        val sale = PendingWrite.json("POST", "/batch", ShopClient.stockBatchBody(
+            listOf(Triple(sku, "998", -1), Triple(sku, "998", -1000)), "scanner app test: sold in person"))
+        val sold = c.batch(sale)
+        Log.i(TAG, "sale: ${sold.map { "${it.status} ${it.error?.code ?: it.body?.optInt("quantity")}" }}")
+        assertEquals(2, sold.size)
+        assertTrue("first line taken out", sold[0].ok)
+        assertEquals(first.product.stock.quantity - 1, sold[0].body!!.getInt("quantity"))
+        assertEquals("insufficient_stock", sold[1].error?.code)
+        assertEquals("the same batch again changes nothing", sold.map { it.status }, c.batch(sale).map { it.status })
+        assertEquals(first.product.stock.quantity - 1, c.product(sku).stock.quantity)
+        // the sale undone: back into the box
+        val back = c.batch(PendingWrite.json("POST", "/batch", ShopClient.stockBatchBody(listOf(Triple(sku, "998", 1)), "scanner app test: sale undone")))
+        assertTrue(back.single().ok)
+        assertEquals(first.product.stock.quantity, back.single().body!!.getInt("quantity"))
         val stock = c.stock(PendingWrite.json("POST", "/products/${first.product.sku}/stock",
             JSONObject().put("delta", -1).put("storage_location", "998").put("reason", "scanner app test")))
         assertEquals(first.product.stock.quantity - 1, stock.quantity)
