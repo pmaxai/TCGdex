@@ -190,6 +190,7 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
                     !granted -> Message("The scanner needs the camera.") { Button({ ask.launch(Manifest.permission.CAMERA) }) { Text("Allow camera") } }
                     state.settings.youtube -> YouTubeScreen(state, vm)
                     state.settings.trading -> TradingScreen(state, vm)
+                    state.settings.webshop -> WebshopScreen(state, vm)
                     else -> Scanner(state, vm)
                 }
             }
@@ -320,7 +321,11 @@ fun CameraArea(state: UiState, vm: ScannerViewModel, torch: Boolean, video: Bool
         if (state.paused) {
             Box(Modifier.fillMaxSize().background(Color(0xAA000000)).clickable { vm.resume() },
                 contentAlignment = Alignment.Center) {
-                Text(if (state.shown?.fromSearch == true) "Looked up · tap to scan again" else "Tap to scan again",
+                Text(when {
+                    state.shown?.fromSearch == true -> "Looked up · tap to scan again"
+                    state.settings.webshop && state.shown != null -> "Kept while you fill in · tap to scan again"
+                    else -> "Tap to scan again"
+                },
                     color = Color.White, fontSize = 18.sp)
             }
         }

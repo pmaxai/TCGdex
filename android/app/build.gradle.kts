@@ -28,6 +28,10 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // screenshots from the tests land in build/outputs/connected_android_test_additional_output
         testInstrumentationRunnerArguments["useTestStorageService"] = "true"
+        // the staging shop's key for the Webshop test (CI secrets; the test is skipped without them).
+        // Only the test run gets them, never the app.
+        System.getenv("POKESHOP_STAGING_KEY_ID")?.takeIf { it.isNotBlank() }?.let { testInstrumentationRunnerArguments["shopKeyId"] = it }
+        System.getenv("POKESHOP_STAGING_SECRET")?.takeIf { it.isNotBlank() }?.let { testInstrumentationRunnerArguments["shopSecret"] = it }
     }
 
     // one APK per processor type: arm64 for phones (the download), x86_64 for the CI emulator
@@ -90,6 +94,9 @@ dependencies {
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.core:core-ktx:1.15.0")
+    // Webshop Mode: the Pokeshop API (signed HTTPS requests)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")

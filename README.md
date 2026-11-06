@@ -52,8 +52,8 @@ downgrades), or restore the code from the tag.
 
 - **Settings (⚙)** open as a screen of their own, with a sidebar of pages: **Mode**,
   **Camera** (wait time, frame size, zoom, fill, energy cards, orientation), **Prices**
-  (alert, PSA, where prices come from), **Trading**, **YouTube**, **Advanced** (details)
-  and **About** (version, price date, updates). Upright, the sidebar is a slim column of
+  (alert, PSA, where prices come from), **Trading**, **Webshop** (shop connection),
+  **YouTube**, **Advanced** (details) and **About** (version, price date, updates). Upright, the sidebar is a slim column of
   icons; turned sideways it lists the full names. ⚙ opens the page that fits where you
   are (Trading Mode: Trading; YouTube: YouTube; otherwise where you left it), the Alert
   chip opens Prices. Back (← or the phone's back) returns to the camera.
@@ -190,6 +190,25 @@ downgrades), or restore the code from the tag.
     a show or all as CSV.
   - **Last scans**: the tray under the price brings back any of the last 20 cards.
   - Carts and deals are kept on the phone (nothing leaves it unless you save a CSV).
+- **Webshop Mode** (⚙ → Mode → Webshop), for your Pokeshop (pokemonkarten.at): scan or
+  search a card and see its prices (market value for the condition, Cardmarket trend,
+  TCGplayer, PSA) and what the shop holds of it: one line per product (language ·
+  condition · finish) with price, stock per box and status. Pick language (from the scan,
+  any of the shop's 15 can be chosen), condition (M … PO), copies, selling price (suggested:
+  the shop's price, else the market value for the condition) and storage box (1–999, the
+  last one is remembered); a new product can get a comment (shown on its product page).
+  **Scanning books nothing**: the stock changes only with **Add to stock** (the product
+  exists) or **Create in the shop** (it doesn't). **Undo** takes the copies out again.
+  While you fill in, the camera keeps the card. A card the shop's card list doesn't know
+  is created with its German and English names (shown for you to check).
+  - **Connect** in ⚙ → Webshop: host (e.g. `pokemonkarten.at`, or `staging.pokemonkarten.at`
+    for the test shop), key id and secret from the shop's admin (Admin → API-Schlüssel; one
+    key per phone, no IP allowlist). The secret is stored encrypted with a key of the
+    Android Keystore and is never shown again, never in the APK or a log. *Save & test*
+    checks key, secret and clock.
+  - Every request is signed (HMAC-SHA256); every booking has an idempotency key that
+    stays the same when it's sent again, so a retry after a dropped connection never books
+    twice. The phone's clock is corrected from the shop's.
 - **YouTube mode** (⚙ → Mode → YouTube): a clean screen for screen-recorded opening and
   price-check videos, in portrait or landscape (see *Screen orientation*). The card box
   keeps the same look in both: it is scaled as a whole instead of wrapping text, and long

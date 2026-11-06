@@ -102,6 +102,10 @@ jobs:
 
       - name: Self-test on an emulator (app vs. pipeline)
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          # the staging shop's key for the Webshop test (repository secrets; without them that test is skipped)
+          POKESHOP_STAGING_KEY_ID: ${{ secrets.POKESHOP_STAGING_KEY_ID }}
+          POKESHOP_STAGING_SECRET: ${{ secrets.POKESHOP_STAGING_SECRET }}
         with:
           api-level: 34
           arch: x86_64
@@ -110,7 +114,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           disable-animations: true
           working-directory: android
-          script: ./gradlew --no-daemon connectedDebugAndroidTest; s=$?; adb logcat -d -s ParityTest:I CardScanner:W AndroidRuntime:E; exit $s
+          script: ./gradlew --no-daemon connectedDebugAndroidTest; s=$?; adb logcat -d -s ParityTest:I ShopStaging:I CardScanner:W AndroidRuntime:E; exit $s
 
       - uses: actions/upload-artifact@v4
         continue-on-error: true      # a hiccup of GitHub's artifact store doesn't fail a good build

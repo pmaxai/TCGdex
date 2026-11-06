@@ -38,6 +38,16 @@ import io.github.pmaxai.cardscanner.vision.Recognizer
 import io.github.pmaxai.cardscanner.vision.ScanTracker
 import io.github.pmaxai.cardscanner.vision.VersionResolver
 import io.github.pmaxai.cardscanner.update.AppRelease
+import io.github.pmaxai.cardscanner.shop.Money
+import io.github.pmaxai.cardscanner.shop.PendingWrite
+import io.github.pmaxai.cardscanner.shop.ShopClient
+import io.github.pmaxai.cardscanner.shop.ShopException
+import io.github.pmaxai.cardscanner.shop.ShopProduct
+import io.github.pmaxai.cardscanner.shop.ShopStore
+import io.github.pmaxai.cardscanner.shop.ShopTerms
+import io.github.pmaxai.cardscanner.shop.ServerClock
+import io.github.pmaxai.cardscanner.shop.ShopCredentials
+import io.github.pmaxai.cardscanner.shop.shopWarningText
 import io.github.pmaxai.cardscanner.update.AppUpdate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -45,6 +55,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -52,6 +64,7 @@ import org.opencv.android.Utils
 import org.opencv.core.Mat
 import org.opencv.core.Point
 import org.opencv.imgproc.Imgproc
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
@@ -149,17 +162,67 @@ data class Settings(
     val tradingCondition: Condition = Condition.NM,
     /** Cardmarket price the market value starts from */
     val reference: Reference = Reference.TREND,
+    /** Webshop Mode: look cards up in the Pokeshop and book copies into its stock */
+    val webshop: Boolean = false,
 ) {
     val guideFraction: Double get() = guideSize / 100.0
-    val mode: AppMode get() = when { youtube -> AppMode.YOUTUBE; trading -> AppMode.TRADING; else -> AppMode.SCANNER }
-    fun withMode(m: AppMode) = copy(youtube = m == AppMode.YOUTUBE, trading = m == AppMode.TRADING)
+    val mode: AppMode get() = when {
+        youtube -> AppMode.YOUTUBE; trading -> AppMode.TRADING; webshop -> AppMode.WEBSHOP; else -> AppMode.SCANNER
+    }
+    fun withMode(m: AppMode) = copy(youtube = m == AppMode.YOUTUBE, trading = m == AppMode.TRADING, webshop = m == AppMode.WEBSHOP)
 }
 
 enum class AppMode(val label: String, val about: String) {
     SCANNER("Scanner", "flea market: spot the valuable card fast"),
     TRADING("Trading", "card show: judge prices, negotiate, carts per booth"),
+    WEBSHOP("Webshop", "your Pokeshop: see what's in stock, add copies with price and box"),
     YOUTUBE("YouTube", "full screen, price reveal, pack value"),
 }
+
+/** Webshop Mode: what goes into the shop for the shown card (the user fills it in; nothing is booked by itself). */
+data class ShopForm(
+    val language: String = "EN",
+    val languageByUser: Boolean = false,
+    val condition: String = "NM",
+    val quantity: Int = 1,
+    /** selling price, EUR; suggested from the market value (or the shop's price) until the user types one */
+    val price: Double? = null,
+    val priceByUser: Boolean = false,
+    /** storage box 1–999 */
+    val box: Int? = null,
+    /** shown on the product page (description) of a new product */
+    val comment: String = "",
+)
+
+/** A booking done in this session, for its confirmation and Undo. */
+data class ShopBooking(val text: String, val warnings: List<String>, val sku: String, val delta: Int, val box: String,
+                       val undone: Boolean = false)
+
+data class ShopState(
+    /** host, key id and secret are saved */
+    val configured: Boolean = false,
+    val host: String = "",
+    val keyId: String = "",
+    val hasSecret: Boolean = false,
+    /** the last connection test: its text, and whether it worked (null: not tested) */
+    val connection: String? = null,
+    val connectionOk: Boolean? = null,
+    val testing: Boolean = false,
+    /** the card looked up in the shop, and its products there (null: not looked up yet) */
+    val cardRef: String? = null,
+    val loading: Boolean = false,
+    val products: List<ShopProduct>? = null,
+    val lookupError: String? = null,
+    val form: ShopForm = ShopForm(),
+    /** a booking is on its way */
+    val busy: Boolean = false,
+    /** the last booking failed; [retryable]: sending it again (same idempotency key) may work */
+    val error: String? = null,
+    val retryable: Boolean = false,
+    val booking: ShopBooking? = null,
+    /** the shop doesn't know the card: names to send along (German, English), for the user to confirm */
+    val unknownCard: Pair<String, String>? = null,
+)
 
 /** A newer build of the app on GitHub, and how far its download / install has got. */
 data class UpdateState(
@@ -216,6 +279,8 @@ data class UiState(
     val scanTarget: Side = Side.GET,
     /** the settings screen is open on this page (null: closed) */
     val settingsPage: SettingsPage? = null,
+    /** Webshop Mode: the connection, the shown card in the shop, the booking form */
+    val shop: ShopState = ShopState(),
     /** a newer app with newer prices is out (null: none, or not checked yet) */
     val update: UpdateState? = null,
     /** TCGdex's price date of this app's data pack, ISO UTC */
@@ -255,6 +320,9 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     @Volatile private var lastPicks: List<Candidate> = emptyList()
     private val lock = Any()
     private val prefs = app.getSharedPreferences("settings", Context.MODE_PRIVATE)
+    /** Webshop Mode: the shop connection (secret encrypted by the Android Keystore) and the shop's clock */
+    private val shopStore = ShopStore(app)
+    private val shopClock = ServerClock()
     private var serial = 0
     private var lastAlerted: String? = null
     private var lastText: CardText? = null
@@ -286,12 +354,20 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                     .getOrDefault(Condition.NM),
                 reference = runCatching { Reference.valueOf(prefs.getString("trade_reference", null) ?: "TREND") }
                     .getOrDefault(Reference.TREND),
+                webshop = prefs.getBoolean("webshop", false),
             ), draft = DealDraft(runCatching { Condition.valueOf(prefs.getString("trade_condition", null) ?: "NM") }
                 .getOrDefault(Condition.NM)))
         }
         viewModelScope.launch(Dispatchers.IO) {
             val book = tradingStore.load()
             _state.update { it.copy(book = book) }
+        }
+        loadShopConnection()
+        // Webshop Mode: a new card (or language, printing) -> look it up in the shop, fill in the form
+        viewModelScope.launch {
+            state.map { s -> if (s.settings.webshop) s.shown?.let { Triple(it.version.id, it.version.lang, it.printing) } else null }
+                .distinctUntilChanged()
+                .collect { key -> if (key != null) onShopCard() }
         }
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -465,6 +541,227 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     fun settingsPageShown(page: SettingsPage) { lastSettingsPage = page }
 
     fun closeSettings() = _state.update { it.copy(settingsPage = null) }
+
+    // ------------------------------------------------------------------ Webshop Mode
+    private var shopClient: Pair<String, ShopClient>? = null
+    /** the booking last sent: a retry sends the same bytes with the same idempotency key */
+    private var pendingShop: PendingWrite? = null
+    private var pendingShopText: String = ""
+
+    private fun client(): ShopClient? {
+        val c = shopStore.credentials() ?: return null
+        val tag = "${c.baseUrl}|${c.keyId}|${c.secret.hashCode()}"
+        shopClient?.takeIf { it.first == tag }?.let { return it.second }
+        return ShopClient(c, shopClock).also { shopClient = tag to it }
+    }
+
+    private fun updateShop(f: (ShopState) -> ShopState) = _state.update { it.copy(shop = f(it.shop)) }
+
+    private fun loadShopConnection() = updateShop {
+        it.copy(configured = shopStore.credentials() != null, host = shopStore.host, keyId = shopStore.keyId, hasSecret = shopStore.hasSecret)
+    }
+
+    /** Saves the connection (an empty [secret] keeps the stored one) and tests it. */
+    fun saveShop(host: String, keyId: String, secret: String) {
+        if (ShopCredentials.baseUrlOf(host) == null) {
+            updateShop { it.copy(connection = "Not a valid host – e.g. pokemonkarten.at or staging.pokemonkarten.at", connectionOk = false) }
+            return
+        }
+        shopStore.save(host, keyId, secret.ifBlank { null })
+        shopClient = null
+        loadShopConnection()
+        testShop()
+    }
+
+    /** GET /health: key, secret and clock work. */
+    fun testShop() {
+        val c = client()
+        if (c == null) { updateShop { it.copy(connection = "Host, key id and secret are needed", connectionOk = false) }; return }
+        updateShop { it.copy(testing = true) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { c.health() }
+            updateShop { st ->
+                r.fold(
+                    { h -> st.copy(testing = false, connectionOk = true,
+                        connection = "Connected as ${h.keyId}" + (h.serverTime?.let { " · shop time ${it.take(16).replace('T', ' ')} UTC" } ?: "")) },
+                    { e -> st.copy(testing = false, connectionOk = false, connection = (e as? ShopException)?.friendly ?: (e.message ?: "failed")) },
+                )
+            }
+            if (r.isSuccess && _state.value.settings.webshop) onShopCard(force = true)
+        }
+    }
+
+    fun disconnectShop() {
+        shopStore.clear()
+        shopClient = null
+        updateShop { ShopState() }
+    }
+
+    /** The shown card changed (Webshop Mode): fill in the form and look the card up in the shop. */
+    private fun onShopCard(force: Boolean = false) {
+        val s = _state.value.shown ?: return
+        val shop = _state.value.shop
+        val newCard = force || shop.cardRef != s.version.id
+        val lang = ShopTerms.languageOf(s.version.lang)
+        val form = if (newCard) ShopForm(language = lang, condition = shopStore.lastCondition, box = shopStore.lastBox)
+            else shop.form.let { f -> if (f.languageByUser) f else f.copy(language = lang) }
+        updateShop { it.copy(form = withSuggestedPrice(form, s, if (newCard) null else it.products),
+            error = if (newCard) null else it.error, unknownCard = null) }
+        if (newCard) lookupShop(s.version.id)
+    }
+
+    /** Looks the card up in the shop: every product of it (languages, conditions, finishes). */
+    fun lookupShop(cardRef: String? = _state.value.shown?.version?.id) {
+        cardRef ?: return
+        val c = client()
+        if (c == null) { updateShop { it.copy(cardRef = cardRef, products = null, loading = false, lookupError = null) }; return }
+        updateShop { it.copy(cardRef = cardRef, loading = true, lookupError = null, products = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { c.productsOfCard(cardRef) }
+            updateShop { st ->
+                if (st.cardRef != cardRef) st          // another card meanwhile
+                else r.fold(
+                    { list -> st.copy(loading = false, products = list, form = _state.value.shown?.let { withSuggestedPrice(st.form, it, list) } ?: st.form) },
+                    { e -> st.copy(loading = false, lookupError = (e as? ShopException)?.friendly ?: (e.message ?: "lookup failed")) },
+                )
+            }
+        }
+    }
+
+    /** The shop's product for the shown card with the form's language, condition and finish (null: none yet). */
+    fun shopMatch(st: UiState = _state.value): ShopProduct? {
+        val s = st.shown ?: return null
+        val finish = ShopTerms.finishOf(s.printing)
+        return st.shop.products?.firstOrNull {
+            it.cardLanguage == st.shop.form.language && it.condition == st.shop.form.condition && it.finish == finish && it.grading == null
+        }
+    }
+
+    /** The price the form starts with: the shop's price of that product, else the market value for the condition. */
+    private fun withSuggestedPrice(f: ShopForm, s: Shown, products: List<ShopProduct>?): ShopForm {
+        if (f.priceByUser) return f
+        val finish = ShopTerms.finishOf(s.printing)
+        val existing = products?.firstOrNull { it.cardLanguage == f.language && it.condition == f.condition && it.finish == finish && it.grading == null }
+        val p = s.selected
+        val market = (p?.eur ?: p?.usdEur)?.let { TradingMath.round2(it * ShopTerms.share(f.condition)) }
+        return f.copy(price = existing?.price?.euros ?: market)
+    }
+
+    /** Filling in the form: the camera waits, so another card in view can't replace this one meanwhile. */
+    private fun holdCard() {
+        if (_state.value.paused || _state.value.shown == null) return
+        synchronized(lock) { _state.value.shown?.let { tracker.lock(it.group) } }
+        _state.update { it.copy(paused = true) }
+    }
+
+    fun setShopLanguage(code: String) {
+        val s = _state.value.shown ?: return
+        holdCard()
+        updateShop { it.copy(form = withSuggestedPrice(it.form.copy(language = code, languageByUser = true), s, it.products)) }
+    }
+
+    fun setShopCondition(code: String) {
+        val s = _state.value.shown ?: return
+        holdCard()
+        updateShop { it.copy(form = withSuggestedPrice(it.form.copy(condition = code), s, it.products)) }
+    }
+
+    fun setShopQuantity(n: Int) { holdCard(); updateShop { it.copy(form = it.form.copy(quantity = n.coerceIn(1, 1000))) } }
+    fun setShopPrice(v: Double?) { holdCard(); updateShop { it.copy(form = it.form.copy(price = v?.let { p -> TradingMath.round2(p) }, priceByUser = true)) } }
+    fun setShopBox(n: Int?) { holdCard(); updateShop { it.copy(form = it.form.copy(box = n?.takeIf { b -> b in 1..999 })) } }
+    fun setShopComment(t: String) { holdCard(); updateShop { it.copy(form = it.form.copy(comment = t.take(5000))) } }
+
+    /**
+     * The user's go: book the copies (POST /stock/intake). Creates the product if the shop has
+     * none for this language, condition and finish, else adds the copies to it. Never automatic.
+     */
+    fun bookShop(nameDe: String? = null, nameEn: String? = null) {
+        val st = _state.value
+        val s = st.shown ?: return
+        val f = st.shop.form
+        if (st.shop.busy) return
+        val box = f.box ?: run { updateShop { it.copy(error = "Pick a storage box (1–999)", retryable = false) }; return }
+        val match = shopMatch(st)
+        val finish = ShopTerms.finishOf(s.printing)
+        // the price goes along for a new product, or when the user typed one (it then replaces the shop's)
+        val price = f.price?.takeIf { match == null || f.priceByUser }?.let { Money.ofEuros(it) }
+        val body = ShopClient.intakeBody(s.version.id, f.language, f.condition, finish, f.quantity, ShopClient.box(box), price,
+            descriptionDe = f.comment.takeIf { match == null }, nameDe = nameDe, nameEn = nameEn)
+        val w = PendingWrite.json("POST", "/stock/intake", body)
+        val label = "${s.version.name} (${f.language} · ${f.condition} · ${ShopTerms.finishLabel(finish)})"
+        pendingShop = w
+        pendingShopText = label
+        shopStore.lastBox = box
+        shopStore.lastCondition = f.condition
+        send(w, label, f.quantity, ShopClient.box(box))
+    }
+
+    /** Sends the failed booking again: the same bytes, the same idempotency key (never booked twice). */
+    fun retryShop() {
+        val w = pendingShop ?: return
+        val delta = runCatching { org.json.JSONObject(String(w.body)).optInt("delta") }.getOrDefault(0)
+        val box = runCatching { org.json.JSONObject(String(w.body)).optString("storage_location") }.getOrDefault("")
+        send(w, pendingShopText, delta, box)
+    }
+
+    private fun send(w: PendingWrite, label: String, delta: Int, box: String) {
+        val c = client() ?: run { updateShop { it.copy(error = "Connect the shop first (⚙ → Webshop)", retryable = false) }; return }
+        updateShop { it.copy(busy = true, error = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val r = c.intake(w)
+                pendingShop = null
+                val p = r.product
+                val inBox = p.stock.boxes.firstOrNull { it.box == box }?.quantity
+                val text = (if (r.created) "New in the shop: " else "Added: ") + "$delta × $label to box $box" +
+                    " · now ${p.stock.quantity} in stock" + (inBox?.let { " ($it in box $box)" } ?: "") +
+                    (p.price?.let { " · ${String.format(Locale.getDefault(), "%.2f €", it.euros)}" } ?: "") +
+                    " · ${ShopTerms.statusLabel(p.status)}" + (if (r.replayed) " (already booked before)" else "")
+                updateShop { st ->
+                    st.copy(busy = false, booking = ShopBooking(text, r.warnings.map(::shopWarningText), p.sku, delta, box),
+                        products = (st.products.orEmpty().filter { it.sku != p.sku } + p),
+                        form = st.form.copy(quantity = 1, priceByUser = false, comment = ""), unknownCard = null)
+                }
+                // booked: on to the next card
+                if (_state.value.paused && _state.value.shown?.fromPhoto != true) resume()
+            } catch (e: ShopException) {
+                if (e.code == "unknown_card") {
+                    pendingShop = null
+                    val s = _state.value.shown
+                    val de = s?.let { sh -> if (sh.version.lang == "de") sh.version.name else catalog?.cardExact(sh.version.id, "de")?.name } ?: ""
+                    val en = s?.let { sh -> sh.english?.name ?: if (sh.version.lang == "en") sh.version.name else catalog?.cardExact(sh.version.id, "en")?.name } ?: ""
+                    updateShop { it.copy(busy = false, unknownCard = de to en) }
+                } else {
+                    if (e.status in 400..499) pendingShop = null      // the shop said no: a corrected booking gets a new key
+                    updateShop { it.copy(busy = false, error = e.friendly, retryable = e.status == 0 || e.status >= 500) }
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "shop booking failed", t)
+                updateShop { it.copy(busy = false, error = t.message ?: "failed", retryable = true) }
+            }
+        }
+    }
+
+    fun dismissUnknownCard() = updateShop { it.copy(unknownCard = null) }
+
+    /** Undo the last booking: take the copies out of the box again (a stock correction). */
+    fun undoShopBooking() {
+        val b = _state.value.shop.booking?.takeIf { !it.undone } ?: return
+        val c = client() ?: return
+        val body = org.json.JSONObject().put("delta", -b.delta).put("storage_location", b.box).put("reason", "undone in the scanner app")
+        val w = PendingWrite.json("POST", "/products/${b.sku}/stock", body)
+        updateShop { it.copy(busy = true, error = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { c.stock(w) }
+            updateShop { st ->
+                r.fold(
+                    { stock -> st.copy(busy = false, booking = b.copy(undone = true, text = "Undone: ${b.delta} × out of box ${b.box} · now ${stock.quantity} in stock"),
+                        products = st.products?.map { p -> if (p.sku == b.sku) p.copy(stock = stock) else p }) },
+                    { e -> st.copy(busy = false, error = "Undo failed: " + ((e as? ShopException)?.friendly ?: e.message), retryable = false) },
+                )
+            }
+        }
+    }
 
     // ------------------------------------------------------------------ app update
     private var lastUpdateCheck = 0L
@@ -1100,7 +1397,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             .putInt("energy_filter", new.energyFilter).putInt("min_fill", new.minFillPercent)
             .putString("orientation", new.orientation).putFloat("zoom", new.zoom).putInt("guide_size", new.guideSize)
             .putBoolean("trading", new.trading).putString("trade_condition", new.tradingCondition.name)
-            .putString("trade_reference", new.reference.name)
+            .putString("trade_reference", new.reference.name).putBoolean("webshop", new.webshop)
             .apply()
         tracker.delayMs = new.triggerDelayMs.toLong()
         if (new.energyFilter != _state.value.settings.energyFilter) applyEnergyFilter(new.energyFilter)

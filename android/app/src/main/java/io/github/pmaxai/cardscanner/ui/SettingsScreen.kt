@@ -20,9 +20,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
@@ -57,6 +59,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.pmaxai.cardscanner.trading.Condition
@@ -69,6 +73,7 @@ enum class SettingsPage(val short: String, val title: String, val icon: ImageVec
     CAMERA("Camera", "Camera & scanning", Icons.Filled.Search),
     PRICES("Prices", "Prices & alerts", Icons.Filled.Notifications),
     TRADING("Trading", "Trading Mode", Icons.Filled.ShoppingCart),
+    WEBSHOP("Webshop", "Webshop", Icons.AutoMirrored.Filled.List),
     YOUTUBE("YouTube", "YouTube Mode", Icons.Filled.PlayArrow),
     ADVANCED("Advanced", "Advanced", Icons.Filled.Build),
     ABOUT("About", "About & updates", Icons.Filled.Info),
@@ -130,6 +135,7 @@ fun SettingsScreen(state: UiState, vm: ScannerViewModel, start: SettingsPage) {
                     SettingsPage.CAMERA -> CameraPage(state, vm)
                     SettingsPage.PRICES -> PricesPage(state, vm)
                     SettingsPage.TRADING -> TradingPage(state, vm)
+                    SettingsPage.WEBSHOP -> WebshopPage(state, vm)
                     SettingsPage.YOUTUBE -> YouTubePage(state, vm)
                     SettingsPage.ADVANCED -> AdvancedPage(state, vm)
                     SettingsPage.ABOUT -> AboutPage(state, vm)
@@ -218,6 +224,47 @@ private fun TradingPage(state: UiState, vm: ScannerViewModel) {
     Hint("Condition: NM 100 · EX 85 · GD 75 · LP 65 · PL 50 · PO 30 % of that price.")
     Hint("Verdict: up to 80 % of the market value great, 95 % good, 110 % fair, above expensive. Opening offer 85 %.")
     Hint("Show budget and the deal history are in Trading Mode's ⚙ menu.")
+}
+
+@Composable
+private fun WebshopPage(state: UiState, vm: ScannerViewModel) {
+    val shop = state.shop
+    var host by rememberSaveable { mutableStateOf(shop.host) }
+    var keyId by rememberSaveable { mutableStateOf(shop.keyId) }
+    var secret by rememberSaveable { mutableStateOf("") }        // never shown back, only replaced
+    Hint("The Pokeshop that Webshop Mode books into. Create a key in the shop's admin: Admin → API-Schlüssel " +
+        "(one key per phone, no IP allowlist). Key id and secret are shown there once.")
+    Setting("Shop", "its address, e.g. pokemonkarten.at, or staging.pokemonkarten.at for the test shop") {
+        OutlinedTextField(value = host, onValueChange = { host = it }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+            label = { Text("Host") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+    }
+    Setting("Key id", null) {
+        OutlinedTextField(value = keyId, onValueChange = { keyId = it.trim() }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+            label = { Text("kid_…") })
+    }
+    Setting("Secret", if (shop.hasSecret) "saved, encrypted on this phone – type a new one only to replace it"
+        else "sk_… – stored encrypted on this phone, never shown again") {
+        OutlinedTextField(value = secret, onValueChange = { secret = it.trim() }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+            label = { Text(if (shop.hasSecret) "•••••••• (saved)" else "sk_…") },
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
+    }
+    Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Button(onClick = { vm.saveShop(host, keyId, secret); secret = "" },
+            enabled = host.isNotBlank() && keyId.isNotBlank() && (secret.isNotBlank() || shop.hasSecret)) { Text("Save & test") }
+        if (shop.configured) TextButton(onClick = { vm.testShop() }) { Text("Test again") }
+    }
+    when {
+        shop.testing -> Hint("Testing the connection…")
+        shop.connection != null -> Text((if (shop.connectionOk == true) "✓ " else "⚠ ") + shop.connection,
+            color = if (shop.connectionOk == true) Color(0xFF5BC98A) else Warn, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+    }
+    if (shop.configured || shop.hasSecret) {
+        TextButton(onClick = { vm.disconnectShop(); host = ""; keyId = ""; secret = "" }) { Text("Disconnect (delete the key from this phone)") }
+    }
+    Heading("How booking works")
+    Hint("Scanning a card only looks it up: you see its prices and what the shop holds of it. Stock changes only when you " +
+        "press Add to stock / Create in the shop, after choosing language, condition, copies, price and box. Undo takes the copies out again.")
 }
 
 @Composable
