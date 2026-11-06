@@ -186,7 +186,7 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
                     !openCvReady -> Message("OpenCV could not be loaded on this phone.")
                     state.error != null -> Message("Could not start: ${state.error}")
                     state.loading -> Loading(state.loadingText)
-                    state.settingsPage != null -> SettingsScreen(state, vm, state.settingsPage)
+                    state.settingsPage != null -> SettingsScreen(state, vm, state.settingsPage ?: SettingsPage.MODE)
                     !granted -> Message("The scanner needs the camera.") { Button({ ask.launch(Manifest.permission.CAMERA) }) { Text("Allow camera") } }
                     state.settings.youtube -> YouTubeScreen(state, vm)
                     state.settings.trading -> TradingScreen(state, vm)
