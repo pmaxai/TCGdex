@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -7,7 +9,7 @@ plugins {
 // CI sets GITHUB_RUN_NUMBER, so every build installs as an update of the previous one
 val buildNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
 // version name <line>.<builds since the line started> (version.properties; a release moves to the next line)
-val versionProps = java.util.Properties().apply {
+val versionProps = Properties().apply {
     rootProject.file("version.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
 }
 val versionLine: String = versionProps.getProperty("line", "1.2").trim()
