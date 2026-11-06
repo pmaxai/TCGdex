@@ -4,10 +4,11 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -279,10 +280,11 @@ private fun Setting(name: String, about: String?, control: @Composable () -> Uni
     }
 }
 
-/** A row of choices (it scrolls sideways when the page is narrow). */
+/** The choices of a setting, wrapping onto more lines on a narrow page (all of them in sight). */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun <T> Choices(options: List<T>, selected: T?, label: (T) -> String, enabled: (T) -> Boolean = { true }, onSelect: (T) -> Unit) {
-    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         options.forEach { v ->
             FilterChip(selected = v == selected, enabled = enabled(v), onClick = { onSelect(v) }, label = { Text(label(v)) })
         }
