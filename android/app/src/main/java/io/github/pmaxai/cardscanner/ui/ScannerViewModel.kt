@@ -214,6 +214,8 @@ data class UiState(
     val draft: DealDraft = DealDraft(),
     /** Trading Mode: + Cart puts the card on this side (I get: buying, I give: your card for a trade or sale) */
     val scanTarget: Side = Side.GET,
+    /** the settings screen is open on this page (null: closed) */
+    val settingsPage: SettingsPage? = null,
     /** a newer app with newer prices is out (null: none, or not checked yet) */
     val update: UpdateState? = null,
     /** TCGdex's price date of this app's data pack, ISO UTC */
@@ -454,6 +456,15 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     fun closePicks() = _state.update { it.copy(picks = null) }
 
     fun messageShown() = _state.update { it.copy(message = null) }
+
+    private var lastSettingsPage = SettingsPage.MODE
+
+    /** The settings screen, on [page] (or where it was left last time). */
+    fun openSettings(page: SettingsPage? = null) = _state.update { it.copy(settingsPage = page ?: lastSettingsPage) }
+
+    fun settingsPageShown(page: SettingsPage) { lastSettingsPage = page }
+
+    fun closeSettings() = _state.update { it.copy(settingsPage = null) }
 
     // ------------------------------------------------------------------ app update
     private var lastUpdateCheck = 0L

@@ -105,10 +105,9 @@ fun YouTubeScreen(state: UiState, vm: ScannerViewModel) {
             Toast.makeText(ctx, r.fold({ "Pack saved: $it cards" }, { "Could not save: ${it.message}" }), Toast.LENGTH_LONG).show()
         }
     }
-    var settings by rememberSaveable { mutableStateOf(false) }
     var torch by rememberSaveable { mutableStateOf(false) }
     val menu: @Composable () -> Unit = {
-        MenuButton(state, vm, torch, onTorch = { torch = it }, onSettings = { settings = true },
+        MenuButton(state, vm, torch, onTorch = { torch = it }, onSettings = { vm.openSettings(SettingsPage.YOUTUBE) },
             onSave = { savePack.launch(PackCsv.fileName(state.settings)) })
     }
 
@@ -133,7 +132,6 @@ fun YouTubeScreen(state: UiState, vm: ScannerViewModel) {
             }
         }
     }
-    if (settings) SettingsDialog(state, vm) { settings = false }
 }
 
 @Composable

@@ -112,7 +112,6 @@ fun sellColor(v: SellVerdict?): Color = when (v) {
 fun TradingScreen(state: UiState, vm: ScannerViewModel) {
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     var torch by rememberSaveable { mutableStateOf(false) }
-    var settings by rememberSaveable { mutableStateOf(false) }
     var cartOpen by rememberSaveable { mutableStateOf(false) }
     var dealsOpen by rememberSaveable { mutableStateOf(false) }
     var showOpen by rememberSaveable { mutableStateOf(false) }
@@ -120,7 +119,7 @@ fun TradingScreen(state: UiState, vm: ScannerViewModel) {
 
     val topBar: @Composable () -> Unit = {
         TradingTopBar(state, vm, torch, onTorch = { torch = it }, onCart = { cartOpen = true }, onDeals = { dealsOpen = true },
-            onShow = { showOpen = true }, onSettings = { settings = true })
+            onShow = { showOpen = true }, onSettings = { vm.openSettings(SettingsPage.TRADING) })
     }
     val camera: @Composable (Modifier) -> Unit = { m ->
         CameraArea(state, vm, torch, video = false, modifier = m) {
@@ -160,7 +159,6 @@ fun TradingScreen(state: UiState, vm: ScannerViewModel) {
             panel(Modifier.fillMaxWidth().weight(1.15f))
         }
     }
-    if (settings) SettingsDialog(state, vm) { settings = false }
     if (cartOpen) CartDialog(state, vm, onPad = { pad = it }) { cartOpen = false }
     if (dealsOpen) DealsDialog(state, vm) { dealsOpen = false }
     if (showOpen) ShowDialog(state, vm) { showOpen = false }

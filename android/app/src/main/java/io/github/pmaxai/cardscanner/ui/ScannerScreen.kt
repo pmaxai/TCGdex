@@ -178,7 +178,7 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
     Surface(Modifier.fillMaxSize(), color = Ink) {
         Column(Modifier.fillMaxSize()) {
             // a newer app with newer prices (not over the YouTube picture)
-            state.update?.takeIf { !state.loading && !state.settings.youtube }?.let { u ->
+            state.update?.takeIf { !state.loading && !state.settings.youtube && state.settingsPage == null }?.let { u ->
                 UpdateBanner(u, state.pricesDate, onUpdate = vm::startUpdate, onLater = vm::dismissUpdate)
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -186,6 +186,7 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
                     !openCvReady -> Message("OpenCV could not be loaded on this phone.")
                     state.error != null -> Message("Could not start: ${state.error}")
                     state.loading -> Loading(state.loadingText)
+                    state.settingsPage != null -> SettingsScreen(state, vm, state.settingsPage)
                     !granted -> Message("The scanner needs the camera.") { Button({ ask.launch(Manifest.permission.CAMERA) }) { Text("Allow camera") } }
                     state.settings.youtube -> YouTubeScreen(state, vm)
                     state.settings.trading -> TradingScreen(state, vm)
@@ -225,7 +226,6 @@ private fun Scanner(state: UiState, vm: ScannerViewModel) {
     val ctx = LocalContext.current
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     var torch by rememberSaveable { mutableStateOf(false) }
-    var settings by rememberSaveable { mutableStateOf(false) }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri: Uri? ->
         if (uri != null) loadPhoto(ctx.contentResolver, uri)?.let { vm.onPhoto(it) }
     }
@@ -236,14 +236,14 @@ private fun Scanner(state: UiState, vm: ScannerViewModel) {
             Text("🔍  Search cards", color = Muted, fontSize = 15.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(end = 6.dp).weight(1f).background(Panel, RoundedCornerShape(20.dp))
                     .clickable { vm.openSearch(SearchMode.LOOK_UP) }.padding(horizontal = 12.dp, vertical = 8.dp))
-            AssistChip(onClick = { settings = true }, label = {
+            AssistChip(onClick = { vm.openSettings(SettingsPage.PRICES) }, label = {
                 Text(if (state.settings.threshold > 0) "Alert ≥ ${state.settings.threshold.toInt()} €" else "Alert off", maxLines = 1)
             })
             TextButton({ torch = !torch }) { Text("Light", color = if (torch) Gold else Color.White, maxLines = 1) }
             TextButton({ pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
                 Text("Photo", color = Color.White, maxLines = 1)
             }
-            TextButton({ settings = true }) { Text("⚙", color = Color.White, fontSize = 20.sp) }
+            TextButton({ vm.openSettings() }) { Text("⚙", color = Color.White, fontSize = 20.sp) }
         }
     }
     val camera: @Composable (Modifier) -> Unit = { m ->
@@ -293,7 +293,6 @@ private fun Scanner(state: UiState, vm: ScannerViewModel) {
             result(Modifier.fillMaxWidth().weight(1f))
         }
     }
-    if (settings) SettingsDialog(state, vm) { settings = false }
 }
 
 /** Screen orientation for the setting: "auto" follows the phone, the others stay put. */
@@ -501,139 +500,6 @@ private fun DebugPanel(d: DebugInfo) {
             Spacer(Modifier.width(8.dp))
         }
         Column { d.lines.forEach { Text(it, color = Muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace) } }
-    }
-}
-
-@Composable
-fun SettingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) {
-    val s = state.settings
-    var title by rememberSaveable { mutableStateOf(s.title) }
-    AlertDialog(
-        onDismissRequest = { vm.updateSettings { it.copy(title = title) }; onClose() },
-        title = { Text("Settings") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                Text("Mode", color = Muted, fontSize = 13.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    AppMode.values().forEach { m ->
-                        FilterChip(selected = m == s.mode, onClick = { vm.updateSettings { it.withMode(m).copy(title = title) } },
-                            label = { Text(m.label) })
-                    }
-                }
-                Text(s.mode.about, color = Muted, fontSize = 12.sp)
-                if (s.trading) {
-                    Text("Trading: condition of a new scan", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Condition.values().forEach { c ->
-                            FilterChip(selected = c == s.tradingCondition, onClick = { vm.updateSettings { it.copy(tradingCondition = c) } },
-                                label = { Text(c.label) })
-                        }
-                    }
-                    Text("Trading: market value starts from Cardmarket's", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Reference.values().forEach { r ->
-                            FilterChip(selected = r == s.reference, onClick = { vm.updateSettings { it.copy(reference = r) } },
-                                label = { Text(r.label) })
-                        }
-                    }
-                    Text("Condition: NM 100 · EX 85 · GD 75 · LP 65 · PL 50 · PO 30 % of that price. Verdict: up to 80 % of the " +
-                        "market value great, 95 % good, 110 % fair, above expensive. Opening offer 85 %.", color = Muted, fontSize = 12.sp)
-                }
-                Text("Alert / HIT for cards worth at least", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
-                listOf(0.0, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0).chunked(4).forEach { row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        row.forEach { v ->
-                            FilterChip(selected = v == s.threshold, onClick = { vm.updateSettings { it.copy(threshold = v) } },
-                                label = { Text(if (v == 0.0) "off" else "${v.toInt()} €") })
-                        }
-                    }
-                }
-                Text("Wait before taking the card (frame green)", color = Muted, fontSize = 13.sp,
-                    modifier = Modifier.padding(top = 10.dp))
-                listOf(0, 300, 600, 1000, 1500, 2000).chunked(3).forEach { row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        row.forEach { v ->
-                            FilterChip(selected = v == s.triggerDelayMs, onClick = { vm.updateSettings { it.copy(triggerDelayMs = v) } },
-                                label = { Text(if (v == 0) "instant" else if (v < 1000) "0.${v / 100} s" else "${v / 1000}${if (v % 1000 != 0) ".${v % 1000 / 100}" else ""} s") })
-                        }
-                    }
-                }
-                Text("Screen orientation", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("auto" to "Auto", "portrait" to "Portrait", "landscape" to "Landscape").forEach { (v, label) ->
-                        FilterChip(selected = v == s.orientation, onClick = { vm.updateSettings { it.copy(orientation = v, title = title) } },
-                            label = { Text(label) })
-                    }
-                }
-                Text("Portrait and Landscape stay put; Auto turns with the phone", color = Muted, fontSize = 12.sp)
-                Text("Capture frame size", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf(50, 60, 70, 80, 90).forEach { v ->
-                        FilterChip(selected = v == s.guideSize, onClick = { vm.updateSettings { it.copy(guideSize = v) } },
-                            label = { Text("$v%") })
-                    }
-                }
-                Text("height of the frame in the camera picture; bigger = hold the card closer", color = Muted, fontSize = 12.sp)
-                Text("Camera zoom", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf(1f, 1.5f, 2f, 3f, 4f).forEach { v ->
-                        FilterChip(selected = kotlin.math.abs(v - s.zoom) < 0.05f, enabled = v <= state.maxZoom + 0.01f,
-                            onClick = { vm.setZoom(v) }, label = { Text(zoomLabel(v)) })
-                    }
-                }
-                Text("or pinch the camera picture", color = Muted, fontSize = 12.sp)
-                Text("Energy cards", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf(0 to "recognise", 1 to "skip common", 2 to "skip all").forEach { (v, label) ->
-                        FilterChip(selected = v == s.energyFilter, enabled = v == 0 || state.hasCategories,
-                            onClick = { vm.updateSettings { it.copy(energyFilter = v) } }, label = { Text(label) })
-                    }
-                }
-                Text(if (state.hasCategories) "\"skip common\" still recognises gold and secret rare energies"
-                     else "needs the next data pack", color = Muted, fontSize = 12.sp)
-                Text("Card must fill the frame at least", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf(0, 30, 50, 70, 85).forEach { v ->
-                        FilterChip(selected = v == s.minFillPercent, onClick = { vm.updateSettings { it.copy(minFillPercent = v) } },
-                            label = { Text(if (v == 0) "off" else "$v%") })
-                    }
-                }
-                Text("against \"ghost\" cards: smaller or off-centre cards, and the frame without a card outline, are ignored",
-                    color = Muted, fontSize = 12.sp)
-                SettingSwitch("PSA 10 / 9 / 8 prices", if (state.hasPsaData) "eBay sold averages, USD" else "not in this data pack yet",
-                    s.showPsa) { v -> vm.updateSettings { it.copy(showPsa = v) } }
-                OutlinedTextField(value = title, onValueChange = { title = it }, singleLine = true,
-                    label = { Text("YouTube title line (optional)") }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
-                SettingSwitch("Details", "what the scanner saw, scores, text it read, holo check", s.showDebug) { v ->
-                    vm.updateSettings { it.copy(showDebug = v) }
-                }
-                val ctx = LocalContext.current
-                val version = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() }
-                Text("Card Scanner ${version ?: ""}\n${state.packInfo}", color = Muted, fontSize = 11.sp,
-                    modifier = Modifier.padding(top = 14.dp))
-                val u = state.update
-                if (u != null) {
-                    Text(updateLine(u, state.pricesDate), color = Gold, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
-                    Button(onClick = { vm.startUpdate() }, modifier = Modifier.padding(top = 2.dp)) {
-                        Text(if (u.progress != null) "Downloading… ${(u.progress * 100).toInt()} %" else "Update now")
-                    }
-                } else {
-                    TextButton(onClick = { vm.checkForUpdate(announce = true) }) { Text("Check for updates") }
-                }
-            }
-        },
-        confirmButton = { TextButton({ vm.updateSettings { it.copy(title = title) }; onClose() }) { Text("Done") } },
-    )
-}
-
-@Composable
-private fun SettingSwitch(label: String, sub: String, value: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(label, color = Color.White)
-            Text(sub, color = Muted, fontSize = 12.sp)
-        }
-        Switch(checked = value, onCheckedChange = onChange)
     }
 }
 

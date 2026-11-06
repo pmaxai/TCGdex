@@ -32,7 +32,7 @@ Every data pipeline run with fresh prices also builds a new APK.
 1.1.57 · prices of 5 Nov (yours: 3 Nov)" with **Update**. One tap downloads it and opens
 Android's installer; confirm there (the first time, Android asks you to allow Card Scanner
 to install apps: allow it, come back, and it goes on). Your carts and settings stay.
-**Later** hides the bar until the next start; ⚙ → **Check for updates** looks again.
+**Later** hides the bar until the next start; ⚙ → **About** → **Check for updates** looks again.
 
 **Fresh prices every night:** TCGdex updates its prices daily at about 23:50 CET. The data
 pipeline starts at 00:40 CET and the new APK (with that day's prices) is out at about
@@ -50,6 +50,13 @@ downgrades), or restore the code from the tag.
 
 ## Using it
 
+- **Settings (⚙)** open as a screen of their own, with a sidebar of pages: **Mode**,
+  **Camera** (wait time, frame size, zoom, fill, energy cards, orientation), **Prices**
+  (alert, PSA, where prices come from), **Trading**, **YouTube**, **Advanced** (details)
+  and **About** (version, price date, updates). Upright, the sidebar is a slim column of
+  icons; turned sideways it lists the full names. ⚙ opens the page that fits where you
+  are (Trading Mode: Trading; YouTube: YouTube; otherwise where you left it), the Alert
+  chip opens Prices. Back (← or the phone's back) returns to the camera.
 - **Scan:** hold one card inside the frame. When the frame turns green the app is sure;
   it takes the card once the frame has stayed green for the time set in ⚙ (*Wait before
   taking the card*: instant, 0.3 s … 2 s; a green bar under the frame fills up while
