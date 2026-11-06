@@ -161,7 +161,7 @@ internal fun WebshopPanel(state: UiState, vm: ScannerViewModel, modifier: Modifi
             Spacer(Modifier.height(12.dp))
         } else {
             val ok = shop.connectionOk != false
-            Text("🏪 " + shop.host.removePrefix("https://") + if (shop.selling) "  ·  Sell: the customer's order" else "  ·  Stock in",
+            Text("🏪 " + shop.host.removePrefix("https://") + if (shop.selling) "  ·  Sell" else "  ·  Stock in",
                 color = if (ok) Muted else Warn, fontSize = 12.sp, maxLines = 1,
                 modifier = Modifier.clickable { vm.openSettings(SettingsPage.WEBSHOP) }.padding(bottom = 4.dp))
         }
@@ -488,11 +488,12 @@ internal fun OrderSheet(state: UiState, vm: ScannerViewModel, onClose: () -> Uni
                 Text(eur(shop.orderTotal), color = Gold, fontSize = 26.sp, fontWeight = FontWeight.Black)
             }
             if (shop.order.any { it.price == null }) Text("Cards without a price aren't in the total", color = Warn, fontSize = 12.sp)
+            Text("Takes every line out of its box in the shop, at once", color = Muted, fontSize = 12.sp)
             Button(onClick = { vm.completeSale() }, enabled = !shop.orderBusy,
                 colors = ButtonDefaults.buttonColors(containerColor = SellBlue, contentColor = Ink),
                 modifier = Modifier.fillMaxWidth().padding(top = 10.dp).height(52.dp)) {
                 if (shop.orderBusy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Ink)
-                else Text("Complete sale: take ${shop.orderCopies} out of stock", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                else Text("Complete sale (${shop.orderCopies} cards)", fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1)
             }
             shop.orderError?.let { e ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
