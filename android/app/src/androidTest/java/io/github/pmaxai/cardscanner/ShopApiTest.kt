@@ -180,10 +180,11 @@ class ShopApiTest {
         assertEquals("insufficient_stock", results[1].error!!.code)
 
         val r = server.takeRequest()
+        val sent = r.body.clone().readUtf8()                                   // (the signature check reads the body)
         assertEquals("/api/v1/batch", r.path)
         assertSigned(r)
         assertTrue(r.getHeader("Idempotency-Key")!!.isNotBlank())
-        val ops = JSONObject(r.body.readUtf8()).getJSONArray("operations")
+        val ops = JSONObject(sent).getJSONArray("operations")
         assertEquals(2, ops.length())
         ops.getJSONObject(1).let { op ->
             assertEquals("stock", op.getString("op"))
