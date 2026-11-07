@@ -73,6 +73,45 @@ def test_shared_price_goes_to_the_card_that_fits(tmp_path):
     assert {r[0] for r in con.execute("SELECT id FROM prices_cardmarket_dropped")} == {"sm12-54", "ex4-6"}
 
 
+def test_a_day_apart_is_still_one_product(tmp_path):
+    con = _db(tmp_path)
+    # Magnetilo 68/236 (common, refreshed a day earlier) carries the secret rare 242/236's price:
+    # every figure equal but the trend (20.40 vs 20.09)
+    row = dict(avg=22.88, low=6.5, avg1=14.95, avg7=18.46, avg30=23.09, trend_holo=3.94, avg30_holo=4.11)
+    for cid, trend, day in (("sm12-68", 20.40, "2026-11-05"), ("sm12-242", 20.09, "2026-11-06")):
+        con.execute("INSERT INTO prices_cardmarket(id, updated, trend, avg, low, avg1, avg7, avg30, trend_holo, avg30_holo) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)", (cid, day, trend, *row.values()))
+    _tp(con, "sm12-68", normal=0.23, reverse_holofoil=0.36)
+    _tp(con, "sm12-242", holofoil=26.5)
+    # two bulk commons agreeing in all but two figures: chance, left alone
+    _cm(con, "swsh5-78", 0.05, 0.05, low=0.02)
+    _cm(con, "sv08-093", 0.06, 0.05, low=0.02)
+    _tp(con, "swsh5-78", normal=0.2)
+    # two valuable cards with different prices: not linked
+    _cm(con, "sv03.5-199", 319.5, 330.0)
+    _cm(con, "sv03.5-200", 120.0, 330.0)
+    _tp(con, "sv03.5-199", holofoil=330.0)
+    _tp(con, "sv03.5-200", holofoil=140.0)
+    con.commit()
+    pc.run(con)
+    check = {r[0]: r[1:] for r in con.execute("SELECT id, status, cm_trend, others FROM price_check")}
+    assert check["sm12-68"] == ("dropped", 20.40, "sm12-242")
+    assert "sm12-242" not in check
+    assert not {"swsh5-78", "sv08-093", "sv03.5-199", "sv03.5-200"} & set(check)
+    left = {r[0] for r in con.execute("SELECT id FROM prices_cardmarket")}
+    assert "sm12-68" not in left and "sm12-242" in left
+
+
+def test_shared_groups_only_link_near_matches_with_a_real_price():
+    rows = [("a", 10.0, 11.0, 2.0, 12.0, 10.5, 11.5, 3.1, 3.3), ("b", 10.4, 11.0, 2.0, 12.0, 10.5, 11.0, 3.1, 3.3),  # two differ
+            ("c", 10.4, 11.9, 2.0, 12.0, 10.9, 11.0, 3.1, 3.3),                                  # two from b, three from a
+            ("f", 10.4, 11.9, 2.0, 12.5, 10.0, 11.0, 3.0, 3.3),                                  # three from c: not linked
+            ("d", 0.1, 0.1, 0.02, 0.1, 0.1, 0.2, 0.1, None), ("e", 0.1, 0.1, 0.02, 0.1, 0.12, 0.3, 0.1, None)]  # bulk
+    groups = sorted(sorted(r[0] for r in g) for g in pc.shared_groups(rows))
+    # c is linked through b (two figures from b), the bulk pair isn't linked
+    assert groups == [["a", "b", "c"], ["d"], ["e"], ["f"]]
+
+
 def test_fit_and_decide():
     assert pc.distance(10.0, (8.0, 12.0)) == 0
     assert pc.distance(39.74, (0.3, 0.3)) > pc.FIT

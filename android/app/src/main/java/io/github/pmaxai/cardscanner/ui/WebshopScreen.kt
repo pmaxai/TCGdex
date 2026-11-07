@@ -533,7 +533,7 @@ private fun UnknownCardDialog(de: String, en: String, vm: ScannerViewModel) {
         onDismissRequest = { vm.dismissUnknownCard() },
         title = { Text("New card for the shop") },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text("The shop's card list doesn't have this card yet. Check its names, then it is created with them.", color = Muted, fontSize = 13.sp)
                 OutlinedTextField(nameDe, { nameDe = it }, label = { Text("German name") }, singleLine = true, modifier = Modifier.padding(top = 8.dp))
                 OutlinedTextField(nameEn, { nameEn = it }, label = { Text("English name") }, singleLine = true, modifier = Modifier.padding(top = 4.dp))

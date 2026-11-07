@@ -853,7 +853,7 @@ private fun ShowDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit
     AlertDialog(onDismissRequest = onClose,
         title = { Text(if (show == null) "Start a show" else "Show: ${show.name}") },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text("Carts started from now on belong to this show; its summary is in the deal history.", color = Muted, fontSize = 13.sp)
                 OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, label = { Text("Name") },
                     placeholder = { Text("e.g. Vienna Card Show, $today") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))

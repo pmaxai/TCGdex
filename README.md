@@ -96,8 +96,10 @@ downgrades), or restore the code from the tag.
   takes the nearest one within 3 days.
 - **Price check:** the card database (TCGdex) links some cards to the wrong Cardmarket
   product, so they carry another card's price (a common Plinfa 54/236 showed the secret
-  rare Plinfa 239/236's €39.74). The data pipeline finds cards that share exactly the same
-  Cardmarket figures and keeps the price only for the card whose TCGplayer price fits it;
+  rare Plinfa 239/236's €39.74). The data pipeline finds cards that share the same
+  Cardmarket figures (all of them, or all but two when TCGdex refreshed the two cards on
+  different days, as with Magnetilo 68/236 and 242/236) and keeps the price only for the
+  card whose TCGplayer price fits it;
   the others show TCGplayer converted to euros with "No reliable Cardmarket price". Where it
   can't tell, the price stays with a warning, and any card worth €3 or more whose Cardmarket
   and TCGplayer prices are over 4x apart gets "check before you pay". Trading Mode gives
