@@ -234,8 +234,6 @@ private fun PricePanel(state: UiState, vm: ScannerViewModel, modifier: Modifier,
             CardPrice(s, state, vm, onPad)
         }
         if (state.tray.size > 1) Tray(state, vm)
-        Spacer(Modifier.height(8.dp))
-        Text(state.packInfo, color = Muted, fontSize = 11.sp)
     }
 }
 

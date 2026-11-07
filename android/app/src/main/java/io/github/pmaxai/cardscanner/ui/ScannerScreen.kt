@@ -273,8 +273,6 @@ private fun Scanner(state: UiState, vm: ScannerViewModel) {
                 ResultCard(s, state.settings, vm)
             }
             if (state.settings.showDebug || (s?.fromPhoto == true && !s.fromSearch)) state.debug?.let { DebugPanel(it) }
-            Spacer(Modifier.height(8.dp))
-            Text(state.packInfo, color = Muted, fontSize = 11.sp)
         }
     }
 

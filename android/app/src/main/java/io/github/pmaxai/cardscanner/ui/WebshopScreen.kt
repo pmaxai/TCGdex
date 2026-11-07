@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -177,9 +178,7 @@ internal fun WebshopPanel(state: UiState, vm: ScannerViewModel, modifier: Modifi
                 if (shop.selling) SellBlock(state, vm) else ShopFormBlock(state, vm, onPad)
             }
         }
-        if (shop.selling) shop.sale?.let { SaleBanner(state, vm) } else shop.booking?.let { BookingBanner(state, vm) }
-        Spacer(Modifier.height(8.dp))
-        Text(state.packInfo, color = Muted, fontSize = 11.sp)
+        // nothing below the button: the last sale's text is in the order (🧾), Undo sits beside the button
     }
 }
 
@@ -287,7 +286,7 @@ private fun ProductRow(p: ShopProduct, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** Language, condition, quantity, price, box (and a comment for a new product), then the one button that books. */
+/** Language, (a comment for a new product,) quantity, box, price, condition, then the one button that books (Undo beside it). */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadRequest) -> Unit) {
@@ -313,14 +312,9 @@ private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadReque
         }
         Text("  ${ShopTerms.finishLabel(finish)}", color = Muted, fontSize = 13.sp)
     }
-    FieldLabel("Condition")
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        ShopTerms.CONDITIONS.forEach { g ->
-            val sel = g.code == f.condition
-            Text(g.code, color = if (sel) Ink else Color.White, fontSize = 14.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
-                modifier = Modifier.padding(vertical = 2.dp).background(if (sel) Gold else Color(0xFF2A2D34), RoundedCornerShape(8.dp))
-                    .clickable { vm.setShopCondition(g.code) }.padding(horizontal = 11.dp, vertical = 6.dp))
-        }
+    if (match == null) {
+        OutlinedTextField(value = f.comment, onValueChange = vm::setShopComment, modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            label = { Text("Comment (optional, on the product page)") }, maxLines = 4)
     }
     Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.Bottom) {
         // quantity
@@ -359,9 +353,14 @@ private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadReque
         }, color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
         Text("✎", color = Muted, fontSize = 16.sp)
     }
-    if (match == null) {
-        OutlinedTextField(value = f.comment, onValueChange = vm::setShopComment, modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-            label = { Text("Comment (optional, on the product page)") }, maxLines = 4)
+    FieldLabel("Condition")
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        ShopTerms.CONDITIONS.forEach { g ->
+            val sel = g.code == f.condition
+            Text(g.code, color = if (sel) Ink else Color.White, fontSize = 14.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
+                modifier = Modifier.padding(vertical = 2.dp).background(if (sel) Gold else Color(0xFF2A2D34), RoundedCornerShape(8.dp))
+                    .clickable { vm.setShopCondition(g.code) }.padding(horizontal = 11.dp, vertical = 6.dp))
+        }
     }
 
     // what the button does, said plainly
@@ -370,16 +369,32 @@ private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadReque
         else "${s.version.name} (${f.language} · ${f.condition} · ${ShopTerms.finishLabel(finish)}) is new: it is created with ${f.quantity} in box ${box ?: "…"}" +
             (if (f.price == null) " (without a price it stays a draft)" else ""),
         color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
-    Button(onClick = { vm.bookShop() }, enabled = !shop.busy && f.box != null && !shop.loading,
-        modifier = Modifier.fillMaxWidth().padding(top = 6.dp).height(50.dp)) {
-        if (shop.busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Ink)
-        else Text(if (match != null) "Add ${f.quantity} to stock" else "Create in the shop (${f.quantity})", fontSize = 17.sp, fontWeight = FontWeight.Bold)
-    }
+    val last = shop.booking?.takeIf { !it.undone }
+    last?.warnings?.forEach { Text("⚠ $it", color = Warn, fontSize = 12.sp) }
     shop.error?.let { e ->
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
             Text("⚠ $e", color = Warn, fontSize = 13.sp, modifier = Modifier.weight(1f))
             if (shop.retryable) TextButton({ vm.retryShop() }) { Text("Retry") }
         }
+    }
+    // the button is the last thing; Undo (the last booking) beside it
+    Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Button(onClick = { vm.bookShop() }, enabled = !shop.busy && f.box != null && !shop.loading,
+            modifier = Modifier.weight(1f).height(50.dp)) {
+            if (shop.busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Ink)
+            else Text(if (match != null) "Add ${f.quantity} to stock" else "Create in the shop (${f.quantity})", fontSize = 17.sp,
+                fontWeight = FontWeight.Bold, maxLines = 1)
+        }
+        if (last != null) UndoButton(if (last.sku.startsWith("${shop.cardRef}-")) "Undo" else "Undo last", !shop.busy) { vm.undoShopBooking() }
+    }
+}
+
+/** A small Undo beside a main button. */
+@Composable
+private fun UndoButton(label: String, enabled: Boolean, onClick: () -> Unit) {
+    OutlinedButton(onClick = onClick, enabled = enabled, contentPadding = PaddingValues(horizontal = 12.dp),
+        modifier = Modifier.padding(start = 8.dp).height(50.dp)) {
+        Text("↩ $label", fontSize = 13.sp, maxLines = 1)
     }
 }
 
@@ -421,13 +436,17 @@ internal fun SellBlock(state: UiState, vm: ScannerViewModel) {
         Text("⚠ ${box.reserved} of box ${box.box} is held by an online checkout – selling it shows the product as sold out " +
             "and the shop tells the admin", color = Warn, fontSize = 12.sp)
     if (inOrder > 0) Text("$inOrder already in the order from box ${shop.sellBox}", color = Muted, fontSize = 12.sp)
-    Button(onClick = { vm.addToOrder() }, enabled = box != null && inOrder < box.quantity,
-        colors = ButtonDefaults.buttonColors(containerColor = SellBlue, contentColor = Ink),
-        modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(50.dp)) {
-        Text("Add to the order", fontSize = 17.sp, fontWeight = FontWeight.Bold)
-    }
     Text("Nothing leaves the stock yet: the order is taken out of stock when you complete the sale (🧾 at the top).",
         color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+    shop.orderError?.takeIf { shop.sale?.undone == false }?.let { Text("⚠ $it", color = Warn, fontSize = 13.sp) }
+    Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Button(onClick = { vm.addToOrder() }, enabled = box != null && inOrder < box.quantity,
+            colors = ButtonDefaults.buttonColors(containerColor = SellBlue, contentColor = Ink),
+            modifier = Modifier.weight(1f).height(50.dp)) {
+            Text("Add to the order", fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        }
+        shop.sale?.takeIf { !it.undone }?.let { UndoButton("Undo sale", !shop.orderBusy) { vm.undoSale() } }
+    }
 }
 
 /** The last sale: what was taken out, and Undo. */
@@ -508,19 +527,6 @@ internal fun OrderSheet(state: UiState, vm: ScannerViewModel, onClose: () -> Uni
             } else TextButton({ confirmClear = true }) { Text("Empty the order") }
         }
         shop.sale?.let { SaleBanner(state, vm) }
-    }
-}
-
-/** The last booking: what happened, warnings, and Undo. */
-@Composable
-private fun BookingBanner(state: UiState, vm: ScannerViewModel) {
-    val b = state.shop.booking ?: return
-    Column(Modifier.fillMaxWidth().padding(top = 10.dp).background(Color(0xFF1E2A22), RoundedCornerShape(10.dp)).padding(10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text((if (b.undone) "↩ " else "✓ ") + b.text, color = if (b.undone) Muted else ShopGreen, fontSize = 13.sp, modifier = Modifier.weight(1f))
-            if (!b.undone) TextButton({ vm.undoShopBooking() }, enabled = !state.shop.busy) { Text("Undo") }
-        }
-        b.warnings.forEach { Text("⚠ $it", color = Warn, fontSize = 12.sp) }
     }
 }
 
