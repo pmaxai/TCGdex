@@ -340,21 +340,22 @@ private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadReque
     PriceSteps(state.settings.priceStep, f.price, { vm.setShopPrice(it) }) { m ->
         Row(m.border(1.dp, Color(0xFF3A3D45), RoundedCornerShape(8.dp))
             .clickable { onPad(PadRequest("Selling price", f.price, null, verdicts = false) { vm.setShopPrice(it) }) }
-            .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center) {
             Text(f.price?.let { eur(it) } ?: "tap to set", color = if (f.price != null) Color.White else Muted, fontSize = 20.sp,
                 fontWeight = FontWeight.Bold, maxLines = 1)
-            Spacer(Modifier.width(10.dp))
-            val market = vm.marketValue(s, f.condition)
-            Text(when {
-                match != null && !f.priceByUser -> "the shop's price"
-                match != null -> "replaces the shop's ${match.price?.let { eur(it.euros) } ?: ""}"
-                f.priceByUser -> "your price"
-                market != null && shop.minPrice != null && market < shop.minPrice -> "your minimum (market ${eur(market)})"
-                else -> "market value for ${f.condition}"
-            }, color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
-            Text("✎", color = Muted, fontSize = 16.sp)
+            Text("  ✎", color = Muted, fontSize = 16.sp)
         }
     }
+    // where the price comes from, under the field (inside it wrapped beside − and +)
+    val market = vm.marketValue(s, f.condition)
+    Text(when {
+        match != null && !f.priceByUser -> "the shop's price"
+        match != null -> "replaces the shop's ${match.price?.let { eur(it.euros) } ?: ""}"
+        f.priceByUser -> "your price"
+        market != null && shop.minPrice != null && market < shop.minPrice -> "your minimum (market ${eur(market)})"
+        else -> "market value for ${f.condition}"
+    }, color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 2.dp))
     FieldLabel("Condition")
     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         ShopTerms.CONDITIONS.forEach { g ->
