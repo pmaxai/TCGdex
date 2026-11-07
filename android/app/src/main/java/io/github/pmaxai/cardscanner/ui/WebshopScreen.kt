@@ -366,8 +366,8 @@ private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadReque
     // what the button does, said plainly
     val box = f.box?.let { ShopClient.box(it) }
     Text(if (match != null) "${match.stock.quantity} in stock now – this adds ${f.quantity} to box ${box ?: "…"}"
-        else "${s.version.name} (${f.language} · ${f.condition} · ${ShopTerms.finishLabel(finish)}) is new: it is created with ${f.quantity} in box ${box ?: "…"}" +
-            (if (f.price == null) " (without a price it stays a draft)" else ""),
+        else "${s.version.name} (" + listOfNotNull(f.language, f.condition, ShopTerms.finishLabel(finish), s.version.year, s.version.numberText)
+            .joinToString(" · ") + ") is new" + (if (f.price == null) " – without a price it stays a draft" else ""),
         color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
     val last = shop.booking?.takeIf { !it.undone }
     last?.warnings?.forEach { Text("⚠ $it", color = Warn, fontSize = 12.sp) }
@@ -394,7 +394,7 @@ private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadReque
 private fun UndoButton(label: String, enabled: Boolean, onClick: () -> Unit) {
     OutlinedButton(onClick = onClick, enabled = enabled, contentPadding = PaddingValues(horizontal = 12.dp),
         modifier = Modifier.padding(start = 8.dp).height(50.dp)) {
-        Text("↩ $label", fontSize = 13.sp, maxLines = 1)
+        Text(label, fontSize = 13.sp, maxLines = 1)
     }
 }
 
