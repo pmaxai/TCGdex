@@ -21,6 +21,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -77,6 +79,22 @@ class NumberPadTest {
         compose.waitForIdle()
         assertFalse(open)
         assertNull(results.last())
+    }
+
+    /** Webshop's selling price: no title, no % line, no quick buttons, only "Market price: x". */
+    @Test
+    fun theSellingPadShowsOnlyTheMarketPrice() {
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Gold, onPrimary = Ink, background = Ink, surface = Panel)) {
+                Surface(color = Panel) {
+                    NumberPadContent(PadRequest("Selling price", 12.0, 2.5, verdicts = false, selling = true) {}, wide = false) {}
+                }
+            }
+        }
+        compose.onNodeWithText("Market price: ${eur(2.5)}").assertExists()
+        for (gone in listOf("Selling price", "= market", "−10 %", "−20 %", "offer")) compose.onAllNodesWithText(gone).assertCountEquals(0)
+        compose.onAllNodesWithText("% of market", substring = true).assertCountEquals(0)
+        Screenshots.save(compose, "numberpad-selling.png")
     }
 
     /** − and + beside a price: the step from the settings, never down to 0, + on an empty price starts at the step. */

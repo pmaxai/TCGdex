@@ -202,7 +202,7 @@ downgrades), or restore the code from the tag.
   also one the price data doesn't list), storage box (1–999, the last one is remembered),
   selling price (suggested: the shop's price, else the market value for the condition, but
   never below your **minimum selling price** from ⚙ → Webshop, for cards worth only a few
-  cents; the number pad shows the market value) and condition (M … PO; **sky blue**: the
+  cents; the number pad shows "Market price: x") and condition (M … PO; **sky blue**: the
   shop already has this card in that condition, same language and type); a new product can
   get a comment (shown on its product page). Each booking adds one copy.
   **Scanning books nothing**: the stock changes only with **Add to stock** (the product

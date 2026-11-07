@@ -98,7 +98,7 @@ fun verdictColor(v: Verdict?): Color = when (v) {
 class PadRequest(val title: String, val initial: Double?, val market: Double?, val unit: String = "€",
                  /** false: the market value is in doubt, so no deal verdict while typing */
                  val verdicts: Boolean = true,
-                 /** a price you sell at (Webshop): quick buttons around the market value, no buying offer */
+                 /** a price you sell at (Webshop): no title, no quick buttons, only "Market price: x" */
                  val selling: Boolean = false, val onDone: (Double?) -> Unit)
 
 private val GiveBlue = Color(0xFF6FA8FF)
@@ -417,21 +417,19 @@ internal fun NumberPadContent(r: PadRequest, wide: Boolean, compact: Boolean = f
         }
     }
     val info: @Composable () -> Unit = {
-        Text(r.title, color = Muted, fontSize = 14.sp)
+        if (!r.selling) Text(r.title, color = Muted, fontSize = 14.sp)
         Text((if (text.isEmpty()) "–" else text.replace('.', comma)) + " " + r.unit, color = Color.White, fontSize = 36.sp,
             fontWeight = FontWeight.Bold, maxLines = 1, modifier = Modifier.padding(vertical = if (compact) 2.dp else 6.dp))
         val m = r.market
-        if (m != null) {
-            val v = value()
-            if (v == null) Text("Market value ${eur(m)}", color = Color.White, fontSize = 13.sp)
-            else {
+        if (m != null && r.selling) Text("Market price: ${eur(m)}", color = Color.White, fontSize = 14.sp)
+        else if (m != null) {
+            value()?.let { v ->
                 val vd = if (r.verdicts) TradingMath.verdict(v, m) else null
                 Text("${(v / m * 100).roundToInt()} % of market ${eur(m)}" + (vd?.let { " · ${it.label}" } ?: ""),
-                    color = if (vd == null) Color.White else verdictColor(vd), fontSize = 13.sp)
+                    color = verdictColor(vd), fontSize = 13.sp)
             }
             Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                (if (r.selling) listOf("= market" to 1.0, "+10 %" to 1.1, "−10 %" to 0.9, "−20 %" to 0.8)
-                 else listOf("= market" to 1.0, "−10 %" to 0.9, "−20 %" to 0.8, "offer" to -1.0)).forEach { (label, f) ->
+                listOf("= market" to 1.0, "−10 %" to 0.9, "−20 %" to 0.8, "offer" to -1.0).forEach { (label, f) ->
                     val v = if (f < 0) TradingMath.offer(m) else TradingMath.round2(m * f)
                     Text(label, color = Color.White, fontSize = 13.sp, maxLines = 1, modifier = Modifier.background(Color(0xFF2A2D34), RoundedCornerShape(8.dp))
                         .clickable { text = String.format(Locale.ROOT, "%.2f", v) }.padding(horizontal = 10.dp, vertical = 6.dp))

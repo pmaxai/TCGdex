@@ -37,6 +37,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -51,7 +52,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -353,7 +356,7 @@ private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadReque
     FieldLabel("Selling price")
     PriceSteps(state.settings.priceStep, f.price, { vm.setShopPrice(it) }) { m ->
         Row(m.border(1.dp, Color(0xFF3A3D45), RoundedCornerShape(8.dp))
-            .clickable { onPad(PadRequest("Selling price · ${f.condition}", f.price, vm.marketValue(s, f.condition), verdicts = false,
+            .clickable { onPad(PadRequest("Selling price", f.price, vm.marketValue(s, f.condition), verdicts = false,
                 selling = true) { vm.setShopPrice(it) }) }
             .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center) {
@@ -370,8 +373,9 @@ private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadReque
         f.priceByUser -> "your price"
         market != null && shop.minPrice != null && market < shop.minPrice -> "your minimum (market ${eur(market)})"
         else -> "market value for ${f.condition}"
-    }, color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 2.dp))
-    FieldLabel("Condition")
+    }, color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+        style = LocalTextStyle.current.copy(lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.LastLineBottom)))
+    FieldLabel("Condition", top = 2.dp)
     // sky blue: the shop has this card (language and type as chosen) in that condition
     val inShop = shop.products.orEmpty().filter { it.cardLanguage == f.language && it.finish == finish && it.grading == null }
         .map { it.condition }.toSet()
@@ -383,10 +387,6 @@ private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadReque
                 modifier = Modifier.padding(vertical = 2.dp).background(if (sel) Gold else if (there) SkyBlue else Color(0xFF2A2D34), RoundedCornerShape(8.dp))
                     .clickable { vm.setShopCondition(g.code) }.padding(horizontal = 11.dp, vertical = 6.dp))
         }
-    }
-    (inShop - f.condition).takeIf { it.isNotEmpty() }?.let { other ->
-        Text("Blue: in your shop already as ${other.sortedBy { c -> ShopTerms.CONDITIONS.indexOfFirst { it.code == c } }.joinToString(", ")}",
-            color = SkyBlue, fontSize = 12.sp)
     }
 
     // what the button does, said plainly
@@ -583,7 +583,7 @@ private fun SectionTitle(text: String) {
 }
 
 @Composable
-private fun FieldLabel(text: String) = Text(text, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp, end = 8.dp))
+private fun FieldLabel(text: String, top: Dp = 6.dp) = Text(text, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = top, end = 8.dp))
 
 @Composable
 private fun StepButton(label: String, enabled: Boolean, onClick: () -> Unit) {
