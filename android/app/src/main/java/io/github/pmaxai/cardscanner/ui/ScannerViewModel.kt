@@ -76,6 +76,9 @@ enum class SearchMode { LOOK_UP, REPLACE }
 data class Candidate(val group: String, val info: CardInfo, val score: Float, val reading: String, val image: String? = null)
 
 /** The card in the result panel. */
+/** The printing picked, only if the price data has it (else null: a reverse holo without prices has no market value). */
+val Shown.pickedPrinting: Printing? get() = if (printing == null) selected else priceCard.printings.firstOrNull { it.kind == printing }
+
 data class Shown(
     val group: String,
     /** the scanned version: its set, number and language */
@@ -716,7 +719,10 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The market value of the shown printing in [condition] (Cardmarket, else TCGplayer in euros). */
     fun marketValue(s: Shown, condition: String): Double? =
-        s.selected?.let { p -> (p.eur ?: p.usdEur)?.let { TradingMath.round2(it * ShopTerms.share(condition)) } }
+        s.pickedPrinting?.let { p -> (p.eur ?: p.usdEur)?.let { TradingMath.round2(it * ShopTerms.share(condition)) } }
+
+    /** Webshop: the card type (Normal / Holo / Reverse Holo …), also one the price data doesn't have. */
+    fun setShopFinish(kind: Printing.Kind) { holdCard(); choosePrinting(kind) }
 
     /** Filling in the form: the camera waits, so another card in view can't replace this one meanwhile. */
     private fun holdCard() {

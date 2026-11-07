@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -62,6 +63,12 @@ import io.github.pmaxai.cardscanner.shop.ShopTerms
 
 private val ShopGreen = Color(0xFF5BC98A)
 private val SellBlue = Color(0xFF6FA8FF)
+private val SkyBlue = Color(0xFF87CEEB)
+
+/** N / H / RH / 1st */
+private fun typeShort(k: Printing.Kind): String = when (k) {
+    Printing.Kind.NORMAL -> "N"; Printing.Kind.HOLO -> "H"; Printing.Kind.REVERSE -> "RH"; Printing.Kind.FIRST_EDITION -> "1st"
+}
 
 /**
  * Webshop Mode: scan or search a card, see its prices and what the Pokeshop holds of it, and
@@ -185,7 +192,7 @@ internal fun WebshopPanel(state: UiState, vm: ScannerViewModel, modifier: Modifi
 /** The card, its printing (Normal / Holo / Reverse) and its prices: market value, trend, TCGplayer, PSA. */
 @Composable
 private fun CardAndPrices(s: Shown, state: UiState, vm: ScannerViewModel) {
-    val p = s.selected
+    val p = s.pickedPrinting
     val condition = state.shop.form.condition
     Row {
         CardImage(s, Modifier.width(76.dp).aspectRatio(63f / 88f))
@@ -201,7 +208,8 @@ private fun CardAndPrices(s: Shown, state: UiState, vm: ScannerViewModel) {
                     Text("  market · $condition" + if (p?.eur == null) " (TCGplayer)" else "", color = Muted, fontSize = 12.sp,
                         modifier = Modifier.padding(bottom = 4.dp))
                 }
-            } else Text("No market price", color = Warn, fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp))
+            } else Text("No market price" + (if (p == null && s.printing != null) " for ${ShopTerms.finishLabel(ShopTerms.finishOf(s.printing))}" else ""),
+                color = Warn, fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp))
         }
     }
     if (s.priceCard.printings.size > 1) {
@@ -254,7 +262,7 @@ private fun ShopEntries(state: UiState, vm: ScannerViewModel) {
                     else {
                         vm.setShopLanguage(p.cardLanguage)
                         vm.setShopCondition(p.condition)
-                        kindOf(p.finish)?.let { k -> if (state.shown?.priceCard?.printings?.any { it.kind == k } == true) vm.choosePrinting(k) }
+                        kindOf(p.finish)?.let { vm.setShopFinish(it) }
                     }
                 }
             }
@@ -286,7 +294,7 @@ private fun ProductRow(p: ShopProduct, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** Language, (a comment for a new product,) quantity, box, price, condition, then the one button that books (Undo beside it). */
+/** Language, (a comment for a new product,) type (N / H / RH), box, price, condition, then the one button that books one copy (Undo beside it). */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadRequest) -> Unit) {
@@ -310,20 +318,26 @@ private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadReque
                 }
             }
         }
-        Text("  ${ShopTerms.finishLabel(finish)}", color = Muted, fontSize = 13.sp)
     }
     if (match == null) {
         OutlinedTextField(value = f.comment, onValueChange = vm::setShopComment, modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
             label = { Text("Comment (optional, on the product page)") }, maxLines = 4)
     }
     Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.Bottom) {
-        // quantity
+        // the card type: N / H / RH (1st when the card has a 1st edition); each booking adds one copy
         Column(Modifier.weight(1f)) {
-            FieldLabel("Copies")
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                StepButton("−", f.quantity > 1) { vm.setShopQuantity(f.quantity - 1) }
-                Text("${f.quantity}", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 12.dp))
-                StepButton("+", true) { vm.setShopQuantity(f.quantity + 1) }
+            FieldLabel("Type")
+            val kinds = listOf(Printing.Kind.NORMAL, Printing.Kind.HOLO, Printing.Kind.REVERSE) +
+                listOfNotNull(Printing.Kind.FIRST_EDITION.takeIf { k -> s.priceCard.printings.any { it.kind == k } })
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                kinds.forEach { k ->
+                    val sel = ShopTerms.finishOf(k) == finish
+                    val priced = s.priceCard.printings.any { it.kind == k }
+                    Text(typeShort(k), color = if (sel) Ink else if (priced) Color.White else Muted, fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
+                        modifier = Modifier.widthIn(min = 44.dp).background(if (sel) Gold else Color(0xFF2A2D34), RoundedCornerShape(8.dp))
+                            .clickable { vm.setShopFinish(k) }.padding(horizontal = 8.dp, vertical = 12.dp))
+                }
             }
         }
         // storage box 1–999
@@ -339,7 +353,8 @@ private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadReque
     FieldLabel("Selling price")
     PriceSteps(state.settings.priceStep, f.price, { vm.setShopPrice(it) }) { m ->
         Row(m.border(1.dp, Color(0xFF3A3D45), RoundedCornerShape(8.dp))
-            .clickable { onPad(PadRequest("Selling price", f.price, null, verdicts = false) { vm.setShopPrice(it) }) }
+            .clickable { onPad(PadRequest("Selling price · ${f.condition}", f.price, vm.marketValue(s, f.condition), verdicts = false,
+                selling = true) { vm.setShopPrice(it) }) }
             .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center) {
             Text(f.price?.let { eur(it) } ?: "tap to set", color = if (f.price != null) Color.White else Muted, fontSize = 20.sp,
@@ -357,18 +372,26 @@ private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadReque
         else -> "market value for ${f.condition}"
     }, color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 2.dp))
     FieldLabel("Condition")
+    // sky blue: the shop has this card (language and type as chosen) in that condition
+    val inShop = shop.products.orEmpty().filter { it.cardLanguage == f.language && it.finish == finish && it.grading == null }
+        .map { it.condition }.toSet()
     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         ShopTerms.CONDITIONS.forEach { g ->
             val sel = g.code == f.condition
-            Text(g.code, color = if (sel) Ink else Color.White, fontSize = 14.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
-                modifier = Modifier.padding(vertical = 2.dp).background(if (sel) Gold else Color(0xFF2A2D34), RoundedCornerShape(8.dp))
+            val there = g.code in inShop
+            Text(g.code, color = if (sel || there) Ink else Color.White, fontSize = 14.sp, fontWeight = if (sel || there) FontWeight.Bold else FontWeight.Normal,
+                modifier = Modifier.padding(vertical = 2.dp).background(if (sel) Gold else if (there) SkyBlue else Color(0xFF2A2D34), RoundedCornerShape(8.dp))
                     .clickable { vm.setShopCondition(g.code) }.padding(horizontal = 11.dp, vertical = 6.dp))
         }
+    }
+    (inShop - f.condition).takeIf { it.isNotEmpty() }?.let { other ->
+        Text("Blue: in your shop already as ${other.sortedBy { c -> ShopTerms.CONDITIONS.indexOfFirst { it.code == c } }.joinToString(", ")}",
+            color = SkyBlue, fontSize = 12.sp)
     }
 
     // what the button does, said plainly
     val box = f.box?.let { ShopClient.box(it) }
-    Text(if (match != null) "${match.stock.quantity} in stock now – this adds ${f.quantity} to box ${box ?: "…"}"
+    Text(if (match != null) "${match.stock.quantity} in stock now – this adds 1 to box ${box ?: "…"}"
         else "${s.version.name} (" + listOfNotNull(f.language, f.condition, ShopTerms.finishLabel(finish), s.version.year, s.version.numberText)
             .joinToString(" · ") + ") is new" + (if (f.price == null) " – without a price it stays a draft" else ""),
         color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
@@ -385,7 +408,7 @@ private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadReque
         Button(onClick = { vm.bookShop() }, enabled = !shop.busy && f.box != null && !shop.loading,
             modifier = Modifier.weight(1f).height(50.dp)) {
             if (shop.busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Ink)
-            else Text(if (match != null) "Add ${f.quantity} to stock" else "Create in the shop (${f.quantity})", fontSize = 17.sp,
+            else Text(if (match != null) "Add to stock" else "Create in the shop", fontSize = 17.sp,
                 fontWeight = FontWeight.Bold, maxLines = 1)
         }
         if (last != null) UndoButton(if (last.sku.startsWith("${shop.cardRef}-")) "Undo" else "Undo last", !shop.busy) { vm.undoShopBooking() }

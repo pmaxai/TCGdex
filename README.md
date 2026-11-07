@@ -198,12 +198,15 @@ downgrades), or restore the code from the tag.
   search a card and see its prices (market value for the condition, Cardmarket trend,
   TCGplayer, PSA) and what the shop holds of it: one line per product (language ·
   condition · finish) with price, stock per box and status. Pick language (from the scan,
-  any of the shop's 15 can be chosen), condition (M … PO), copies, selling price (suggested:
-  the shop's price, else the market value for the condition, but never below your
-  **minimum selling price** from ⚙ → Webshop, for cards worth only a few cents) and
-  storage box (1–999, the last one is remembered); a new product can get a comment (shown on its product page).
+  any of the shop's 15 can be chosen), type (**N** normal, **H** holo, **RH** reverse holo;
+  also one the price data doesn't list), storage box (1–999, the last one is remembered),
+  selling price (suggested: the shop's price, else the market value for the condition, but
+  never below your **minimum selling price** from ⚙ → Webshop, for cards worth only a few
+  cents; the number pad shows the market value) and condition (M … PO; **sky blue**: the
+  shop already has this card in that condition, same language and type); a new product can
+  get a comment (shown on its product page). Each booking adds one copy.
   **Scanning books nothing**: the stock changes only with **Add to stock** (the product
-  exists) or **Create in the shop** (it doesn't). **Undo** takes the copies out again.
+  exists) or **Create in the shop** (it doesn't). **Undo** beside it takes the copy out again.
   While you fill in, the camera keeps the card. A card the shop's card list doesn't know
   is created with its German and English names (shown for you to check).
   - **Sell** (the *Stock in | Sell* switch at the top): a customer at your table. Scan or
