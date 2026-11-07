@@ -164,6 +164,8 @@ data class Settings(
     val reference: Reference = Reference.TREND,
     /** Webshop Mode: look cards up in the Pokeshop and book copies into its stock */
     val webshop: Boolean = false,
+    /** what one tap on − / + beside a price changes it by (EUR) */
+    val priceStep: Double = 0.5,
 ) {
     val guideFraction: Double get() = guideSize / 100.0
     val mode: AppMode get() = when {
@@ -410,6 +412,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                 reference = runCatching { Reference.valueOf(prefs.getString("trade_reference", null) ?: "TREND") }
                     .getOrDefault(Reference.TREND),
                 webshop = prefs.getBoolean("webshop", false),
+                priceStep = (Math.round(prefs.getFloat("price_step", 0.5f) * 100.0) / 100.0).takeIf { it > 0 } ?: 0.5,
             ), draft = DealDraft(runCatching { Condition.valueOf(prefs.getString("trade_condition", null) ?: "NM") }
                 .getOrDefault(Condition.NM)))
         }
@@ -1641,6 +1644,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             .putString("orientation", new.orientation).putFloat("zoom", new.zoom).putInt("guide_size", new.guideSize)
             .putBoolean("trading", new.trading).putString("trade_condition", new.tradingCondition.name)
             .putString("trade_reference", new.reference.name).putBoolean("webshop", new.webshop)
+            .putFloat("price_step", new.priceStep.toFloat())
             .apply()
         tracker.delayMs = new.triggerDelayMs.toLong()
         if (new.energyFilter != _state.value.settings.energyFilter) applyEnergyFilter(new.energyFilter)

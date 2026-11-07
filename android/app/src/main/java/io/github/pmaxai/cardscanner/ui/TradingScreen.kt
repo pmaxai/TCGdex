@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -54,6 +56,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -321,18 +325,20 @@ private fun CardPrice(s: Shown, state: UiState, vm: ScannerViewModel, onPad: (Pa
             else -> TradingMath.verdict(asking, market)?.let { it.label to verdictColor(it) }
         }
     } else null
-    Row(Modifier.fillMaxWidth().border(1.dp, if (give) GiveBlue else Color(0xFF3A3D45), RoundedCornerShape(10.dp))
-        .clickable { onPad(PadRequest(if (give) "Vendor's offer for your card" else "Asking price", asking, market, verdicts = check == null) { vm.setAsking(it) }) }
-        .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(when {
-            asking == null && give -> "Type the vendor's offer"
-            asking == null -> "Type the asking price"
-            give -> "Vendor offers ${eur(asking)}"
-            else -> "Asking ${eur(asking)}"
-        }, color = if (asking == null) Muted else Color.White, fontSize = 17.sp, modifier = Modifier.weight(1f))
-        if (badge != null) {
-            Text(badge.first, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Bold,
-                modifier = Modifier.background(badge.second, RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 4.dp))
+    PriceSteps(state.settings.priceStep, asking, { vm.setAsking(it) }) { m ->
+        Row(m.border(1.dp, if (give) GiveBlue else Color(0xFF3A3D45), RoundedCornerShape(10.dp))
+            .clickable { onPad(PadRequest(if (give) "Vendor's offer for your card" else "Asking price", asking, market, verdicts = check == null) { vm.setAsking(it) }) }
+            .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(when {
+                asking == null && give -> "Type the vendor's offer"
+                asking == null -> "Type the asking price"
+                give -> "Vendor offers ${eur(asking)}"
+                else -> "Asking ${eur(asking)}"
+            }, color = if (asking == null) Muted else Color.White, fontSize = 17.sp, modifier = Modifier.weight(1f))
+            if (badge != null) {
+                Text(badge.first, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1,
+                    modifier = Modifier.background(badge.second, RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 4.dp))
+            }
         }
     }
     if (market != null) {
@@ -586,7 +592,7 @@ private fun CartDialog(state: UiState, vm: ScannerViewModel, onPad: (PadRequest)
         }
     }
     val c = cart ?: return
-    editing?.let { id -> c.lines.firstOrNull { it.id == id }?.let { l -> LineEditor(c, l, vm, onPad) { editing = null } } }
+    editing?.let { id -> c.lines.firstOrNull { it.id == id }?.let { l -> LineEditor(c, l, vm, state.settings.priceStep, onPad) { editing = null } } }
     if (rename) {
         var name by remember { mutableStateOf(c.name) }
         AlertDialog(onDismissRequest = { rename = false }, title = { Text("Name of this cart") },
@@ -773,7 +779,7 @@ private fun TotalLine(label: String, value: String, strong: Boolean = false, col
 
 /** One cart line: condition, quantity, prices, status; in a trade also its side. */
 @Composable
-private fun LineEditor(c: Cart, l: CartLine, vm: ScannerViewModel, onPad: (PadRequest) -> Unit, onClose: () -> Unit) {
+private fun LineEditor(c: Cart, l: CartLine, vm: ScannerViewModel, step: Double, onPad: (PadRequest) -> Unit, onClose: () -> Unit) {
     fun change(f: (CartLine) -> CartLine) = vm.updateLine(c.id, l.id, f)
     val give = l.side == Side.GIVE
     AlertDialog(onDismissRequest = onClose,
@@ -807,11 +813,13 @@ private fun LineEditor(c: Cart, l: CartLine, vm: ScannerViewModel, onPad: (PadRe
                         modifier = Modifier.width(40.dp))
                     OutlinedButton({ change { it.copy(qty = it.qty + 1) } }) { Text("+") }
                 }
-                PriceField(if (give) "Vendor's offer (each)" else "Asking price (each)", l.asking) {
+                PriceField(if (give) "Vendor's offer (each)" else "Asking price (each)", l.asking, step = step,
+                    onStep = { v -> change { it.copy(asking = v) } }) {
                     onPad(PadRequest(if (give) "Vendor's offer" else "Asking price", l.asking, l.market, verdicts = !l.priceDoubt) { v -> change { it.copy(asking = v) } })
                 }
                 PriceField(if (give) "Agreed (each)" else "Negotiated price (each)", l.negotiated ?: l.asking,
-                    note = if (l.negotiated == null && l.asking != null) "= ${if (give) "offer" else "asking"}" else null) {
+                    note = if (l.negotiated == null && l.asking != null) "= ${if (give) "offer" else "asking"}" else null,
+                    step = step, onStep = { v -> change { it.copy(negotiated = v) } }) {
                     onPad(PadRequest(if (give) "Agreed price" else "Negotiated price", l.negotiated ?: l.asking, l.market, verdicts = !l.priceDoubt) { v -> change { it.copy(negotiated = v) } })
                 }
                 (l.verdict?.let { it.label to verdictColor(it) } ?: l.sellVerdict?.let { it.label to sellColor(it) })?.let { (t, col) ->
@@ -830,12 +838,42 @@ private fun LineEditor(c: Cart, l: CartLine, vm: ScannerViewModel, onPad: (PadRe
         confirmButton = { TextButton(onClose) { Text("Done") } })
 }
 
+/** A price in the line dialog: its name above, − price + below (tap the price for the pad). */
 @Composable
-private fun PriceField(label: String, value: Double?, note: String? = null, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(top = 8.dp).border(1.dp, Color(0xFF3A3D45), RoundedCornerShape(10.dp)).clickable(onClick = onClick)
-        .padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, color = Muted, fontSize = 13.sp, modifier = Modifier.weight(1f))
-        Text((if (value == null) "–" else eur(value)) + (note?.let { "  $it" } ?: ""), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+private fun PriceField(label: String, value: Double?, note: String? = null, step: Double, onStep: (Double) -> Unit, onClick: () -> Unit) {
+    Text(label, color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+    PriceSteps(step, value, onStep, Modifier.padding(top = 2.dp)) { m ->
+        Row(m.border(1.dp, Color(0xFF3A3D45), RoundedCornerShape(10.dp)).clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center) {
+            Text((if (value == null) "–" else eur(value)) + (note?.let { "  $it" } ?: ""), color = Color.White, fontSize = 16.sp,
+                fontWeight = FontWeight.Bold, maxLines = 1)
+        }
+    }
+}
+
+/**
+ * − and + left and right of a price field: one tap changes the price by [step] (Settings › Prices).
+ * [field] gets the modifier for its place in between; − stops above 0, + on an empty price starts at [step].
+ */
+@Composable
+fun PriceSteps(step: Double, value: Double?, onChange: (Double) -> Unit, modifier: Modifier = Modifier,
+               field: @Composable (Modifier) -> Unit) {
+    Row(modifier.fillMaxWidth().height(IntrinsicSize.Min), verticalAlignment = Alignment.CenterVertically) {
+        val down = value?.let { TradingMath.round2(it - step) }?.takeIf { it > 0 }
+        StepKey("−", down != null, "lower the price by ${eur(step)}") { down?.let(onChange) }
+        field(Modifier.weight(1f).padding(horizontal = 6.dp))
+        StepKey("+", true, "raise the price by ${eur(step)}") { onChange(TradingMath.round2((value ?: 0.0) + step)) }
+    }
+}
+
+@Composable
+private fun StepKey(label: String, enabled: Boolean, description: String, onClick: () -> Unit) {
+    Box(Modifier.width(46.dp).fillMaxHeight().defaultMinSize(minHeight = 44.dp)
+        .background(Color(if (enabled) 0xFF2A2D34 else 0xFF1C1E22), RoundedCornerShape(10.dp))
+        .clickable(enabled = enabled, onClick = onClick).semantics { contentDescription = description },
+        contentAlignment = Alignment.Center) {
+        Text(label, color = if (enabled) Color.White else Muted, fontSize = 22.sp, fontWeight = FontWeight.Bold)
     }
 }
 

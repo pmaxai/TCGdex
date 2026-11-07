@@ -201,6 +201,9 @@ private fun PricesPage(state: UiState, vm: ScannerViewModel) {
             vm.updateSettings { it.copy(threshold = v) }
         }
     }
+    Setting("− / + beside a price", "one tap changes the price by this much (Trading and Webshop)") {
+        Choices(PRICE_STEPS, s.priceStep, label = { eur(it) }) { v -> vm.updateSettings { it.copy(priceStep = v) } }
+    }
     SettingSwitch("PSA 10 / 9 / 8 prices", if (state.hasPsaData) "graded prices: eBay sold averages, USD" else "not in this data pack yet",
         s.showPsa) { v -> vm.updateSettings { it.copy(showPsa = v) } }
     Heading("Where the prices come from")
@@ -209,6 +212,9 @@ private fun PricesPage(state: UiState, vm: ScannerViewModel) {
     Hint("Price check: some cards carry another card's Cardmarket price in the card database. The app removes " +
         "those (TCGplayer is shown instead) or warns, and Trading Mode gives no deal verdict on them.")
 }
+
+/** the steps − / + can have */
+internal val PRICE_STEPS = listOf(0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0)
 
 @Composable
 private fun TradingPage(state: UiState, vm: ScannerViewModel) {

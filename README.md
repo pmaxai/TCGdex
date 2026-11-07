@@ -162,7 +162,9 @@ downgrades), or restore the code from the tag.
     from the English version, and prices older than 3 days (install the latest app
     before a show).
   - **Asking price**: tap *Type the asking price* and enter it on the big number pad
-    (quick buttons: = market, −10 %, −20 %, offer). The verdict: up to 80 % of the market
+    (quick buttons: = market, −10 %, −20 %, offer), or nudge it with **−** / **+** left and
+    right of the price (each tap by the step from ⚙ → Prices, e.g. 0.50 €; the same beside
+    the cart line's prices and Webshop's selling price). The verdict: up to 80 % of the market
     value *great deal*, 95 % *good price*, 110 % *fair*, above that *expensive*. Below it:
     an opening offer (85 %, rounded down) and the walk-away price (100 %).
   - **+ Cart** puts the card with its printing, condition and asking price into the cart

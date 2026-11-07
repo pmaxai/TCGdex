@@ -18,6 +18,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -27,6 +30,9 @@ import io.github.pmaxai.cardscanner.ui.Gold
 import io.github.pmaxai.cardscanner.ui.Ink
 import io.github.pmaxai.cardscanner.ui.NumberPadContent
 import io.github.pmaxai.cardscanner.ui.Panel
+import io.github.pmaxai.cardscanner.ui.PriceSteps
+import io.github.pmaxai.cardscanner.ui.eur
+import androidx.compose.material3.Text
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.pmaxai.cardscanner.ui.NumberPad
 import io.github.pmaxai.cardscanner.ui.PadRequest
@@ -71,6 +77,31 @@ class NumberPadTest {
         compose.waitForIdle()
         assertFalse(open)
         assertNull(results.last())
+    }
+
+    /** − and + beside a price: the step from the settings, never down to 0, + on an empty price starts at the step. */
+    @Test
+    fun minusAndPlusChangeThePriceByTheStep() {
+        var price by mutableStateOf<Double?>(1.0)
+        var step by mutableStateOf(0.5)
+        compose.setContent {
+            MaterialTheme { PriceSteps(step, price, { price = it }) { m -> Text(eur(price), m) } }
+        }
+        val plus = { compose.onNodeWithContentDescription("raise the price by ${eur(step)}") }
+        val minus = { compose.onNodeWithContentDescription("lower the price by ${eur(step)}") }
+        plus().performClick(); compose.waitForIdle()
+        assertEquals(1.5, price!!, 1e-9)
+        minus().performClick(); minus().performClick(); compose.waitForIdle()
+        assertEquals(0.5, price!!, 1e-9)
+        minus().assertIsNotEnabled()                                       // 0.50 − 0.50 would be 0
+        step = 0.1; compose.waitForIdle()
+        minus().assertIsEnabled()
+        repeat(3) { plus().performClick() }; compose.waitForIdle()
+        assertEquals(0.8, price!!, 1e-9)                                   // cents, no 0.80000001
+        price = null; compose.waitForIdle()
+        minus().assertIsNotEnabled()
+        plus().performClick(); compose.waitForIdle()
+        assertEquals(0.1, price!!, 1e-9)
     }
 
     /** A small phone held sideways (740 × 330 dp left for the pad), drawn scaled down onto the test screen. */
