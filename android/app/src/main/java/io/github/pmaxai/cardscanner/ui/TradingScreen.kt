@@ -386,6 +386,19 @@ private fun Tray(state: UiState, vm: ScannerViewModel) {
 /** Big keys for prices: two or three taps; quick buttons from the market value. Clear starts over, OK takes it. */
 @Composable
 fun NumberPad(r: PadRequest, onClose: () -> Unit) {
+    val cfg = LocalConfiguration.current
+    // a landscape phone is too low for the pad in one column (OK ended up below the screen): keys beside the price
+    val wide = cfg.screenWidthDp > cfg.screenHeightDp && cfg.screenHeightDp < 600
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = !wide)) {
+        Surface(shape = RoundedCornerShape(18.dp), color = Panel) {
+            NumberPadContent(r, wide, compact = wide && cfg.screenHeightDp < 380, onClose = onClose)
+        }
+    }
+}
+
+/** The pad itself: [wide] puts the keys to the right of the price and the buttons; [compact] uses lower keys. */
+@Composable
+internal fun NumberPadContent(r: PadRequest, wide: Boolean, compact: Boolean = false, onClose: () -> Unit) {
     val comma = java.text.DecimalFormatSymbols.getInstance().decimalSeparator
     var text by remember { mutableStateOf(r.initial?.let { String.format(Locale.ROOT, "%.2f", it).trimEnd('0').trimEnd('.') } ?: "") }
     fun value(): Double? = text.toDoubleOrNull()
@@ -397,44 +410,64 @@ fun NumberPad(r: PadRequest, onClose: () -> Unit) {
                     else if (text == "0") k else (text + k).take(9)
         }
     }
-    Dialog(onDismissRequest = onClose) {
-        Surface(shape = RoundedCornerShape(18.dp), color = Panel) {
-            Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(r.title, color = Muted, fontSize = 14.sp)
-                Text((if (text.isEmpty()) "–" else text.replace('.', comma)) + " " + r.unit, color = Color.White, fontSize = 36.sp,
-                    fontWeight = FontWeight.Bold, maxLines = 1, modifier = Modifier.padding(vertical = 6.dp))
-                val m = r.market
-                if (m != null) {
-                    value()?.let { v ->
-                        val vd = if (r.verdicts) TradingMath.verdict(v, m) else null
-                        Text("${(v / m * 100).roundToInt()} % of market ${eur(m)}" + (vd?.let { " · ${it.label}" } ?: ""),
-                            color = verdictColor(vd), fontSize = 13.sp)
-                    }
-                    Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf("= market" to 1.0, "−10 %" to 0.9, "−20 %" to 0.8, "offer" to -1.0).forEach { (label, f) ->
-                            val v = if (f < 0) TradingMath.offer(m) else TradingMath.round2(m * f)
-                            Text(label, color = Color.White, fontSize = 13.sp, modifier = Modifier.background(Color(0xFF2A2D34), RoundedCornerShape(8.dp))
-                                .clickable { text = String.format(Locale.ROOT, "%.2f", v) }.padding(horizontal = 10.dp, vertical = 6.dp))
-                        }
-                    }
-                }
-                Spacer(Modifier.height(10.dp))
-                listOf(listOf("1", "2", "3"), listOf("4", "5", "6"), listOf("7", "8", "9"), listOf(".", "0", "⌫")).forEach { row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
-                        row.forEach { k ->
-                            Box(Modifier.size(width = 76.dp, height = 52.dp).background(Color(0xFF2A2D34), RoundedCornerShape(12.dp))
-                                .clickable { type(k) }, contentAlignment = Alignment.Center) {
-                                Text(if (k == ".") comma.toString() else k, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
-                Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Clear empties the field and stays open for the new price (OK on an empty field removes the price)
-                    OutlinedButton({ text = "" }) { Text("Clear") }
-                    Button({ r.onDone(value()?.let { TradingMath.round2(it) }); onClose() }) { Text("OK", fontWeight = FontWeight.Bold) }
+    val info: @Composable () -> Unit = {
+        Text(r.title, color = Muted, fontSize = 14.sp)
+        Text((if (text.isEmpty()) "–" else text.replace('.', comma)) + " " + r.unit, color = Color.White, fontSize = 36.sp,
+            fontWeight = FontWeight.Bold, maxLines = 1, modifier = Modifier.padding(vertical = if (compact) 2.dp else 6.dp))
+        val m = r.market
+        if (m != null) {
+            value()?.let { v ->
+                val vd = if (r.verdicts) TradingMath.verdict(v, m) else null
+                Text("${(v / m * 100).roundToInt()} % of market ${eur(m)}" + (vd?.let { " · ${it.label}" } ?: ""),
+                    color = verdictColor(vd), fontSize = 13.sp)
+            }
+            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("= market" to 1.0, "−10 %" to 0.9, "−20 %" to 0.8, "offer" to -1.0).forEach { (label, f) ->
+                    val v = if (f < 0) TradingMath.offer(m) else TradingMath.round2(m * f)
+                    Text(label, color = Color.White, fontSize = 13.sp, maxLines = 1, modifier = Modifier.background(Color(0xFF2A2D34), RoundedCornerShape(8.dp))
+                        .clickable { text = String.format(Locale.ROOT, "%.2f", v) }.padding(horizontal = 10.dp, vertical = 6.dp))
                 }
             }
+        }
+    }
+    val keys: @Composable () -> Unit = {
+        listOf(listOf("1", "2", "3"), listOf("4", "5", "6"), listOf("7", "8", "9"), listOf(".", "0", "⌫")).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = if (compact) 3.dp else 4.dp)) {
+                row.forEach { k ->
+                    Box(Modifier.size(width = 76.dp, height = if (compact) 46.dp else 52.dp).background(Color(0xFF2A2D34), RoundedCornerShape(12.dp))
+                        .clickable { type(k) }, contentAlignment = Alignment.Center) {
+                        Text(if (k == ".") comma.toString() else k, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+    val buttons: @Composable (Modifier) -> Unit = { m ->
+        Row(m, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Clear empties the field and stays open for the new price (OK on an empty field removes the price)
+            OutlinedButton({ text = "" }, modifier = Modifier.height(48.dp)) { Text("Clear") }
+            Button({ r.onDone(value()?.let { TradingMath.round2(it) }); onClose() }, modifier = Modifier.height(48.dp).width(120.dp)) {
+                Text("OK", fontWeight = FontWeight.Bold, fontSize = 17.sp)
+            }
+        }
+    }
+    if (wide) {
+        // price, quick buttons and Clear/OK on the left, the keys on the right: fits a landscape phone (scrolls if it still doesn't)
+        Row(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = if (compact) 8.dp else 14.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.width(300.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                info()
+                buttons(Modifier.padding(top = if (compact) 10.dp else 18.dp))
+            }
+            Spacer(Modifier.width(16.dp))
+            Column { keys() }
+        }
+    } else {
+        Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            info()
+            Spacer(Modifier.height(10.dp))
+            keys()
+            buttons(Modifier.padding(top = 10.dp))
         }
     }
 }
