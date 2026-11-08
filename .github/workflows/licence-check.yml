@@ -1,0 +1,11 @@
+name: Licence server check (one-off)
+on: workflow_dispatch
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          set -x
+          curl -sS -m 20 -w '\n%{http_code}\n' https://license.pokemonkarten.at/health
+          curl -sS -m 20 -w '\n%{http_code}\n' -X POST https://license.pokemonkarten.at/v1/check -H 'content-type: application/json' -d '{"token":"not-a-real-token"}'
+          curl -sS -m 20 -w '\n%{http_code}\n' https://license.pokemonkarten.at/v1/shop/licenses?email=x@example.com
