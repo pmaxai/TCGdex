@@ -40,10 +40,10 @@ pipeline starts at 00:40 CET and the new APK (with that day's prices) is out at 
 
 ## Licence
 
-The app can ask for a one-off licence (bought in the shop; the license service runs next to
-the shop: `apps/license` in the pokeshop repository, see its `docs/license-service.md`). It
-is **off** until the service runs: switch it on with `cardscanner.licenceRequired=true` in
-`android/gradle.properties` (the service's address is `cardscanner.licenceUrl`).
+The app asks for a one-off licence (bought in the shop; the license service runs next to
+the shop: `apps/license` in the pokeshop repository, see its `docs/license-service.md`).
+It is **on** since build 1.2.25; `cardscanner.licenceRequired` in `android/gradle.properties`
+switches it (the service's address is `cardscanner.licenceUrl`).
 
 - **First start:** scan the QR code from the licence e-mail, or type the key
   (`CS-XXXXX-XXXXX-XXXXX-XXXXX`; case, spaces and dashes don't matter). Activating needs

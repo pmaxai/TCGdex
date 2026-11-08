@@ -35,6 +35,18 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      - name: License service reachable?
+        # the app asks the service in gradle.properties; only a note here, the build goes on either way
+        run: |
+          if grep -q '^cardscanner.licenceRequired=true' android/gradle.properties; then
+            url=$(grep '^cardscanner.licenceUrl=' android/gradle.properties | cut -d= -f2-)
+            for u in "$url" "${url/license./license.staging.}"; do
+              echo "$u/health: $(curl -sS -m 15 "$u/health" 2>&1 || true)"
+            done
+          else
+            echo "licence check is off in this build"
+          fi
+
       - name: Get the data pack and test photos
         env:
           GH_TOKEN: ${{ github.token }}
