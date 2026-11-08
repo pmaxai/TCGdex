@@ -1,0 +1,24 @@
+name: License service health
+
+# Run by hand: does the license service (production and staging) answer?
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask both services
+        run: |
+          for u in https://license.pokemonkarten.at https://license.staging.pokemonkarten.at; do
+            echo "== $u/health"
+            curl -sS -m 20 -o body.txt -w "HTTP %{http_code}\n" "$u/health" || true
+            cat body.txt 2>/dev/null; echo
+            echo "== $u/v1/check (unknown token: expect 404 unknown_activation)"
+            curl -sS -m 20 -o body.txt -w "HTTP %{http_code}\n" -X POST -H 'content-type: application/json' \
+              -d '{"token":"health-check"}' "$u/v1/check" || true
+            cat body.txt 2>/dev/null; echo
+          done
