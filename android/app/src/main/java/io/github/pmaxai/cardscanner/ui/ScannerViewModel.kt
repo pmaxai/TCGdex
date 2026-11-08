@@ -38,6 +38,13 @@ import io.github.pmaxai.cardscanner.vision.Recognizer
 import io.github.pmaxai.cardscanner.vision.ScanTracker
 import io.github.pmaxai.cardscanner.vision.VersionResolver
 import io.github.pmaxai.cardscanner.update.AppRelease
+import io.github.pmaxai.cardscanner.BuildConfig
+import io.github.pmaxai.cardscanner.license.LicenceApi
+import io.github.pmaxai.cardscanner.license.LicenceCheck
+import io.github.pmaxai.cardscanner.license.LicenceException
+import io.github.pmaxai.cardscanner.license.LicenceKey
+import io.github.pmaxai.cardscanner.license.LicenceStatus
+import io.github.pmaxai.cardscanner.license.LicenceStore
 import io.github.pmaxai.cardscanner.shop.Money
 import io.github.pmaxai.cardscanner.shop.PendingWrite
 import io.github.pmaxai.cardscanner.shop.ShopClient
@@ -343,6 +350,8 @@ data class UiState(
     val update: UpdateState? = null,
     /** TCGdex's price date of this app's data pack, ISO UTC */
     val pricesDate: String? = null,
+    /** the app's licence on this device */
+    val licence: LicenceState = LicenceState(),
 ) {
     val sessionValue: Double get() = session.sumOf { it.value ?: 0.0 }
 }
@@ -383,6 +392,13 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     private val shopClock = ServerClock()
     /** Webshop Mode, Sell: the customer's order, kept until it's sold or cleared */
     private val orderFile = java.io.File(app.filesDir, "shop-order.json")
+    /** the licence on this phone, and the license service next to the shop */
+    private val licenceStore = LicenceStore(app)
+    private val licenceApi = LicenceApi(BuildConfig.LICENSE_URL)
+    @Volatile private var licenceToken: String? = null
+    @Volatile private var licenceChecking = false
+    /** a scanned key that the service just refused: not sent again for every frame */
+    @Volatile private var refusedKey: String? = null
     private var serial = 0
     private var lastAlerted: String? = null
     private var lastText: CardText? = null
@@ -425,6 +441,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         }
         loadShopConnection()
         loadShopOrder()
+        loadLicence()
+        checkLicence(force = true)
         // Webshop Mode: a new card (or language, printing) -> look it up in the shop, fill in the form
         viewModelScope.launch {
             state.map { s -> if (s.settings.webshop) s.shown?.let { Triple(it.version.id, it.version.lang, it.printing) } else null }
@@ -1076,7 +1094,73 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** The app is back in front: look for updates; after "allow from this source", go on installing. */
+    // ---------------------------------------------------------------- licence
+
+    private fun loadLicence() {
+        val saved = licenceStore.load()
+        licenceToken = saved.token
+        _state.update {
+            it.copy(licence = LicenceState(required = BuildConfig.LICENSE_REQUIRED, status = saved.status, key = saved.key,
+                since = saved.since, lastCheck = saved.lastCheck, suspendedBy = saved.suspendedBy, suspendedSince = saved.suspendedSince))
+        }
+    }
+
+    private fun updateLicence(f: (LicenceState) -> LicenceState) = _state.update { it.copy(licence = f(it.licence)) }
+
+    /** A scanned QR code or a typed key: activate it on this device (the device that had it stops). */
+    fun activateLicence(text: String, scanned: Boolean = false) {
+        if (_state.value.licence.busy) return
+        val key = LicenceKey.parse(text)
+        if (key == null) {
+            if (!scanned) updateLicence { it.copy(error = "That isn't a licence key (CS-XXXXX-XXXXX-XXXXX-XXXXX).") }
+            return
+        }
+        if (scanned && key == refusedKey) return
+        updateLicence { it.copy(busy = true, error = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val a = licenceApi.activate(key, licenceStore.deviceId, LicenceStore.deviceName(), BuildConfig.VERSION_NAME)
+                licenceStore.activated(key, a)
+                refusedKey = null
+                loadLicence()
+                _state.update { it.copy(message = "Licence activated") }
+            } catch (e: LicenceException) {
+                refusedKey = key
+                updateLicence { it.copy(busy = false, error = e.friendly) }
+            } catch (e: java.io.IOException) {
+                updateLicence { it.copy(busy = false, error = "No connection: activating needs the internet once. Try again when you're online.") }
+            }
+        }
+    }
+
+    /**
+     * Asks the service whether this device still holds the licence: at every start, otherwise at
+     * most once an hour. Offline (or the service away): nothing happens, the app goes on.
+     */
+    fun checkLicence(force: Boolean = false) {
+        val l = _state.value.licence
+        if (!l.required || l.status != LicenceStatus.ACTIVE || licenceChecking) return
+        val token = licenceToken ?: return
+        if (!force && l.lastCheck != null && System.currentTimeMillis() - l.lastCheck < 60 * 60 * 1000L) return
+        licenceChecking = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                when (val r = licenceApi.check(token, BuildConfig.VERSION_NAME)) {
+                    LicenceCheck.Active -> licenceStore.checked()
+                    is LicenceCheck.Suspended -> licenceStore.suspended(r.since, r.deviceName)
+                    LicenceCheck.Revoked -> licenceStore.revoked()
+                }
+                loadLicence()
+            } catch (e: Exception) {
+                // offline, the service is away or doesn't know the token: keep working
+            } finally {
+                licenceChecking = false
+            }
+        }
+    }
+
     fun onResume() {
+        checkLicence()
         checkForUpdate()
         val u = _state.value.update ?: return
         if (u.needsPermission && u.apk != null && AppUpdate.canInstall(appCtx)) install(u.apk)

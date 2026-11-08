@@ -28,6 +28,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -76,6 +77,7 @@ enum class SettingsPage(val short: String, val title: String, val icon: ImageVec
     WEBSHOP("Webshop", "Webshop", Icons.AutoMirrored.Filled.List),
     YOUTUBE("YouTube", "YouTube Mode", Icons.Filled.PlayArrow),
     ADVANCED("Advanced", "Advanced", Icons.Filled.Build),
+    LICENCE("Licence", "Licence", Icons.Filled.Lock),
     ABOUT("About", "About & updates", Icons.Filled.Info),
 }
 
@@ -89,6 +91,8 @@ fun SettingsScreen(state: UiState, vm: ScannerViewModel, start: SettingsPage) {
     androidx.compose.runtime.LaunchedEffect(page) { vm.settingsPageShown(page) }
     BackHandler { vm.closeSettings() }
     val wide = LocalConfiguration.current.screenWidthDp >= 600
+    // the Licence page only in builds that ask for a licence
+    val pages = SettingsPage.values().filter { it != SettingsPage.LICENCE || state.licence.required }
     Column(Modifier.fillMaxSize().background(Ink)) {
         Row(Modifier.fillMaxWidth().background(Panel).padding(horizontal = 4.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically) {
@@ -101,7 +105,7 @@ fun SettingsScreen(state: UiState, vm: ScannerViewModel, start: SettingsPage) {
         Row(Modifier.fillMaxSize()) {
             if (wide) {
                 Column(Modifier.width(220.dp).fillMaxHeight().background(Panel).verticalScroll(rememberScrollState()).padding(8.dp)) {
-                    SettingsPage.values().forEach { p ->
+                    pages.forEach { p ->
                         NavigationDrawerItem(
                             label = { Text(p.title) }, selected = p == page, onClick = { page = p },
                             icon = { Icon(p.icon, contentDescription = null) },
@@ -116,7 +120,7 @@ fun SettingsScreen(state: UiState, vm: ScannerViewModel, start: SettingsPage) {
             } else {
                 NavigationRail(containerColor = Panel, windowInsets = WindowInsets(0),      // insets as the rest of the app
                     modifier = Modifier.fillMaxHeight().verticalScroll(rememberScrollState())) {
-                    SettingsPage.values().forEach { p ->
+                    pages.forEach { p ->
                         NavigationRailItem(
                             selected = p == page, onClick = { page = p },
                             icon = { Icon(p.icon, contentDescription = p.title) },
@@ -138,6 +142,7 @@ fun SettingsScreen(state: UiState, vm: ScannerViewModel, start: SettingsPage) {
                     SettingsPage.WEBSHOP -> WebshopPage(state, vm)
                     SettingsPage.YOUTUBE -> YouTubePage(state, vm)
                     SettingsPage.ADVANCED -> AdvancedPage(state, vm)
+                    SettingsPage.LICENCE -> LicencePage(state.licence)
                     SettingsPage.ABOUT -> AboutPage(state, vm)
                 }
                 Spacer(Modifier.height(24.dp))

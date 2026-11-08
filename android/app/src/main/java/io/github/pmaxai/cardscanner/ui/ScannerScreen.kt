@@ -178,13 +178,16 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
     Surface(Modifier.fillMaxSize(), color = Ink) {
         Column(Modifier.fillMaxSize()) {
             // a newer app with newer prices (not over the YouTube picture)
-            state.update?.takeIf { !state.loading && !state.settings.youtube && state.settingsPage == null }?.let { u ->
+            state.update?.takeIf { !state.loading && !state.settings.youtube && state.settingsPage == null && !state.licence.locked }?.let { u ->
                 UpdateBanner(u, state.pricesDate, onUpdate = vm::startUpdate, onLater = vm::dismissUpdate)
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     !openCvReady -> Message("OpenCV could not be loaded on this phone.")
                     state.error != null -> Message("Could not start: ${state.error}")
+                    // without a licence (or after another device took it over) only the licence screen
+                    state.licence.locked -> LicenceGate(state.licence, onKey = { vm.activateLicence(it) },
+                        camera = { m -> QrCamera(m) { key -> vm.activateLicence(key, scanned = true) } })
                     state.loading -> Loading(state.loadingText)
                     state.settingsPage != null -> SettingsScreen(state, vm, state.settingsPage ?: SettingsPage.MODE)
                     !granted -> Message("The scanner needs the camera.") { Button({ ask.launch(Manifest.permission.CAMERA) }) { Text("Allow camera") } }

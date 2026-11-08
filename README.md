@@ -38,6 +38,23 @@ to install apps: allow it, come back, and it goes on). Your carts and settings s
 pipeline starts at 00:40 CET and the new APK (with that day's prices) is out at about
 02:30 CET, well before flea markets (6:00) and shows (10:00). Install it before you leave.
 
+## Licence
+
+The app can ask for a one-off licence (bought in the shop; the license service runs next to
+the shop: `apps/license` in the pokeshop repository, see its `docs/license-service.md`). It
+is **off** until the service runs: switch it on with `cardscanner.licenceRequired=true` in
+`android/gradle.properties` (the service's address is `cardscanner.licenceUrl`).
+
+- **First start:** scan the QR code from the licence e-mail, or type the key
+  (`CS-XXXXX-XXXXX-XXXXX-XXXXX`; case, spaces and dashes don't matter). Activating needs
+  the internet once.
+- **Offline is fine:** the app asks the service at every start and at most once an hour after
+  that; without a connection it simply goes on.
+- **One device at a time:** ⚙ → **Licence** → **Show the licence QR code** (Switch to new
+  device); scan it with the new device. The old one stops the next time it is online, says
+  where the licence went, and forgets the key: it comes back only by scanning a QR code again.
+- **Revoked** (refund): the app stops at its next check.
+
 ## Restore points
 
 Go to **Actions → Restore point → Run workflow**. Leave the name empty to name it after

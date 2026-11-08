@@ -32,6 +32,12 @@ android {
         // Only the test run gets them, never the app.
         System.getenv("POKESHOP_STAGING_KEY_ID")?.takeIf { it.isNotBlank() }?.let { testInstrumentationRunnerArguments["shopKeyId"] = it }
         System.getenv("POKESHOP_STAGING_SECRET")?.takeIf { it.isNotBlank() }?.let { testInstrumentationRunnerArguments["shopSecret"] = it }
+        // Licence: the app asks for one only when this is on (gradle.properties), i.e. once the
+        // license service runs. The service's address can be changed the same way.
+        val licenceRequired = providers.gradleProperty("cardscanner.licenceRequired").orNull == "true"
+        val licenceUrl = providers.gradleProperty("cardscanner.licenceUrl").orNull ?: "https://license.pokemonkarten.at"
+        buildConfigField("boolean", "LICENSE_REQUIRED", licenceRequired.toString())
+        buildConfigField("String", "LICENSE_URL", "\"$licenceUrl\"")
     }
 
     // one APK per processor type: arm64 for phones (the download), x86_64 for the CI emulator
@@ -69,6 +75,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     androidResources {
         // model and index hardly compress and are copied out once: store them as they are
@@ -115,6 +122,8 @@ dependencies {
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
+    // QR codes for the licence: reading (activation) and showing (switch to new device)
+    implementation("com.google.zxing:core:3.5.3")
 
     androidTestImplementation(composeBom)
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")

@@ -19,7 +19,9 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.services.storage.TestStorage
+import io.github.pmaxai.cardscanner.license.LicenceStatus
 import io.github.pmaxai.cardscanner.ui.Gold
+import io.github.pmaxai.cardscanner.ui.LicenceState
 import io.github.pmaxai.cardscanner.ui.Ink
 import io.github.pmaxai.cardscanner.ui.Panel
 import io.github.pmaxai.cardscanner.ui.ScannerViewModel
@@ -44,7 +46,9 @@ class SettingsScreenshotTest {
         }
         val state = UiState(loading = false, packInfo = "21094 card images · data 2026-11-06 · PSA prices",
             hasPsaData = true, hasCategories = true, pricesDate = "2026-11-05T22:54:32Z",
-            settings = Settings(threshold = 5.0, trading = true))
+            settings = Settings(threshold = 5.0, trading = true),
+            licence = LicenceState(required = true, status = LicenceStatus.ACTIVE, key = "CS-7K2QX-9MZ4D-01ABC-1XYZW",
+                since = 1_762_630_800_000L, lastCheck = 1_762_634_400_000L))
         var page by mutableStateOf(SettingsPage.MODE)
         compose.setContent {
             MaterialTheme(colorScheme = darkColorScheme(primary = Gold, onPrimary = Ink, background = Ink, surface = Panel)) {
