@@ -132,6 +132,16 @@ class RecordingEndToEndTest {
             // the red dot and the time: on the screen, in the black border (they must not be in the video, see below)
             val dev = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
             val timer = dev.wait(Until.findObject(By.pkg(ctx.packageName).text(Pattern.compile("\\d+:\\d\\d(:\\d\\d)?"))), 5_000)
+            if (timer == null) {
+                savePicture("recording-3-screen-while-recording.png",
+                    runCatching { InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot() }.getOrNull())
+                val texts = runCatching { dev.findObjects(By.text(Pattern.compile(".+"))).map { "${it.applicationPackage}:'${it.text}'@${it.visibleBounds}" } }
+                    .getOrDefault(emptyList())
+                val dm = ctx.resources.displayMetrics
+                Log.i("RecordingE2E", "no timer found; density ${dm.density}, ${dm.widthPixels}x${dm.heightPixels}, " +
+                    "phase ${vm.state.value.recording.phase}, fit ${vm.state.value.recording.settings.fit169}, timer ${vm.state.value.recording.settings.showTimer}; " +
+                    "windows ${InstrumentationRegistry.getInstrumentation().uiAutomation.windows.map { "${it.type}/${it.title}" }}; texts $texts")
+            }
             assertTrue("the recording's time is on the screen", timer != null)
             val timerBounds = timer!!.visibleBounds
             val screen = android.graphics.Point().also { p ->
