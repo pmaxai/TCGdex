@@ -62,7 +62,7 @@ class EventLogTest {
 
     private fun item(s: Shown) = SessionItem(s.serial, 1_762_697_000_000L, s)
 
-    private fun log() = EventLog("20261109T140322Z-7f3a", File(dir, "events.jsonl"), threshold = 5.0,
+    private fun log(name: String = "events.jsonl") = EventLog("20261109T140322Z-7f3a", File(dir, name), threshold = 5.0,
         nanos = { nowNanos }, wallMs = { 1_794_233_002_418L }, writer = direct)
 
     private fun header() = JSONObject()
@@ -217,7 +217,7 @@ class EventLogTest {
         assertEquals(cards.size, o.getJSONObject("summary").getInt("cards"))
 
         // a new pack during the recording: entries go on, never reused
-        val log2 = log()
+        val log2 = log("second.jsonl")
         at(0)
         val b = shown(bulk)
         log2.start(nowNanos, listOf(item(b)), b)
