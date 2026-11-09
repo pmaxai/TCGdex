@@ -281,6 +281,52 @@ downgrades), or restore the code from the tag.
     printings) plus the pack total. On a German phone it uses `;` and decimal commas,
     so Excel opens it directly.
   - optional title (e.g. your channel name) at the top; no vibration while recording
+  - **Recording** (**● REC** next to +1 and ⚙, or ⚙ → *Start recording*): the app records
+    its own screen and uploads it with a log of every card, for the video pipeline. Until
+    the upload is set up, ● REC opens ⚙ → Recording & upload. Before it starts: **Continue
+    pack** or **New pack**, the microphone (off by default; the pipeline can add a
+    voiceover) and the space it needs (a warning below an hour). Android then asks to share
+    the screen; on Android 14 and later choose *A single app* → Card Scanner.
+    While recording, the button shows a red dot and the time (tap it to stop; the
+    notification has Stop too) and the screen orientation is locked. There is no length
+    limit. The recording stops by itself when the app goes into the background or the
+    phone has less than 300 MB left. If the app crashes, at most the last 10 seconds are
+    lost: the next start repairs the file and marks the recording *recovered*.
+    - **Files** (one folder per recording): `video.mp4` (the screen, H.264, 30 fps,
+      1080p or 720p, 6/8/12 Mbit/s, a keyframe every second; sound only with the mic on),
+      `camera.mp4` (the same camera picture without anything drawn on it; phones that can't
+      record the camera next to scanning record only the screen, and the log says why),
+      `events.json` (every card shown, changed, added, removed, with time stamps to the
+      frame, card data, prices, hit and where the card is in the camera picture) and
+      `pack.csv` (the same as *Save pack*).
+    - **Fit to 16:9** (⚙ → Recording & upload): YouTube mode is laid out in a 16:9 area
+      (9:16 upright) with black around it, so the video needs no cropping.
+    - **Upload** (⚙ → Recording & upload): an S3 bucket. Provider **AWS** (region, default
+      eu-central-1), **Exoscale** (zone, e.g. `at-vie-1`; the endpoint
+      `https://sos-<zone>.exo.io` is filled in) or **Other** (any S3-compatible endpoint,
+      path-style addressing). Bucket, folder prefix, access key ID and secret. The secret is
+      stored encrypted with a key of the Android Keystore and is never shown again, never in
+      the APK, a log or an uploaded file. *Save & test* writes a small test file and says
+      what is wrong (unknown key, wrong secret, no permission for the bucket or prefix,
+      bucket not found, phone clock off, host not reachable). The key needs
+      `s3:PutObject`, `s3:AbortMultipartUpload` and `s3:ListMultipartUploadParts` on the
+      prefix (and `s3:DeleteObject` to remove the test file).
+    - After Stop, the recording goes up by itself (switch off *Upload automatically* to
+      start it from the list), only over Wi-Fi unless you switch that off, into
+      `<prefix>recordings/<id>/` (id: UTC start time + 4 characters, e.g.
+      `20261109T140322Z-7f3a`): `events.json`, `pack.csv`, `video.mp4`, `camera.mp4` and
+      last `_complete.json` (sizes and SHA-256 of each file), so the pipeline only takes
+      complete folders. Big files go in 16 MB parts, three at a time; a dropped connection
+      or a closed app resumes where it stopped. Temporary errors are retried (5 s up to every
+      10 minutes); a wrong key or missing permission stops it as *Failed* with the reason.
+      With *Delete after upload* (on by default) the two videos are removed from the phone
+      once everything is up.
+    - **⚙ → Recordings…**: every recording with length, cards, hits, size and status
+      (waiting for Wi-Fi, uploading 62 %, uploaded, failed: reason). **Retry**, **Upload
+      now** (also over mobile data, this one time), **Share** and **Delete** (stops its
+      upload; files already in the bucket stay). If the phone's battery saver may stop
+      uploads (Xiaomi HyperOS/MIUI, Samsung), it shows a hint once with buttons to the
+      battery settings (and Xiaomi's Autostart): allow Card Scanner to run unrestricted.
 - **Light** turns on the torch. **Photo** recognises a picture from the gallery.
   **Details** (in ⚙) shows what the scanner saw: the straightened card, the top 5
   matches with scores, the text it read, and timings.

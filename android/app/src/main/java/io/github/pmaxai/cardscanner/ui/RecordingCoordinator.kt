@@ -224,7 +224,15 @@ class RecordingCoordinator(
         }
         val pm = app.getSystemService(PowerManager::class.java)
         val optimized = pm != null && !pm.isIgnoringBatteryOptimizations(app.packageName)
-        publish { it.copy(recordings = list, batteryHint = optimized && list.any { r -> r.status == RecStatus.QUEUED || r.status == RecStatus.FAILED }) }
+        val stopped = store.list().any { it.status != RecStatus.UPLOADED && it.meta().optBoolean("stopped_by_system") }
+        val seen = app.getSharedPreferences("recording", 0).getBoolean(HINT_SEEN, false)
+        publish { it.copy(recordings = list, batteryHint = !seen && list.isNotEmpty() && (optimized || stopped)) }
+    }
+
+    /** The battery-saver hint is shown once: "Got it" hides it for good. */
+    fun batteryHintSeen() {
+        app.getSharedPreferences("recording", 0).edit().putBoolean(HINT_SEEN, true).apply()
+        publish { it.copy(batteryHint = false) }
     }
 
     fun retry(id: String) {
@@ -302,6 +310,7 @@ class RecordingCoordinator(
 
     companion object {
         private const val TAG = "Recording"
+        private const val HINT_SEEN = "battery_hint_seen"
         /** the reveal's animation lengths (YouTube mode), for the pipeline */
         const val COUNT_UP_MS = 900
         const val HIT_BURST_MS = 1600

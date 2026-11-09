@@ -184,13 +184,16 @@ fun RecordingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) 
                         Text("The phone's battery saver may stop uploads in the background. Allow Card Scanner to run unrestricted:",
                             color = Color.White, fontSize = 13.sp)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton({ runCatching { ctx.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } }) {
-                                Text("Battery settings")
-                            }
+                            TextButton({
+                                runCatching { ctx.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                            }) { Text("Battery settings") }
                             if (Build.MANUFACTURER.equals("xiaomi", true) || Build.MANUFACTURER.equals("redmi", true) || Build.MANUFACTURER.equals("poco", true)) {
-                                TextButton({ runCatching { ctx.startActivity(Intent().setComponent(ComponentName("com.miui.securitycenter",
-                                    "com.miui.permcenter.autostart.AutoStartManagementActivity"))) } }) { Text("Autostart") }
+                                TextButton({
+                                    runCatching { ctx.startActivity(Intent().setComponent(ComponentName("com.miui.securitycenter",
+                                        "com.miui.permcenter.autostart.AutoStartManagementActivity"))) }
+                                }) { Text("Autostart") }
                             }
+                            TextButton({ vm.rec.batteryHintSeen() }) { Text("Got it") }
                         }
                     }
                 }

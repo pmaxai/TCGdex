@@ -77,7 +77,7 @@ class UploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             rec.updateMeta { it.put("status", RecStatus.UPLOADING.name) }
         }
         // stopped by the system (network gone, battery saver): WorkManager runs it again later
-        rec.updateMeta { it.put("status", RecStatus.QUEUED.name) }
+        rec.updateMeta { it.put("status", RecStatus.QUEUED.name).put("stopped_by_system", true) }
         return Result.retry()
     }
 

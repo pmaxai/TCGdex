@@ -69,7 +69,7 @@ object CameraRecording {
         runCatching {
             vc.resolutionInfo?.let { info ->
                 val r = info.resolution
-                size = if (info.rotationDegrees % 180 == 0) r.width to r.height else r.height to r.width
+                size = if (info.rotationDegrees % 180 == 0) Pair(r.width, r.height) else Pair(r.height, r.width)
             }
             val done = CountDownLatch(1)
             finalized = done

@@ -22,6 +22,21 @@ object Screenshots {
         compose.waitUntil(15_000) { runCatching { compose.onAllNodes(isRoot()).fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false) }
     }.isSuccess
 
+    /** The whole screen with its dialogs (they are windows of their own, which [save] can't see). */
+    fun saveScreen(compose: ComposeContentTestRule, name: String): Boolean {
+        repeat(5) {
+            compose.waitForIdle()
+            Thread.sleep(400)
+            val bmp = runCatching { androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot() }.getOrNull()
+            if (bmp != null) {
+                TestStorage().openOutputFile(name).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                return true
+            }
+        }
+        Log.w(TAG, "$name skipped: the screen couldn't be captured")
+        return false
+    }
+
     /** Saves the screen as [name]; true when it worked. */
     fun save(compose: ComposeContentTestRule, name: String): Boolean {
         repeat(10) { attempt ->
