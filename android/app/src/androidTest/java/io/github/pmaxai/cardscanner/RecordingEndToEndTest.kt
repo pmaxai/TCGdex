@@ -62,6 +62,7 @@ class RecordingEndToEndTest {
     private fun answerConsent(done: () -> Boolean, ms: Long) {
         val dev = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         val end = System.currentTimeMillis() + ms
+        var round = 0
         while (!done() && System.currentTimeMillis() < end) {
             val start = dev.findObject(By.text(Pattern.compile("(?i)start( now)?")).clickable(true))
                 ?: dev.findObject(By.text(Pattern.compile("(?i)start( now)?")))
@@ -72,8 +73,20 @@ class RecordingEndToEndTest {
                 whole != null -> { Log.i("RecordingE2E", "consent: Entire screen"); whole.click() }
                 single != null -> { Log.i("RecordingE2E", "consent: open the choice"); single.click() }
             }
+            if (++round % 6 == 3) {
+                val texts = runCatching { dev.findObjects(By.text(Pattern.compile(".+"))).map { it.text } }.getOrDefault(emptyList())
+                Log.i("RecordingE2E", "screen: ${dev.currentPackageName}: $texts")
+                if (round == 3) runCatching {
+                    InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?.let { b ->
+                        androidx.test.services.storage.TestStorage().openOutputFile("recording-e2e-consent.png")
+                            .use { b.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                    }
+                }
+            }
             Thread.sleep(700)
         }
+        if (!done()) shell("logcat -d -t 400").lines().filter { it.contains("rojection", true) || it.contains("consent", true) }
+            .takeLast(40).forEach { Log.i("RecordingE2E", "log: $it") }
     }
 
     @Test
@@ -95,6 +108,7 @@ class RecordingEndToEndTest {
             }
             answerConsent({ result.isDone }, 30_000)
             val res = runCatching { result.get(5, TimeUnit.SECONDS) }.getOrNull()
+            Log.i("RecordingE2E", "consent result: ${res?.resultCode} data=${res?.data != null}")
             if (res == null) shell("input keyevent KEYCODE_BACK") // the dialog couldn't be answered: leave it, skip
             assumeTrue("screen capture not granted on this device", res != null && res.resultCode == Activity.RESULT_OK && res.data != null)
             scenario.onActivity { vm.rec.start(res!!.resultCode, res.data!!, landscape = false) }
