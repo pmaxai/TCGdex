@@ -62,8 +62,8 @@ class EventLogTest {
 
     private fun item(s: Shown) = SessionItem(s.serial, 1_762_697_000_000L, s)
 
-    private fun log(name: String = "events.jsonl") = EventLog("20261109T140322Z-7f3a", File(dir, name), threshold = 5.0,
-        nanos = { nowNanos }, wallMs = { 1_794_233_002_418L }, writer = direct)
+    private fun log(name: String = "events.jsonl", revealTiming: Boolean = false) = EventLog("20261109T140322Z-7f3a", File(dir, name),
+        threshold = 5.0, nanos = { nowNanos }, wallMs = { 1_794_233_002_418L }, writer = direct, revealTiming = revealTiming)
 
     private fun header() = JSONObject()
         .put("app", JSONObject().put("version", "1.2.31").put("data_pack", "2026-11-08").put("prices_date", "2026-11-08T22:50:00Z"))
@@ -125,6 +125,43 @@ class EventLogTest {
         // a German phone writes no decimal commas, and every key is there (null, never left out)
         assertFalse(Regex("\\d,\\d").containsMatchIn(text.replace(Regex("\"[^\"]*\""), "\"\"")))
         assertTrue(text.contains("\"psa\": null"))
+    }
+
+    /** FIX-5: a reveal's t_ms is when its first frame is drawn; the log stays in order. */
+    @Test
+    fun revealsTakeTheirTimeFromTheFirstDrawnFrame() {
+        val log = log(revealTiming = true)
+        fun nanosAt(ms: Long) = 1_000_000_000L + ms * 1_000_000
+        at(0)
+        log.start(nowNanos, emptyList(), null)
+        // drawn 40 ms after the state changed
+        val mag = shown(magnetonDe)
+        at(1_000); log.observe(Reason.SHOWN, "camera", mag, listOf(item(mag)), null)
+        log.revealDrawn(mag.serial, nanosAt(1_040))
+        // drawn before the view model reported it (the screen was quicker)
+        val pika = shown(pikachu)
+        log.revealDrawn(pika.serial, nanosAt(1_990))
+        at(2_000); log.observe(Reason.SHOWN, "camera", pika, listOf(item(mag), item(pika)), null)
+        // never drawn, and changed before: written with the state's time, ahead of the change
+        val cat = shown(bulk)
+        at(3_000); log.observe(Reason.SHOWN, "camera", cat, listOf(item(mag), item(pika), item(cat)), null)
+        val catHolo = cat.copy(printing = Printing.Kind.HOLO)
+        at(3_100); log.observe(Reason.PRINTING, null, catHolo, listOf(item(mag), item(pika), item(catHolo)), null)
+        // never drawn, nothing after it: written by the timer after a second, with the state's time
+        val cat2 = shown(bulk)
+        at(4_000); log.observe(Reason.SHOWN, "camera", cat2, listOf(item(mag), item(pika), item(catHolo), item(cat2)), null)
+        Thread.sleep(1_400)
+        val lines = File(dir, "events.jsonl").readLines().map { JSONObject(it) }
+        assertEquals("the waiting reveal was written by the timer", 4_000, lines.last().getLong("t_ms"))
+        at(5_000); log.stop("user")
+        val o = JSONObject(log.finish(header(), listOf(item(mag), item(pika), item(catHolo), item(cat2)), "complete"))
+        val ev = o.getJSONArray("events").objects()
+        assertEquals(listOf("recording_started", "card_shown", "card_shown", "card_shown", "card_updated", "card_shown", "recording_stopped"),
+            ev.map { it.getString("type") })
+        assertEquals(listOf(0L, 1_040L, 1_990L, 3_000L, 3_100L, 4_000L, 5_000L), ev.map { it.getLong("t_ms") })
+        assertEquals((1..7).toList(), ev.map { it.getInt("seq") })
+        assertEquals(1_040L, o.getJSONArray("cards").getJSONObject(0).getLong("first_t_ms"))
+        assertEquals(listOf("seq", "t_ms", "at", "type", "entry", "in_pack"), ev[1].keys().asSequence().take(6).toList())
     }
 
     @Test

@@ -72,7 +72,7 @@ class RecordingCoordinator(
 ) {
     private val prefs = RecordingPrefs(app)
     val store = RecordingStore(app)
-    /** the 16:9 (or 9:16) area YouTube mode lays itself out in, in window pixels (null: the whole screen) */
+    /** the Fit to 16:9 area on the screen (pixels) while recording; null: the whole screen */
     @Volatile var contentRect: Rect? = null
 
     init {
@@ -106,7 +106,8 @@ class RecordingCoordinator(
             .put("ui", JSONObject().put("count_up_ms", COUNT_UP_MS).put("hit_burst_ms", HIT_BURST_MS))
         dir.header.writeText(header.toString(2))
         dir.updateMeta { it.put("status", RecStatus.RECORDING.name).put("created", System.currentTimeMillis()) }
-        val log = EventLog(dir.id, dir.eventsJsonl, st.settings.threshold)
+        contentRect = null                    // the layout sets it once the 16:9 area is in place
+        val log = EventLog(dir.id, dir.eventsJsonl, st.settings.threshold, revealTiming = true)
         RecordingController.onFirstFrame = { nanos ->
             val now = state()
             log.start(nanos, now.session, now.shown)
@@ -119,6 +120,9 @@ class RecordingCoordinator(
     }
 
     fun stop(reason: String = "user") = RecordingController.stop(app, reason)
+
+    /** YouTube mode drew the first frame of the reveal of the card with [serial]: its event takes this time. */
+    fun revealDrawn(serial: Int) { RecordingController.log?.revealDrawn(serial, System.nanoTime()) }
 
     /** The service has ended the capture: events.json, pack.csv, status, upload. */
     private suspend fun finish(f: Finished) {
@@ -167,7 +171,8 @@ class RecordingCoordinator(
 
     /** The 16:9 area in video pixels (the whole frame when Fit to 16:9 is off). */
     private fun contentRectJson(f: Finished): JSONObject {
-        val r = contentRect
+        val r = contentRect.takeIf { prefs.load().fit169 }
+        contentRect = null
         val sx = f.width.toDouble() / f.screenWidth.coerceAtLeast(1)
         val sy = f.height.toDouble() / f.screenHeight.coerceAtLeast(1)
         return if (r == null || f.screenWidth == 0) JSONObject().put("x", 0).put("y", 0).put("width", f.width).put("height", f.height)

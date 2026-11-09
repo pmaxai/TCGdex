@@ -295,15 +295,19 @@ downgrades), or restore the code from the tag.
     limit. The recording stops by itself when the app goes into the background or the
     phone has less than 300 MB left. If the app crashes, at most the last 10 seconds are
     lost: the next start repairs the file and marks the recording *recovered*.
-    - **Files** (one folder per recording): `video.mp4` (the screen, H.264, 30 fps,
-      1080p or 720p, 6/8/12 Mbit/s, a keyframe every second; sound only with the mic on),
-      `camera.mp4` (the same camera picture without anything drawn on it; phones that can't
+    - **Files** (one folder per recording): `video.mp4` (the screen, H.264, a constant
+      30 fps whatever the display's refresh rate, 1080p or 720p, 6/8/12 Mbit/s, a keyframe
+      every second; sound only with the mic on), `camera.mp4` (the camera picture without
+      anything drawn on it, 4:3 like the scanner's, so it sees as much as the scanner does:
+      1440×1080 or the largest size the phone records next to scanning; phones that can't
       record the camera next to scanning record only the screen, and the log says why),
       `events.json` (every card shown, changed, added, removed, with time stamps to the
-      frame, card data, prices, hit and where the card is in the camera picture) and
-      `pack.csv` (the same as *Save pack*).
-    - **Fit to 16:9** (⚙ → Recording & upload): YouTube mode is laid out in a 16:9 area
-      (9:16 upright) with black around it, so the video needs no cropping.
+      frame – a reveal's time is when its first frame is drawn – card data, prices, hit and
+      the card's four outer corners in the camera picture, also when the scanner found only
+      the artwork box) and `pack.csv` (the same as *Save pack*).
+    - **Fit to 16:9** (⚙ → Recording & upload, on by default): YouTube mode is laid out in
+      a 16:9 area (9:16 upright) with black around it; the log says where that area is
+      (`content_rect`), so the pipeline crops it exactly.
     - **Upload** (⚙ → Recording & upload): an S3 bucket. Provider **AWS** (region, default
       eu-central-1), **Exoscale** (zone, e.g. `at-vie-1`; the endpoint
       `https://sos-<zone>.exo.io` is filled in) or **Other** (any S3-compatible endpoint,

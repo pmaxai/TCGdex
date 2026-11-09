@@ -4,6 +4,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.util.Log
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.pmaxai.cardscanner.recording.Encoders
@@ -132,6 +133,36 @@ class RecorderTest {
         assertTrue(kept > 0)
         val ct = read(crash).getValue("video/avc")
         assertTrue("at most about a second lost: ${ct.times.size} frames", ct.times.size >= 30)
+    }
+
+    /** FIX-4: the screen refreshes at 90 Hz, then stands still; the video is a constant 30 fps all along. */
+    @Test
+    fun aConstantThirtyFramesASecond() {
+        val file = File(dir, "cfr.mp4")
+        val enc = Encoders(file, 640, 368, 2_000_000, null).prepare()
+        assertTrue("the frame pacer runs on this phone", enc.paced)
+        enc.start()
+        val paint = Paint().apply { color = Color.YELLOW }
+        val begin = System.nanoTime()
+        var frame = 0
+        while (System.nanoTime() - begin < 2_000_000_000L) {          // 2 s at about 90 Hz
+            val c = enc.inputSurface.lockHardwareCanvas()
+            c.drawColor(Color.rgb(20, 20, 30))
+            c.drawRect(frame * 3f % 600, 100f, frame * 3f % 600 + 40, 140f, paint)
+            enc.inputSurface.unlockCanvasAndPost(c)
+            frame++
+            Thread.sleep(11)
+        }
+        Thread.sleep(1_000)                                              // 1 s of a still screen
+        enc.stop()
+        val v = read(file).getValue("video/avc")
+        val gaps = v.times.zipWithNext { a, b -> b - a }
+        val fps = (v.times.size - 1) * 1_000_000.0 / (v.times.last() - v.times.first())
+        Log.i("RecorderTest", "posted $frame frames; video ${v.times.size} frames, %.2f fps, gaps ${gaps.groupingBy { it / 1000 }.eachCount()}".format(fps))
+        assertTrue("%.2f fps".format(fps), fps in 29.5..30.5)
+        assertTrue("2.8–3.3 s at 30 fps: ${v.times.size} frames", v.times.size in 84..100)
+        val even = gaps.count { abs(it - 33_333) <= 1_000 }
+        assertTrue("frames 1/30 s apart: $even of ${gaps.size}", even >= gaps.size * 0.95)
     }
 
     @Test

@@ -13,6 +13,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
+import io.github.pmaxai.cardscanner.license.Activated
+import io.github.pmaxai.cardscanner.license.LicenceStore
 import io.github.pmaxai.cardscanner.recording.RecordingController
 import io.github.pmaxai.cardscanner.recording.RecordingPrefs
 import io.github.pmaxai.cardscanner.recording.RecordingSettings
@@ -21,6 +23,7 @@ import io.github.pmaxai.cardscanner.recording.RecordingUploader
 import io.github.pmaxai.cardscanner.recording.S3Client
 import io.github.pmaxai.cardscanner.recording.S3Config
 import io.github.pmaxai.cardscanner.recording.UploadState
+import io.github.pmaxai.cardscanner.ui.AppMode
 import io.github.pmaxai.cardscanner.ui.ScannerViewModel
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
@@ -95,12 +98,18 @@ class RecordingEndToEndTest {
         Log.i("RecordingE2E", "appops: " + shell("appops set $pkg PROJECT_MEDIA allow") + shell("appops get $pkg PROJECT_MEDIA").trim())
         shell("pm grant $pkg android.permission.POST_NOTIFICATIONS")
         shell("pm grant $pkg android.permission.CAMERA") // else the app's camera question covers the screen
-        RecordingPrefs(ctx).save(RecordingSettings(recordCamera = false, uploadAuto = false, mic = false, fit169 = false))
+        RecordingPrefs(ctx).save(RecordingSettings(recordCamera = false, uploadAuto = false, mic = false, fit169 = true))
+        // a licence on this phone (the service doesn't know its token; offline answers keep it), so YouTube mode is on screen
+        LicenceStore(ctx).activated("CS-E2ETE-STE2E-TESTE-2ETES", Activated("e2e", "e2e-token", System.currentTimeMillis()))
         val scenario = ActivityScenario.launch(MainActivity::class.java)
+        var modeBefore: io.github.pmaxai.cardscanner.ui.Settings? = null
+        lateinit var vm: ScannerViewModel
         try {
-            lateinit var vm: ScannerViewModel
             scenario.onActivity { vm = ViewModelProvider(it)[ScannerViewModel::class.java] }
             waitUntil(180_000, "card data loaded") { !vm.state.value.loading }
+            modeBefore = vm.state.value.settings
+            scenario.onActivity { vm.updateSettings { it.withMode(AppMode.YOUTUBE) } }
+            waitUntil(10_000, "YouTube mode") { vm.state.value.settings.youtube && !vm.state.value.licence.locked }
 
             val result = CompletableFuture<ActivityResult>()
             scenario.onActivity { a ->
@@ -146,12 +155,31 @@ class RecordingEndToEndTest {
             assertTrue(video.getLong("duration_ms") > 3_000)
             assertEquals("none", video.getString("audio"))
             assertEquals("off", o.getJSONObject("camera").getString("error"))
+            // FIX-1: Fit to 16:9 – the upright screen was laid out in a 9:16 area, and that area is in the log
+            val cr = video.getJSONObject("content_rect")
+            Log.i("RecordingE2E", "video ${video.getInt("width")}x${video.getInt("height")}, content_rect $cr")
+            assertEquals("content_rect is 9:16: $cr", 9.0 / 16, cr.getDouble("width") / cr.getDouble("height"), 0.02)
+            assertTrue("content_rect inside the video: $cr", cr.getInt("x") >= 0 && cr.getInt("y") >= 0 &&
+                cr.getInt("x") + cr.getInt("width") <= video.getInt("width") + 1 && cr.getInt("y") + cr.getInt("height") <= video.getInt("height") + 1)
+            // FIX-5: the reveals' times come from their first drawn frame
+            val reveals = o.getJSONArray("events").let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
+                .filter { it.getString("type") == "card_shown" || it.getString("type") == "card_added_again" }
+            Log.i("RecordingE2E", "reveals at " + reveals.joinToString { "${it.getString("type")}@${it.getLong("t_ms")}" })
 
-            // the screen file plays
+            // FIX-4: the screen file plays, at a constant 30 fps
             val ex = MediaExtractor()
             ex.setDataSource(dir.video.path)
             assertTrue(ex.trackCount >= 1)
+            ex.selectTrack(0)
+            val times = ArrayList<Long>()
+            do { times += ex.sampleTime } while (ex.advance())
             ex.release()
+            val gaps = times.zipWithNext { a, b -> b - a }
+            val fps = (times.size - 1) * 1_000_000.0 / (times.last() - times.first())
+            val even = gaps.count { kotlin.math.abs(it - 33_333) <= 1_000 }
+            Log.i("RecordingE2E", "video: ${times.size} frames, %.2f fps, %d of %d gaps 1/30 s".format(fps, even, gaps.size))
+            assertTrue("%.2f fps".format(fps), fps in 28.0..30.5)
+            assertTrue("frames 1/30 s apart: $even of ${gaps.size}", even >= gaps.size * 0.9)
 
             // and goes up into a real S3 (the CI's MinIO), marker last
             val endpoint = InstrumentationRegistry.getArguments().getString("s3Endpoint").orEmpty()
@@ -165,7 +193,9 @@ class RecordingEndToEndTest {
             }
             dir.dir.deleteRecursively()
         } finally {
+            modeBefore?.let { m -> runCatching { scenario.onActivity { vm.updateSettings { it.copy(youtube = m.youtube, trading = m.trading, webshop = m.webshop) } } } }
             scenario.close()
+            ctx.getSharedPreferences("licence", 0).edit().clear().commit()
             shell("appops reset $pkg")
         }
     }

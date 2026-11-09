@@ -54,8 +54,10 @@ class MicSource(override val sampleRate: Int = 48_000) : PcmSource {
 
 /**
  * The recording's encoders: H.264 from a Surface (the screen, via MediaProjection's virtual
- * display) and AAC from a [PcmSource], into a [FragmentedMp4Writer]. 30 fps (a still screen
- * repeats its last frame), a keyframe every second, no B-frames.
+ * display) and AAC from a [PcmSource], into a [FragmentedMp4Writer]. A constant 30 fps through
+ * a [FramePacer] (frames above it dropped, a still screen repeats its last frame), a keyframe
+ * every second, no B-frames. Where GL can't be set up, the screen goes straight into the
+ * encoder (then the frame rate follows the screen, at most 30 where the encoder can limit it).
  */
 class Encoders(
     val file: File,
@@ -68,30 +70,52 @@ class Encoders(
     private val onFirstFrame: (Long) -> Unit = {},
 ) {
     val writer = FragmentedMp4Writer(file, audioSource != null)
-    private val video = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+    private var video = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
     private var audio: MediaCodec? = null
+    /** where the screen is drawn (the pacer's surface, or the encoder's own) */
     lateinit var inputSurface: Surface
         private set
+    private var codecSurface: Surface? = null
+    private var pacer: FramePacer? = null
+    /** true: frames go through the [FramePacer] (constant frame rate) */
+    val paced: Boolean get() = pacer != null
     private var videoThread: Thread? = null
     private var audioThread: Thread? = null
     @Volatile private var stopping = false
     @Volatile var failure: Throwable? = null
         private set
 
-    fun prepare(): Encoders {
-        val f = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
-            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
-            setInteger(MediaFormat.KEY_FRAME_RATE, fps)
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
-            setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 1_000_000L / fps)
-            if (Build.VERSION.SDK_INT >= 29) {
-                setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, fps.toFloat())
-                setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
-            }
+    private fun videoFormat(paced: Boolean) = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
+        setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+        setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
+        setInteger(MediaFormat.KEY_FRAME_RATE, fps)
+        setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+        // the pacer repeats and drops frames itself; the encoder's own repeat would add frames between its ticks
+        if (!paced) setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 1_000_000L / fps)
+        if (Build.VERSION.SDK_INT >= 29) {
+            if (!paced) setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, fps.toFloat())
+            setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
         }
-        video.configure(f, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        inputSurface = video.createInputSurface()
+    }
+
+    fun prepare(): Encoders {
+        // paced: a constant frame rate; if GL can't be set up on this phone, the screen goes straight in
+        val paced = runCatching {
+            video.configure(videoFormat(true), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            val cs = video.createInputSurface()
+            codecSurface = cs
+            FramePacer(cs, width, height, fps) { t -> failure = t }.start()
+        }.onFailure { Log.w(TAG, "no frame pacer, the screen goes straight into the encoder", it) }.getOrNull()
+        if (paced != null) {
+            pacer = paced
+            inputSurface = paced.surface
+        } else {
+            runCatching { codecSurface?.release() }
+            runCatching { video.release() }
+            video = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            video.configure(videoFormat(false), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            inputSurface = video.createInputSurface().also { codecSurface = it }
+        }
         audioSource?.let { src ->
             val af = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, src.sampleRate, 1).apply {
                 setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
@@ -116,12 +140,13 @@ class Encoders(
     /** Ends both streams and the file; returns the video's length in ms. */
     fun stop(): Long {
         stopping = true
+        pacer?.stop()                      // its last frame is in before the end of the stream
         runCatching { video.signalEndOfInputStream() }
         videoThread?.join(5_000)
         audioThread?.join(5_000)
         runCatching { video.stop() }; video.release()
         audio?.let { runCatching { it.stop() }; it.release() }
-        runCatching { inputSurface.release() }
+        runCatching { codecSurface?.release() }
         return writer.finish()
     }
 

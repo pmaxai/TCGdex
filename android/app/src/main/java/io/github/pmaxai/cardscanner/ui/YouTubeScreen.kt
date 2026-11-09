@@ -54,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
@@ -75,6 +76,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.layout.Layout
@@ -117,13 +119,21 @@ fun YouTubeScreen(state: UiState, vm: ScannerViewModel) {
     }
     val rec: @Composable () -> Unit = { RecButton(state, vm, startRec) }
 
-    // while recording with Fit to 16:9: the screen in a centred 16:9 (upright 9:16) area, black around it
+    // while recording with Fit to 16:9: the screen in a centred 16:9 (upright 9:16) area, black around it;
+    // the area in screen pixels goes into the log (kept until the log is written after Stop)
     val fit = state.recording.recording && state.recording.settings.fit169
+    val view = LocalView.current
     Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
     Box(if (fit) Modifier.aspectRatio(if (landscape) 16f / 9f else 9f / 16f).background(Ink)
-            .onGloballyPositioned { c -> vm.rec.contentRect = c.boundsInWindow().let { b ->
-                android.graphics.Rect(b.left.toInt(), b.top.toInt(), b.right.toInt(), b.bottom.toInt()) } }
-        else Modifier.fillMaxSize().background(Ink).onGloballyPositioned { vm.rec.contentRect = null }) {
+            .onGloballyPositioned { c ->
+                if (!state.recording.recording) return@onGloballyPositioned
+                val win = IntArray(2).also { view.rootView.getLocationOnScreen(it) }
+                vm.rec.contentRect = c.boundsInWindow().let { b ->
+                    android.graphics.Rect(win[0] + b.left.roundToInt(), win[1] + b.top.roundToInt(),
+                        win[0] + b.right.roundToInt(), win[1] + b.bottom.roundToInt())
+                }
+            }
+        else Modifier.fillMaxSize().background(Ink)) {
         if (landscape) {
             Row(Modifier.fillMaxSize()) {
                 CameraArea(state, vm, torch, video = true, modifier = Modifier.weight(1f).fillMaxHeight())
@@ -176,12 +186,19 @@ private fun Reveal(state: UiState, vm: ScannerViewModel, modifier: Modifier) {
                 },
                 label = "reveal",
             ) { serial ->
+                // the recording's log takes the reveal's time from its first drawn frame
+                val reported = remember(serial) { booleanArrayOf(false) }
+                Box(Modifier.drawWithContent {
+                    drawContent()
+                    if (!reported[0]) { reported[0] = true; vm.rec.revealDrawn(serial) }
+                }) {
                 FitInside {
                     SwipeToRemove(serial, onRemove = vm::dismissShown) {
                         val s = state.shown ?: shown
                         RevealCard(s, state.settings, state.session.count { it.group == s.group }, vm::choosePrinting,
                             vm::stepVersion, vm::chooseVersion, vm::choose) { vm.openSearch(SearchMode.REPLACE) }
                     }
+                }
                 }
             }
         }

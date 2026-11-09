@@ -46,6 +46,23 @@ class RecordingFlowTest {
         // sideways: 4:3 frame, 16:9 file: full width, the middle 75 % of the height
         val top = CameraRecording.toCameraFile(0.3, 0.125, 4.0 / 3, 16.0 / 9)
         assertEquals(0.3, top[0], 1e-9); assertEquals(0.0, top[1], 1e-9)
+        // FIX-2: a 4:3 file sees what the 4:3 scanner sees – the same point
+        val same = CameraRecording.toCameraFile(0.07, 0.93, 3.0 / 4, 3.0 / 4)
+        assertEquals(0.07, same[0], 1e-9); assertEquals(0.93, same[1], 1e-9)
+    }
+
+    /** card_quad: clockwise on screen from the corner nearest the top left, whatever order the detector gave, within 0–1. */
+    @Test
+    fun cornersGoClockwiseFromTopLeft() {
+        val upsideDown = listOf(doubleArrayOf(0.7, 0.9), doubleArrayOf(0.3, 0.9), doubleArrayOf(0.3, 0.2), doubleArrayOf(0.7, 0.2))
+        val q = CameraRecording.clockwiseFromTopLeft(upsideDown)
+        assertEquals(listOf(listOf(0.3, 0.2), listOf(0.7, 0.2), listOf(0.7, 0.9), listOf(0.3, 0.9)), q.map { it.toList() })
+        val tilted = listOf(doubleArrayOf(0.5, 0.1), doubleArrayOf(0.2, 0.5), doubleArrayOf(0.5, 0.9), doubleArrayOf(0.8, 0.5))
+        assertEquals(listOf(listOf(0.5, 0.1), listOf(0.8, 0.5), listOf(0.5, 0.9), listOf(0.2, 0.5)),
+            CameraRecording.clockwiseFromTopLeft(tilted).map { it.toList() })
+        val partlyOut = CameraRecording.clockwiseFromTopLeft(listOf(doubleArrayOf(-0.1, 0.2), doubleArrayOf(0.6, 0.2),
+            doubleArrayOf(0.6, 1.2), doubleArrayOf(-0.1, 1.2)))
+        assertTrue(partlyOut.all { p -> p.all { it in 0.0..1.0 } })
     }
 
     @Test

@@ -560,6 +560,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val fill = r0.best?.let { rec.guideFill(r0, it, rgb.cols(), rgb.rows(), prior) }
         lastFill = fill
         val r = if (minFill > 0 && (fill ?: 0.0) * 100 < minFill) r0.withoutCard() else r0
+        keepOutline(r, rgb.cols(), rgb.rows())
         val conf = confidenceOf(r)
         synchronized(lock) {
             // the list after a double tap is open: the user is choosing, nothing is taken meanwhile
@@ -594,6 +595,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun takeByHand(rec: Recognizer, rgb: Mat, prior: Prior) {
         val r = rec.recognise(rgb, prior, withPreview = _state.value.settings.showDebug, manual = true)
+        keepOutline(r, rgb.cols(), rgb.rows())
         val best = r.best
         synchronized(lock) {
             if (best == null) {
@@ -1117,20 +1119,33 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     @Volatile private var lastFullW = 0
     @Volatile private var lastFullH = 0
 
+    /** The card's outer edge in an analysed frame (crop coordinates) and that frame's sizes. */
+    private class Outline(val quad: Array<org.opencv.core.Point>, val w: Int, val h: Int, val fullW: Int, val fullH: Int, val nanos: Long)
+    /** the last frame's card outline, taken before that frame's card is shown or changed */
+    @Volatile private var outline: Outline? = null
+
+    /** While recording the camera file: the card's outer edge in this frame (an artwork-box detection turned into the whole card). */
+    private fun keepOutline(r: Recognition, w: Int, h: Int) {
+        if (!CameraRecording.active) return
+        val hit = r.best?.takeIf { r.detected } ?: return
+        val q = runCatching { recognizer?.cardQuad(r, hit, margin = 0.0) }.getOrNull() ?: return
+        outline = Outline(q, w, h, lastFullW, lastFullH, System.nanoTime())
+    }
+
     /** The shown card's corners in camera.mp4's picture (0–1), clockwise from top left; null without a camera file or an outline. */
     private fun cameraQuad(): List<DoubleArray>? {
         if (!CameraRecording.active) return null
-        val st = _state.value
-        val q = st.liveQuad ?: return null
-        val (cw, ch) = st.liveFrame ?: return null
-        val fw = lastFullW; val fh = lastFullH
-        if (fw <= 0 || fh <= 0 || q.size < 8 || st.shown?.fromPhoto == true) return null
+        if (_state.value.shown?.fromPhoto == true) return null
+        val o = outline?.takeIf { System.nanoTime() - it.nanos < 1_000_000_000L } ?: return null
+        val fw = o.fullW; val fh = o.fullH
+        if (fw <= 0 || fh <= 0 || o.quad.size != 4) return null
         // the file plays upright like the scanner's frame (the screen is locked while recording)
         val (vw, vh) = CameraRecording.size ?: CameraRecording.nominal?.let { (l, sh) -> if (fw >= fh) Pair(l, sh) else Pair(sh, l) } ?: return null
-        val ox = (fw - cw) / 2.0; val oy = (fh - ch) / 2.0
-        return (0 until 4).map { i ->
-            CameraRecording.toCameraFile((ox + q[2 * i]) / fw, (oy + q[2 * i + 1]) / fh, fw.toDouble() / fh, vw.toDouble() / vh)
-        }
+        // the analysed frame is a centred crop of the camera's frame
+        val ox = (fw - o.w) / 2.0; val oy = (fh - o.h) / 2.0
+        return CameraRecording.clockwiseFromTopLeft(o.quad.map { p ->
+            CameraRecording.toCameraFile((ox + p.x) / fw, (oy + p.y) / fh, fw.toDouble() / fh, vw.toDouble() / vh)
+        })
     }
 
     /** Right after the pack or the shown card changed: the recording's log works out what happened. */

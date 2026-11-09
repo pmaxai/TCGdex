@@ -3,6 +3,7 @@ package io.github.pmaxai.cardscanner.recording
 import android.annotation.SuppressLint
 import android.content.Context
 import android.util.Log
+import androidx.camera.core.AspectRatio
 import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.Quality
@@ -45,7 +46,7 @@ object CameraRecording {
         private set
     /**
      * The chosen quality's picture (long side, short side) while the file is being written;
-     * CameraX gives the real size only with the finished file. Both qualities are 16:9.
+     * CameraX gives the real size only with the finished file. Both are 4:3.
      */
     @Volatile var nominal: Pair<Int, Int>? = null
         private set
@@ -57,9 +58,13 @@ object CameraRecording {
     /** A recording with the camera file starts: the camera binds a VideoCapture next to the others. */
     fun prepare(target: File, hd: Boolean, bitrate: Int) {
         file = target; error = null; firstFrameNanos = null; size = null
-        nominal = if (hd) Pair(1920, 1080) else Pair(1280, 720)
+        nominal = if (hd) Pair(1440, 1080) else Pair(960, 720)
+        // 4:3 like the scanner's frames, so the file sees what the scanner sees (a 16:9 file cuts
+        // the top and bottom off); the largest quality the phone binds next to preview and analysis
         val recorder = Recorder.Builder()
-            .setQualitySelector(QualitySelector.from(if (hd) Quality.FHD else Quality.HD,
+            .setAspectRatio(AspectRatio.RATIO_4_3)
+            .setQualitySelector(QualitySelector.fromOrderedList(
+                if (hd) listOf(Quality.FHD, Quality.HD, Quality.SD) else listOf(Quality.HD, Quality.SD),
                 FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)))
             .setTargetVideoEncodingBitRate(bitrate)
             .build()
@@ -129,6 +134,15 @@ object CameraRecording {
             if (rot % 180 == 0) Pair(w, h) else Pair(h, w)
         } finally { m.release() }
     }.getOrNull()
+
+    /** Four corners in picture order: clockwise (on screen, y down) from the one nearest the top left; each 0–1. */
+    fun clockwiseFromTopLeft(p: List<DoubleArray>): List<DoubleArray> {
+        val cx = p.sumOf { it[0] } / p.size
+        val cy = p.sumOf { it[1] } / p.size
+        val sorted = p.sortedBy { kotlin.math.atan2(it[1] - cy, it[0] - cx) }
+        val start = sorted.indices.minBy { sorted[it][0] + sorted[it][1] }
+        return List(sorted.size) { i -> sorted[(start + i) % sorted.size].let { q -> doubleArrayOf(q[0].coerceIn(0.0, 1.0), q[1].coerceIn(0.0, 1.0)) } }
+    }
 
     /**
      * A point of the scanner's upright analysis frame (0–1) in the camera file's picture (0–1).

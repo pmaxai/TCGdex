@@ -20,6 +20,11 @@ import java.util.concurrent.Executors
  * no change can slip through. Lines go to `events.jsonl` on a background thread (flushed
  * every event); [finish] turns them into `events.json` (schema tcgdex.recording.v1) with the
  * final pack and totals.
+ *
+ * With [revealTiming], a card's reveal (`card_shown`, `card_added_again`) takes its time from
+ * the screen: when the reveal's first frame is drawn ([revealDrawn]), not when the state
+ * changed. The event waits for that (at most a second; any other event first writes it with
+ * the state's time), so the log stays in order.
  */
 class EventLog(
     val recordingId: String,
@@ -28,6 +33,7 @@ class EventLog(
     private val nanos: () -> Long = System::nanoTime,
     private val wallMs: () -> Long = System::currentTimeMillis,
     private val writer: Executor = Executors.newSingleThreadExecutor(),
+    private val revealTiming: Boolean = false,
 ) {
     /** What caused a change: decides the event's type and reason. */
     enum class Reason(val wire: String?) {
@@ -36,6 +42,15 @@ class EventLog(
     }
 
     private class Entry(val entry: Int, val beforeRecording: Boolean, var firstT: Long?)
+
+    /** a reveal waiting for its first drawn frame */
+    private class Pending(val type: String, val stateT: Long, val serial: Int, val entry: Entry?, val fields: JSONObject)
+    private var pending: Pending? = null
+    /** reveals drawn before their event arrived (serial -> System.nanoTime) */
+    private val drawnEarly = LinkedHashMap<Int, Long>()
+    private val timer by lazy {
+        Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "rec-log-timer").apply { isDaemon = true } }
+    }
 
     private val lock = Any()
     private var seq = 0
@@ -100,17 +115,17 @@ class EventLog(
                 entries[item.serial] = e
                 if (reason == Reason.ADD_AGAIN) {
                     val copyOf = lastShownSerial?.let { entries[it]?.entry }
-                    emit("card_added_again", t) {
+                    reveal("card_added_again", t, item.serial, e) {
                         it.put("entry", e.entry).put("copy_of", copyOf ?: JSONObject.NULL).put("hit", hit(item.shown))
                             .put("card", cardJson(item.shown)).put("price", priceJson(item.shown))
                     }
-                } else shownEvent(t, e.entry, true, source, item.shown, quad)
+                } else shownEvent(t, e, true, source, item.serial, item.shown, quad)
             }
         }
 
         // the shown card outside the pack: on screen, so the pipeline must know it too
         if (shown != null && shown.serial !in inPack) {
-            if (shown.serial != lastShownSerial) shownEvent(t, null, false, source, shown, quad)
+            if (shown.serial != lastShownSerial) shownEvent(t, null, false, source, shown.serial, shown, quad)
             else if (key(shown) != lastShownKey) updated(t, null, reason, shown, quad)
         } else if (shown == null && lastShownSerial != null) {
             // the panel is empty (Next card); a swiped pack card was logged as removed above
@@ -123,16 +138,52 @@ class EventLog(
     /** The last frame: the recording ends. */
     fun stop(reason: String) = synchronized(lock) { if (zeroNanos != null) emit("recording_stopped", now()) { it.put("reason", reason) } }
 
+    /**
+     * The reveal of the card with [serial] has its first frame drawn now ([drawNanos], System.nanoTime):
+     * its waiting event is written with this time.
+     */
+    fun revealDrawn(serial: Int, drawNanos: Long) = synchronized(lock) {
+        if (!revealTiming || zeroNanos == null) return@synchronized
+        val p = pending
+        if (p != null && p.serial == serial) flushPending(drawT(drawNanos))
+        else {
+            drawnEarly[serial] = drawNanos
+            while (drawnEarly.size > 8) drawnEarly.remove(drawnEarly.keys.first())
+        }
+    }
+
+    private fun drawT(nanos: Long): Long = (nanos - (zeroNanos ?: nanos)) / 1_000_000
+
+    /** A reveal: written now, or (with [revealTiming]) when its first frame is drawn. */
+    private fun reveal(type: String, t: Long, serial: Int, e: Entry?, fill: (JSONObject) -> Unit) {
+        if (!revealTiming) { emit(type, t, fill); return }
+        flushPending()
+        val p = Pending(type, t, serial, e, JSONObject().also(fill))
+        pending = p
+        val early = drawnEarly.remove(serial)
+        if (early != null) { flushPending(drawT(early)); return }
+        runCatching { timer.schedule({ synchronized(lock) { if (pending === p) flushPending() } }, 1, java.util.concurrent.TimeUnit.SECONDS) }
+    }
+
+    /** Writes the waiting reveal: at its drawn time [at], else at the time its state changed. Never before the last event. */
+    private fun flushPending(at: Long? = null) {
+        val p = pending ?: return
+        pending = null
+        val t = maxOf(at ?: p.stateT, lastT)
+        if (p.entry != null && p.entry.firstT == p.stateT) p.entry.firstT = t
+        write(p.type, t) { o -> p.fields.keys().forEach { k -> o.put(k, p.fields.get(k)) } }
+    }
+
     private fun remember(shown: Shown?, session: List<SessionItem>) {
         lastSession = session.map { it.serial to key(it.shown) }
         lastShownSerial = shown?.serial
         lastShownKey = shown?.let(::key)
     }
 
-    private fun shownEvent(t: Long, entry: Int?, inPack: Boolean, source: String?, s: Shown, quad: List<DoubleArray>?) {
+    private fun shownEvent(t: Long, e: Entry?, inPack: Boolean, source: String?, serial: Int, s: Shown, quad: List<DoubleArray>?) {
         if (hit(s)) hits++
-        emit("card_shown", t) {
-            it.put("entry", entry ?: JSONObject.NULL).put("in_pack", inPack).put("source", source ?: "camera")
+        reveal("card_shown", t, serial, e) {
+            it.put("entry", e?.entry ?: JSONObject.NULL).put("in_pack", inPack).put("source", source ?: "camera")
                 .put("confidence", s.confidence.name.lowercase()).put("hit", hit(s)).put("card_quad", quadJson(quad))
                 .put("card", cardJson(s)).put("price", priceJson(s))
         }
@@ -143,14 +194,20 @@ class EventLog(
             .put("card_quad", quadJson(quad)).put("card", cardJson(s)).put("price", priceJson(s))
     }
 
+    /** video time now; never before the last written event */
     private fun now(): Long {
         val z = zeroNanos ?: return 0
-        val t = ((nanos() - z) / 1_000_000).coerceAtLeast(lastT)
-        lastT = t
-        return t
+        return ((nanos() - z) / 1_000_000).coerceAtLeast(lastT)
     }
 
+    /** An event at [t]; a waiting reveal goes first, so the log stays in order. */
     private fun emit(type: String, t: Long, fill: (JSONObject) -> Unit) {
+        flushPending()
+        write(type, maxOf(t, lastT), fill)
+    }
+
+    private fun write(type: String, t: Long, fill: (JSONObject) -> Unit) {
+        lastT = t
         val o = JSONObject().put("seq", ++seq).put("t_ms", t).put("at", Instant.ofEpochMilli(wallAt(t)).toString()).put("type", type)
         fill(o)
         val line = o.toString() + "\n"
@@ -173,6 +230,8 @@ class EventLog(
      * [finalPack] is the pack at Stop (the same cards as Save pack's CSV).
      */
     fun finish(header: JSONObject, finalPack: List<SessionItem>, status: String): String = synchronized(lock) {
+        flushPending()
+        if (revealTiming) runCatching { timer.shutdownNow() }
         // wait for the writer, then read the lines back
         val done = java.util.concurrent.CountDownLatch(1)
         writer.execute { done.countDown() }
