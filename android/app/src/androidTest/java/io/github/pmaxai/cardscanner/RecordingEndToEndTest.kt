@@ -11,6 +11,8 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
 import io.github.pmaxai.cardscanner.recording.RecordingController
 import io.github.pmaxai.cardscanner.recording.RecordingPrefs
 import io.github.pmaxai.cardscanner.recording.RecordingSettings
@@ -29,6 +31,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
+import java.util.regex.Pattern
 
 /**
  * A whole recording on the emulator: Android's screen-capture consent (granted to the test
@@ -47,12 +50,36 @@ class RecordingEndToEndTest {
         }
     }
 
-    private fun shell(cmd: String) = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(cmd).close()
+    /** Runs a shell command and waits for it to end (the pipe is read to its end). */
+    private fun shell(cmd: String): String =
+        android.os.ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(cmd))
+            .use { String(it.readBytes()) }
+
+    /**
+     * Android's "share your screen?" dialog, if it shows despite the app op: whole screen, Start.
+     * Returns when [done] or after [ms].
+     */
+    private fun answerConsent(done: () -> Boolean, ms: Long) {
+        val dev = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        val end = System.currentTimeMillis() + ms
+        while (!done() && System.currentTimeMillis() < end) {
+            val start = dev.findObject(By.text(Pattern.compile("(?i)start( now)?")).clickable(true))
+                ?: dev.findObject(By.text(Pattern.compile("(?i)start( now)?")))
+            val whole = dev.findObject(By.text(Pattern.compile("(?i)(share )?entire screen")))
+            val single = dev.findObject(By.text(Pattern.compile("(?i)(share )?a single app")))
+            when {
+                start != null -> { Log.i("RecordingE2E", "consent: Start"); start.click() }
+                whole != null -> { Log.i("RecordingE2E", "consent: Entire screen"); whole.click() }
+                single != null -> { Log.i("RecordingE2E", "consent: open the choice"); single.click() }
+            }
+            Thread.sleep(700)
+        }
+    }
 
     @Test
     fun aRecordingFromConsentToUpload() {
         val pkg = ctx.packageName
-        shell("appops set $pkg PROJECT_MEDIA allow")
+        Log.i("RecordingE2E", "appops: " + shell("appops set $pkg PROJECT_MEDIA allow") + shell("appops get $pkg PROJECT_MEDIA").trim())
         shell("pm grant $pkg android.permission.POST_NOTIFICATIONS")
         RecordingPrefs(ctx).save(RecordingSettings(recordCamera = false, uploadAuto = false, mic = false, fit169 = false))
         val scenario = ActivityScenario.launch(MainActivity::class.java)
@@ -66,8 +93,9 @@ class RecordingEndToEndTest {
                 val launcher = a.activityResultRegistry.register("consent-test", ActivityResultContracts.StartActivityForResult()) { result.complete(it) }
                 launcher.launch(a.getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent())
             }
-            val res = runCatching { result.get(30, TimeUnit.SECONDS) }.getOrNull()
-            if (res == null) shell("input keyevent KEYCODE_BACK") // a consent dialog after all: leave it, skip
+            answerConsent({ result.isDone }, 30_000)
+            val res = runCatching { result.get(5, TimeUnit.SECONDS) }.getOrNull()
+            if (res == null) shell("input keyevent KEYCODE_BACK") // the dialog couldn't be answered: leave it, skip
             assumeTrue("screen capture not granted on this device", res != null && res.resultCode == Activity.RESULT_OK && res.data != null)
             scenario.onActivity { vm.rec.start(res!!.resultCode, res.data!!, landscape = false) }
             waitUntil(30_000, "first frame") { RecordingController.phase.value is RecordingController.Phase.Recording && RecordingController.log != null }
