@@ -171,7 +171,7 @@ private fun Reveal(state: UiState, vm: ScannerViewModel, modifier: Modifier) {
 private fun RevealCard(s: Shown, settings: Settings, copies: Int, onPrinting: (Printing.Kind) -> Unit, onStep: (Int) -> Unit,
                        onVersion: (CardInfo) -> Unit, onOther: (Candidate) -> Unit, onSearch: () -> Unit) {
     val value = s.value
-    val hit = settings.threshold > 0 && (value ?: 0.0) >= settings.threshold
+    val hit = isHit(value, settings.threshold)
     val count = remember(s.serial) { Animatable(0f) }
     LaunchedEffect(s.serial, value) { count.animateTo((value ?: 0.0).toFloat(), tween(900, easing = FastOutSlowInEasing)) }
     val glow = rememberInfiniteTransition(label = "glow")
@@ -404,7 +404,7 @@ private fun SessionBar(state: UiState, menu: @Composable () -> Unit, onPlusOne: 
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 items.asReversed().take(12).forEach { item ->
-                    val hit = threshold > 0 && (item.value ?: 0.0) >= threshold
+                    val hit = isHit(item.value, threshold)
                     Text("${item.name} ${eur(item.value)}", color = if (hit) Ink else Color.White, fontSize = 13.sp,
                         maxLines = 1, softWrap = false,
                         modifier = Modifier.background(if (hit) Gold else Panel, RoundedCornerShape(10.dp))

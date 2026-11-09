@@ -49,7 +49,7 @@ object PackCsv {
                 else -> ""
             }
             if (currency == "EUR") eur += p?.eur ?: 0.0 else if (currency == "USD") usd += p?.usd ?: 0.0
-            val hit = settings.threshold > 0 && (s.value ?: 0.0) >= settings.threshold
+            val hit = isHit(s.value, settings.threshold)
             row(listOf(
                 i + 1, time.format(Date(item.time)), v.name, s.english?.name ?: v.name.takeIf { v.lang == "en" },
                 v.setName, v.numberText, v.lang, v.id, p?.kind?.label,

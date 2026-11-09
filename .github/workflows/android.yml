@@ -109,8 +109,12 @@ jobs:
       - name: MinIO for the S3 upload test (recordings)
         continue-on-error: true      # without it the test is skipped, nothing else depends on it
         run: |
-          docker run -d --name minio -p 9000:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio server /data
+          # MinIO's images left Docker Hub: try the registries that still have one
+          for img in quay.io/minio/minio cgr.dev/chainguard/minio bitnami/minio; do
+            docker run -d --name minio -p 9000:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+              "$img" server /data && { echo "MinIO from $img"; break; }
+            docker rm -f minio >/dev/null 2>&1 || true
+          done
           for i in $(seq 1 30); do curl -sf http://localhost:9000/minio/health/live && break; sleep 2; done
           curl -sSf --aws-sigv4 "aws:amz:us-east-1:s3" --user minioadmin:minioadmin -X PUT http://localhost:9000/recordings-test
           # the emulator reaches this computer as 10.0.2.2

@@ -31,7 +31,12 @@ class ShopStagingTest {
         assumeTrue("no staging key (repository secrets POKESHOP_STAGING_KEY_ID / _SECRET)", kid.isNotBlank() && secret.isNotBlank())
         val c = ShopClient(ShopCredentials("https://staging.pokemonkarten.at/api/v1", kid, secret))
 
-        val h = c.health()
+        // the staging shop itself down (deploy, restart): nothing to test against, not the app's fault
+        val h = try { c.health() } catch (e: Exception) {
+            val down = if (e is ShopException) e.status == 0 || e.status >= 500 else e is java.io.IOException
+            assumeTrue("staging shop not reachable: ${e.message}", !down)
+            throw e
+        }
         assertEquals(kid, h.keyId)
         Log.i(TAG, "health ok, shop time ${h.serverTime}")
         val master = c.masterCards(cardRef = "sv03.5-199")

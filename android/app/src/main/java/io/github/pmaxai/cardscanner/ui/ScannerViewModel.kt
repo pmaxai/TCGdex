@@ -40,6 +40,7 @@ import io.github.pmaxai.cardscanner.vision.VersionResolver
 import io.github.pmaxai.cardscanner.update.AppRelease
 import io.github.pmaxai.cardscanner.BuildConfig
 import io.github.pmaxai.cardscanner.license.LicenceApi
+import io.github.pmaxai.cardscanner.recording.EventLog
 import io.github.pmaxai.cardscanner.license.LicenceCheck
 import io.github.pmaxai.cardscanner.license.LicenceException
 import io.github.pmaxai.cardscanner.license.LicenceKey
@@ -140,6 +141,9 @@ data class Shown(
     /** the card has PSA sales, just not for the selected printing */
     val gradedOnlyOtherPrintings: Boolean get() = graded == null && priceCard.graded.isNotEmpty()
 }
+
+/** The one hit rule: the HIT badge, the pack bar, the pack CSV and the recording's log all ask this. */
+fun isHit(value: Double?, threshold: Double): Boolean = threshold > 0 && (value ?: 0.0) >= threshold
 
 /** One card of the pack (YouTube mode): the card as shown, without the debug picture. */
 data class SessionItem(val serial: Int, val time: Long, val shown: Shown) {
@@ -392,6 +396,10 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     private val shopClock = ServerClock()
     /** Webshop Mode, Sell: the customer's order, kept until it's sold or cleared */
     private val orderFile = java.io.File(app.filesDir, "shop-order.json")
+    /** the running recording's event log (null: not recording) */
+    @Volatile private var eventLog: EventLog? = null
+    /** the card's corners in the recording's camera picture (0–1), set by the recording (null: no camera file) */
+    @Volatile private var quadForLog: (() -> List<DoubleArray>?)? = null
     /** the licence on this phone, and the license service next to the shop */
     private val licenceStore = LicenceStore(app)
     private val licenceApi = LicenceApi(BuildConfig.LICENSE_URL)
@@ -585,7 +593,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             tracker.lock(best.group)
             kept = best.group
             rejected = emptySet()
-            showNew(best.group, r, rgb, fromPhoto = false, conf = Confidence.LIKELY)
+            showNew(best.group, r, rgb, fromPhoto = false, conf = Confidence.LIKELY, source = "double_tap")
             // the most likely cards to pick from, the shown one first
             val picks = r.candidates.mapNotNull { candidateOf(it) }
             lastPicks = picks
@@ -1094,6 +1102,15 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** The app is back in front: look for updates; after "allow from this source", go on installing. */
+    // ---------------------------------------------------------------- recording: the event log
+    /** Right after the pack or the shown card changed: the recording's log works out what happened. */
+    private fun logPack(reason: EventLog.Reason, source: String? = null) {
+        val log = eventLog ?: return
+        val st = _state.value
+        runCatching { log.observe(reason, source, st.shown, st.session, quadForLog?.invoke()) }
+            .onFailure { Log.w(TAG, "event log", it) }
+    }
+
     // ---------------------------------------------------------------- licence
 
     private fun loadLicence() {
@@ -1296,7 +1313,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             history = runCatching { cat.history(priceCard.id) }.getOrNull())
     }
 
-    private fun showNew(group: String, r: Recognition, rgb: Mat, fromPhoto: Boolean, conf: Confidence) {
+    private fun showNew(group: String, r: Recognition, rgb: Mat, fromPhoto: Boolean, conf: Confidence, source: String = "camera") {
         val cat = catalog ?: return
         val p = pack ?: return
         val hit = r.hits.firstOrNull { it.group == group }
@@ -1319,6 +1336,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             session = if (s.settings.youtube && !fromPhoto) addToSession(s, first) else s.session,
             tray = if (s.settings.trading) addToTray(s.tray, first) else s.tray,
             draft = DealDraft(s.settings.tradingCondition)) }
+        logPack(EventLog.Reason.SHOWN, if (fromPhoto) "photo" else source)
         if (hit == null) { maybeAlert(first); return }
         val frame = rgb.clone()
         viewModelScope.launch(textDispatcher) {
@@ -1346,6 +1364,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             b.copy(serial = cur.serial, foil = cur.foil, printing = keep ?: b.printing, printingByUser = keep != null)
         }
         _state.update { s -> s.copy(shown = updated, session = replaceInSession(s.session, updated), tray = replaceInSession(s.tray, updated)) }
+        logPack(EventLog.Reason.TEXT_READ)
         maybeAlert(updated)
     }
 
@@ -1399,6 +1418,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             val updated = sh.copy(foil = est, printing = printing)
             s.copy(shown = updated, session = replaceInSession(s.session, updated), tray = replaceInSession(s.tray, updated))
         }
+        if (printing != current.printing) logPack(EventLog.Reason.PRINTING)
     }
 
     private fun publishLive(r: Recognition, w: Int, h: Int, conf: Confidence) {
@@ -1443,7 +1463,10 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     private fun replaceInSession(session: List<SessionItem>, sh: Shown, oldSerial: Int = sh.serial): List<SessionItem> =
         session.map { if (it.serial == oldSerial) it.copy(serial = sh.serial, shown = sh.copy(preview = null, scan = null)) else it }
 
-    fun resetSession() = _state.update { it.copy(session = emptyList()) }
+    fun resetSession() {
+        _state.update { it.copy(session = emptyList()) }
+        logPack(EventLog.Reason.RESET)
+    }
 
     // ------------------------------------------------------------------ Trading Mode
     private fun addToTray(tray: List<SessionItem>, sh: Shown): List<SessionItem> {
@@ -1581,8 +1604,12 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             val copy = s.copy(serial = ++serial)
             st.copy(shown = copy, session = st.session + SessionItem(copy.serial, System.currentTimeMillis(), copy.copy(preview = null, scan = null)))
         }
+        logPack(EventLog.Reason.ADD_AGAIN)
     }
-    fun undoLast() = _state.update { it.copy(session = it.session.dropLast(1)) }
+    fun undoLast() {
+        _state.update { it.copy(session = it.session.dropLast(1)) }
+        logPack(EventLog.Reason.REMOVE_LAST)
+    }
 
     /** Swiped away: the card leaves the pack. It is not taken again until another card was in front of the camera. */
     fun dismissShown() {
@@ -1591,6 +1618,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             val s = st.shown ?: return@update st
             st.copy(shown = null, picks = null, session = st.session.filter { it.serial != s.serial })
         }
+        logPack(EventLog.Reason.SWIPE)
     }
 
     /** Writes the pack as CSV; returns the number of cards. */
@@ -1638,6 +1666,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val shown = build(c.group, c.info, null, Confidence.SURE, emptyList(), locked = true, fromPhoto = true,
             preview = null, scan = null).copy(versionByUser = true, fromSearch = true)
         _state.update { it.copy(shown = shown, paused = true, picks = null, draft = DealDraft(it.settings.tradingCondition)) }
+        logPack(EventLog.Reason.SHOWN, "search")
     }
 
     /** The shown card is this one (found in the search): it takes its place, also in the pack. */
@@ -1650,6 +1679,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val shown = build(c.group, c.info, lastText, Confidence.SURE, alternatives, locked = true, fromPhoto = s.fromPhoto,
             preview = s.preview, scan = s.scan).copy(versionByUser = true, fromSearch = s.fromSearch)
         _state.update { st -> st.copy(shown = shown, picks = null, session = replaceInSession(st.session, shown, oldSerial = s.serial), tray = replaceInSession(st.tray, shown, oldSerial = s.serial)) }
+        logPack(EventLog.Reason.SEARCH_REPLACE)
         maybeAlert(shown)
     }
 
@@ -1675,6 +1705,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val shown = build(c.group, version, lastText, Confidence.SURE, alternatives, locked = true, fromPhoto = s.fromPhoto,
             preview = s.preview, scan = s.scan).copy(versionByUser = true)
         _state.update { st -> st.copy(shown = shown, session = replaceInSession(st.session, shown, oldSerial = s.serial), tray = replaceInSession(st.tray, shown, oldSerial = s.serial)) }
+        logPack(EventLog.Reason.OTHER_CARD)
         maybeAlert(shown)
     }
 
@@ -1689,20 +1720,26 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         chooseVersion(s.versions[((i + step) % s.versions.size + s.versions.size) % s.versions.size])
     }
 
-    fun chooseLanguage(info: CardInfo) = _state.update { st ->
-        val s = st.shown ?: return@update st
-        val shown = build(s.group, info, s.text, s.confidence, s.alternatives, true, s.fromPhoto, s.preview, s.scan)
-            .copy(serial = s.serial, printing = s.printing, printingByUser = s.printingByUser, foil = s.foil, versionByUser = true)
-            .let { if (it.priceCard.printing(s.printing)?.kind != s.printing) it.copy(printing = it.priceCard.printings.firstOrNull()?.kind) else it }
-        tracker.lock(s.group)
-        st.copy(shown = shown, session = replaceInSession(st.session, shown), tray = replaceInSession(st.tray, shown))
+    fun chooseLanguage(info: CardInfo) {
+        _state.update { st ->
+            val s = st.shown ?: return@update st
+            val shown = build(s.group, info, s.text, s.confidence, s.alternatives, true, s.fromPhoto, s.preview, s.scan)
+                .copy(serial = s.serial, printing = s.printing, printingByUser = s.printingByUser, foil = s.foil, versionByUser = true)
+                .let { if (it.priceCard.printing(s.printing)?.kind != s.printing) it.copy(printing = it.priceCard.printings.firstOrNull()?.kind) else it }
+            tracker.lock(s.group)
+            st.copy(shown = shown, session = replaceInSession(st.session, shown), tray = replaceInSession(st.tray, shown))
+        }
+        logPack(EventLog.Reason.VERSION)
     }
 
-    fun choosePrinting(kind: Printing.Kind) = _state.update { st ->
-        val s = st.shown ?: return@update st
-        val updated = s.copy(printing = kind, printingByUser = true, locked = true)
-        tracker.lock(s.group)
-        st.copy(shown = updated, session = replaceInSession(st.session, updated), tray = replaceInSession(st.tray, updated))
+    fun choosePrinting(kind: Printing.Kind) {
+        _state.update { st ->
+            val s = st.shown ?: return@update st
+            val updated = s.copy(printing = kind, printingByUser = true, locked = true)
+            tracker.lock(s.group)
+            st.copy(shown = updated, session = replaceInSession(st.session, updated), tray = replaceInSession(st.tray, updated))
+        }
+        logPack(EventLog.Reason.PRINTING)
     }
 
     /** Forget the current card and look for the next one. */
@@ -1716,6 +1753,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             foilN = 0
         }
         _state.update { it.copy(shown = null, paused = false, picks = null) }
+        logPack(EventLog.Reason.NEXT)
     }
 
     fun resume() {
