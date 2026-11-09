@@ -28,7 +28,9 @@ import io.github.pmaxai.cardscanner.recording.UploadState
 import io.github.pmaxai.cardscanner.recording.UploadWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.text.DateFormat
@@ -86,8 +88,11 @@ class RecordingCoordinator(
 
     // ------------------------------------------------------------------ start and stop
     /** After Android's consent: a new folder, the header, the log; the service starts capturing. */
+    /** between Start and the capture's start (the screen is getting ready) */
+    @Volatile private var starting = false
+
     fun start(resultCode: Int, consent: Intent, landscape: Boolean) {
-        if (RecordingController.recording) return
+        if (RecordingController.recording || starting) return
         val s = prefs.load()
         val dir = store.create()
         val st = state()
@@ -113,10 +118,21 @@ class RecordingCoordinator(
             log.start(nanos, now.session, now.shown)
             RecordingController.log = log
         }
-        publish { it.copy(lastSummary = null) }
+        // the screen takes the recording layout first (no ● REC in the bar, the 16:9 area) and the camera its
+        // new binding; the capture starts after that, so the video's first frame already shows them
+        publish { it.copy(lastSummary = null, phase = RecordingController.Phase.Starting) }
         // the clean camera file: the camera binds a VideoCapture next to preview and analysis
         if (s.recordCamera) CameraRecording.prepare(dir.camera, s.hd, s.bitrateMbps * 1_000_000)
-        RecordingController.begin(app, StartRequest(dir, resultCode, consent, s.longSide, s.bitrateMbps * 1_000_000, s.mic))
+        starting = true
+        scope.launch {
+            try {
+                if (s.recordCamera) withTimeoutOrNull(3_000) { while (!CameraRecording.active && CameraRecording.error == null) delay(50) }
+                delay(300)
+            } finally {
+                starting = false
+            }
+            RecordingController.begin(app, StartRequest(dir, resultCode, consent, s.longSide, s.bitrateMbps * 1_000_000, s.mic))
+        }
     }
 
     fun stop(reason: String = "user") = RecordingController.stop(app, reason)

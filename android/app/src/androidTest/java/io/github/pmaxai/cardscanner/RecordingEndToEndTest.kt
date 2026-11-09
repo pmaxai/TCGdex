@@ -195,27 +195,36 @@ class RecordingEndToEndTest {
                 "in_pack=${e.opt("in_pack")} source=${e.opt("source")} card=${e.getJSONObject("card").optString("id")}") }
 
             // the red dot and the time are not in the video (their window is secure: recorded black, on black)
-            val frame = android.media.MediaMetadataRetriever().run {
-                try { setDataSource(dir.video.path); getFrameAtTime(3_000_000, android.media.MediaMetadataRetriever.OPTION_CLOSEST) } finally { release() }
+            fun frameAt(us: Long) = android.media.MediaMetadataRetriever().run {
+                try { setDataSource(dir.video.path); getFrameAtTime(us, android.media.MediaMetadataRetriever.OPTION_CLOSEST) } finally { release() }
             }!!
-            savePicture("recording-4-the-video-at-3s.png", frame)
-            val sy = frame.height.toDouble() / screen.y
+            fun redIn(f: android.graphics.Bitmap, top: Int, bottom: Int): Int {
+                var n = 0
+                for (y in top until bottom.coerceAtMost(f.height)) for (x in 0 until f.width) {
+                    val c = f.getPixel(x, y)
+                    if (android.graphics.Color.red(c) > 150 && android.graphics.Color.green(c) < 120 && android.graphics.Color.blue(c) < 120) n++
+                }
+                return n
+            }
+            val first = frameAt(0)
+            val later = frameAt(4_000_000)
+            savePicture("recording-4-the-video-first-frame.png", first)
+            savePicture("recording-5-the-video-at-4s.png", later)
+            val sy = first.height.toDouble() / screen.y
             val bandTop = cr.getInt("y") + cr.getInt("height")
             assertTrue("the timer sits in the border below the 16:9 area: $timerBounds", timerBounds.top * sy >= bandTop - 2)
-            // the whole border below the 16:9 area: no red dot, no red frame
-            var red = 0; var px = 0
-            for (y in bandTop until frame.height)
-                for (x in 0 until frame.width) {
-                    val c = frame.getPixel(x, y); px++
-                    if (android.graphics.Color.red(c) > 150 && android.graphics.Color.green(c) < 120 && android.graphics.Color.blue(c) < 120) red++
-                }
             var lit = 0
             for (y in cr.getInt("y") until cr.getInt("y") + cr.getInt("height") step 4)
                 for (x in cr.getInt("x") until cr.getInt("x") + cr.getInt("width") step 4)
-                    if (frame.getPixel(x.coerceAtMost(frame.width - 1), y.coerceAtMost(frame.height - 1)).let { android.graphics.Color.green(it) } > 60) lit++
-            Log.i("RecordingE2E", "video frame at 3 s: $red red of $px pixels in the border with the timer; $lit lit samples in the 16:9 area")
+                    if (later.getPixel(x.coerceAtMost(later.width - 1), y.coerceAtMost(later.height - 1)).let { android.graphics.Color.green(it) } > 60) lit++
+            // the first frame: already the recording layout – no ● REC in the bar, no timer (no card yet, so no red at all)
+            val redFirst = redIn(first, 0, first.height)
+            // later: the border with the timer is black (cards on screen may have red, so only the border)
+            val redLater = redIn(later, bandTop, later.height)
+            Log.i("RecordingE2E", "video: first frame $redFirst red pixels; at 4 s $redLater red in the border with the timer; $lit lit samples in the 16:9 area")
             assertTrue("the YouTube screen is in the video", lit > 50)
-            assertEquals("the timer is not in the video", 0, red)
+            assertEquals("the first frame has no ● REC and no timer", 0, redFirst)
+            assertEquals("the timer is not in the video", 0, redLater)
 
             // FIX-4: the screen file plays, at a constant 30 fps
             val ex = MediaExtractor()
