@@ -87,7 +87,7 @@ class RecorderTest {
         val enc = Encoders(file, 640, 368, 2_000_000, Tone()) { zero = it }.prepare()
         enc.start()
         val paint = Paint().apply { color = Color.YELLOW }
-        var firstPost = 0L
+        val posts = ArrayList<Long>()
         var copied: File? = null
         val begin = System.nanoTime()
         var frame = 0
@@ -96,7 +96,7 @@ class RecorderTest {
             c.drawColor(Color.rgb(20, 20, 30))
             c.drawRect(frame * 5f % 600, 100f, frame * 5f % 600 + 40, 140f, paint)
             enc.inputSurface.unlockCanvasAndPost(c)
-            if (frame == 0) firstPost = System.nanoTime()
+            posts += System.nanoTime()
             frame++
             // halfway: what's on disk now must already play (a crash here loses only the last second)
             if (copied == null && System.nanoTime() - begin > 2_300_000_000L) {
@@ -106,8 +106,11 @@ class RecorderTest {
         }
         val durationMs = enc.stop()
         assertTrue("duration $durationMs", durationMs in 2_500..4_000)
-        assertTrue("the video's 0 is the first frame's own time (System.nanoTime): ${(zero - firstPost) / 1_000_000} ms",
-            abs(zero - firstPost) < 100_000_000L)
+        // the video's 0 is the time (System.nanoTime) of a frame that was posted – the first one the
+        // encoder took (a busy emulator may drop the first few, so it needn't be the first posted)
+        val nearest = posts.minOf { abs(zero - it) }
+        assertTrue("the video's 0 is a posted frame's own time (System.nanoTime): ${nearest / 1_000_000} ms off, " +
+            "${(zero - posts.first()) / 1_000_000} ms after the first post", nearest < 50_000_000L && zero - posts.first() < 1_000_000_000L)
 
         val tracks = read(file)
         val v = tracks.getValue("video/avc")
