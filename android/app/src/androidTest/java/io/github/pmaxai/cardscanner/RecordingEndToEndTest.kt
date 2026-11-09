@@ -131,7 +131,7 @@ class RecordingEndToEndTest {
             waitUntil(30_000, "first frame") { RecordingController.phase.value is RecordingController.Phase.Recording && RecordingController.log != null }
             // the red dot and the time: on the screen, in the black border (they must not be in the video, see below)
             val dev = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
-            val timer = dev.wait(Until.findObject(By.pkg(ctx.packageName).text(Pattern.compile("\\d+:\\d\\d(:\\d\\d)?"))), 5_000)
+            val timer = dev.wait(Until.findObject(By.pkg(ctx.packageName).text(Pattern.compile("●\\s*\\d+:\\d\\d(:\\d\\d)?"))), 5_000)
             if (timer == null) {
                 savePicture("recording-3-screen-while-recording.png",
                     runCatching { InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot() }.getOrNull())

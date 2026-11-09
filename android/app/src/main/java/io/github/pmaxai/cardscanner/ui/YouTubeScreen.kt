@@ -128,12 +128,23 @@ fun YouTubeScreen(state: UiState, vm: ScannerViewModel) {
     // the black border around the 16:9 area: the recording's dot and time go there, in a window the
     // screen recording doesn't see (black on black in the video), so nothing covers the pack value
     if (fit && state.recording.settings.showTimer) {
+        var border by remember { mutableStateOf<android.graphics.Rect?>(null) }
+        val onScreen = Modifier.onGloballyPositioned { c ->
+            val win = IntArray(2).also { view.rootView.getLocationOnScreen(it) }
+            border = c.boundsInWindow().let { b ->
+                android.graphics.Rect(win[0] + b.left.roundToInt(), win[1] + b.top.roundToInt(), win[0] + b.right.roundToInt(), win[1] + b.bottom.roundToInt())
+            }
+        }
         if (landscape) {
             val side = (maxWidth - minOf(maxWidth, maxHeight * 16f / 9f)) / 2
-            if (side >= 44.dp) Box(Modifier.align(Alignment.CenterEnd).width(side).fillMaxHeight()) { RecIndicator(state, vm, vertical = true) }
+            if (side >= 44.dp) Box(Modifier.align(Alignment.CenterEnd).width(side).fillMaxHeight().then(onScreen)) {
+                RecIndicator(state, vm, border, vertical = true)
+            }
         } else {
             val band = (maxHeight - minOf(maxHeight, maxWidth * 16f / 9f)) / 2
-            if (band >= 28.dp) Box(Modifier.align(Alignment.BottomCenter).height(band).fillMaxWidth()) { RecIndicator(state, vm, vertical = false) }
+            if (band >= 28.dp) Box(Modifier.align(Alignment.BottomCenter).height(band).fillMaxWidth().then(onScreen)) {
+                RecIndicator(state, vm, border, vertical = false)
+            }
         }
     }
     Box(if (fit) Modifier.aspectRatio(if (landscape) 16f / 9f else 9f / 16f).background(Ink)

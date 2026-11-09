@@ -45,14 +45,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.window.SecureFlagPolicy
-import androidx.compose.ui.window.PopupProperties
-import androidx.compose.ui.window.Popup
 import androidx.core.content.ContextCompat
 import io.github.pmaxai.cardscanner.recording.RecStatus
 import io.github.pmaxai.cardscanner.recording.RecordingController
@@ -78,42 +79,88 @@ fun RecButton(state: UiState, vm: ScannerViewModel, onStart: () -> Unit) {
 }
 
 /**
- * While recording: a red dot and the time (a tap stops), in the black border around the 16:9
- * area and in a window of its own that is marked secure, so the screen recording doesn't take
- * it (it records black there, on black). Stacked ([vertical]) for the narrow side borders.
+ * While recording: a red dot and the time (a tap stops) in the black border around the 16:9
+ * area. They are in a small window of their own, exactly the size of that border ([screen]:
+ * where it is on the screen, in pixels) and marked secure, so the screen recording leaves it
+ * out: the video has black there, on black. Stacked ([vertical]) for the narrow side borders.
  */
 @Composable
-fun RecIndicator(state: UiState, vm: ScannerViewModel, vertical: Boolean) {
+fun RecIndicator(state: UiState, vm: ScannerViewModel, screen: android.graphics.Rect?, vertical: Boolean) {
     val phase = state.recording.phase
-    if (phase is RecordingController.Phase.Idle) return
+    if (phase is RecordingController.Phase.Idle || screen == null || screen.isEmpty) return
     var now by remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
     LaunchedEffect(phase) { while (true) { now = android.os.SystemClock.elapsedRealtime(); delay(250) } }
     val secs = if (phase is RecordingController.Phase.Recording) ((now - phase.since) / 1000).coerceAtLeast(0) else 0
-    val blink = (now / 600) % 2 == 0L
     val label = when (phase) {
         is RecordingController.Phase.Stopping -> "saving"
         is RecordingController.Phase.Starting -> "start"
         else -> if (secs >= 3600) "%d:%02d:%02d".format(Locale.ROOT, secs / 3600, secs / 60 % 60, secs % 60)
             else "%d:%02d".format(Locale.ROOT, secs / 60, secs % 60)
     }
-    Popup(alignment = Alignment.Center, properties = PopupProperties(focusable = false, clippingEnabled = false,
-        securePolicy = SecureFlagPolicy.SecureOn)) {
-        val m = Modifier.background(Panel, RoundedCornerShape(14.dp)).border(1.5.dp, RecRed, RoundedCornerShape(14.dp))
-            .clickable(enabled = phase is RecordingController.Phase.Recording) { vm.rec.stop() }
-        val dot: @Composable () -> Unit = {
-            Box(Modifier.size(10.dp).background(if (blink || phase !is RecordingController.Phase.Recording) RecRed else RecRed.copy(alpha = 0.35f), CircleShape))
+    val dotOn = (now / 600) % 2 == 0L || phase !is RecordingController.Phase.Recording
+    val view = LocalView.current
+    val ctx = LocalContext.current
+    val recording = phase is RecordingController.Phase.Recording
+    val window = remember { SecureLabel(ctx) }
+    DisposableEffect(window) { onDispose { window.remove() } }
+    SideEffect {
+        window.onTap = { if (recording) vm.rec.stop() }
+        window.show(view, screen, vertical, label, dotOn)
+    }
+}
+
+/** The secure window behind [RecIndicator]: a plain view (no Compose inside), at an exact place on the screen. */
+private class SecureLabel(private val ctx: android.content.Context) {
+    private val wm = ctx.getSystemService(android.view.WindowManager::class.java)
+    private val density = ctx.resources.displayMetrics.density
+    private val text = android.widget.TextView(ctx).apply {
+        setTextColor(android.graphics.Color.WHITE)
+        typeface = android.graphics.Typeface.DEFAULT_BOLD
+        gravity = android.view.Gravity.CENTER
+        background = android.graphics.drawable.GradientDrawable().apply {
+            setColor(Panel.toArgb()); cornerRadius = 14 * density; setStroke((1.5f * density).toInt(), RecRed.toArgb())
         }
-        if (vertical) {
-            Column(m.padding(horizontal = 6.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                dot()
-                Text(label, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
-            }
-        } else {
-            Row(m.padding(horizontal = 10.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                dot()
-                Text("  $label", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-            }
+        setOnClickListener { onTap() }
+    }
+    private val root = android.widget.FrameLayout(ctx).apply {
+        addView(text, android.widget.FrameLayout.LayoutParams(android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+            android.widget.FrameLayout.LayoutParams.WRAP_CONTENT, android.view.Gravity.CENTER))
+    }
+    var onTap: () -> Unit = {}
+    private var params: android.view.WindowManager.LayoutParams? = null
+
+    fun show(anchor: android.view.View, r: android.graphics.Rect, vertical: Boolean, label: String, dotOn: Boolean) {
+        val dot = android.text.SpannableString("●").apply {
+            setSpan(android.text.style.ForegroundColorSpan(if (dotOn) RecRed.toArgb() else RecRed.copy(alpha = 0.35f).toArgb()), 0, 1, 0)
         }
+        text.text = android.text.TextUtils.concat(dot, if (vertical) "\n" else "  ", label)
+        text.textSize = if (vertical) 11f else 13f
+        val (ph, pv) = if (vertical) Pair(6, 8) else Pair(10, 4)
+        text.setPadding((ph * density).toInt(), (pv * density).toInt(), (ph * density).toInt(), (pv * density).toInt())
+        val p = params
+        if (p == null) {
+            val token = anchor.applicationWindowToken ?: return
+            val lp = android.view.WindowManager.LayoutParams(r.width(), r.height(), r.left, r.top,
+                android.view.WindowManager.LayoutParams.TYPE_APPLICATION_PANEL,
+                android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or android.view.WindowManager.LayoutParams.FLAG_SECURE or
+                    android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                android.graphics.PixelFormat.TRANSLUCENT).apply {
+                gravity = android.view.Gravity.TOP or android.view.Gravity.START
+                this.token = token
+                title = "Recording time"
+                if (android.os.Build.VERSION.SDK_INT >= 30) layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                else if (android.os.Build.VERSION.SDK_INT >= 28) layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+            runCatching { wm.addView(root, lp); params = lp }.onFailure { android.util.Log.w("Recording", "timer window", it) }
+        } else if (p.x != r.left || p.y != r.top || p.width != r.width() || p.height != r.height()) {
+            p.x = r.left; p.y = r.top; p.width = r.width(); p.height = r.height()
+            runCatching { wm.updateViewLayout(root, p) }
+        }
+    }
+
+    fun remove() {
+        if (params != null) runCatching { wm.removeViewImmediate(root) }
+        params = null
     }
 }
 
