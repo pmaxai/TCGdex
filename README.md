@@ -10,8 +10,7 @@ for flea markets.
 
 The current release is **Version 1.1.6**: **github.com/pmaxai/TCGdex/releases/tag/v1.1.6**
 (releases stay as they are; v1.0 and v1.1 are still there). **app-latest** is always the
-newest build, with whatever is being worked on since. The version is shown at the bottom
-of ⚙.
+newest build, with whatever is being worked on since. The version is shown in ⚙ → **About**.
 
 **Version numbers:** builds count on the current version line: 1.2.1, 1.2.2, 1.2.3, …
 A release moves to the next line, so after releasing 1.2.9 the builds are 1.3.1, 1.3.2, …
@@ -54,6 +53,8 @@ switches it (the service's address is `cardscanner.licenceUrl`).
   device); scan it with the new device. The old one stops the next time it is online, says
   where the licence went, and forgets the key: it comes back only by scanning a QR code again.
 - **Revoked** (refund): the app stops at its next check.
+- **Is the service up?** **Actions → License service health → Run workflow** asks the
+  production and the staging service and shows their answers in the log.
 
 ## Restore points
 
@@ -69,8 +70,9 @@ downgrades), or restore the code from the tag.
 
 - **Settings (⚙)** open as a screen of their own, with a sidebar of pages: **Mode**,
   **Camera** (wait time, frame size, zoom, fill, energy cards, orientation), **Prices**
-  (alert, PSA, where prices come from), **Trading**, **Webshop** (shop connection),
-  **YouTube**, **Advanced** (details) and **About** (version, price date, updates). Upright, the sidebar is a slim column of
+  (alert, PSA, where prices come from, the step of − / +), **Trading**, **Webshop** (shop
+  connection, minimum selling price), **YouTube**, **Advanced** (details), **Licence**
+  (where it is active, switch to new device) and **About** (version, price date, updates). Upright, the sidebar is a slim column of
   icons; turned sideways it lists the full names. ⚙ opens the page that fits where you
   are (Trading Mode: Trading; YouTube: YouTube; otherwise where you left it), the Alert
   chip opens Prices. Back (← or the phone's back) returns to the camera.
@@ -170,6 +172,9 @@ downgrades), or restore the code from the tag.
 - **Alert:** set a price (e.g. 5 €). The phone vibrates when a card worth at least
   that appears (any printing), so you can sweep through a box and only stop when it
   buzzes.
+- **Number pad** for prices (Trading and Webshop): big keys, the price in large digits.
+  **Clear** empties it and stays open for the new price; **OK** on an empty price removes
+  it. Held sideways, the keys sit to the right of the price, so OK is always on the screen.
 - **Trading Mode** (⚙ → Mode → Trading), for card shows: judge a vendor's price, negotiate,
   and keep track of what you buy, booth by booth.
   - **Market value**: the Cardmarket trend of the printing (or the 30-day average or the
@@ -215,13 +220,17 @@ downgrades), or restore the code from the tag.
   search a card and see its prices (market value for the condition, Cardmarket trend,
   TCGplayer, PSA) and what the shop holds of it: one line per product (language ·
   condition · finish) with price, stock per box and status. Pick language (from the scan,
-  any of the shop's 15 can be chosen), type (**N** normal, **H** holo, **RH** reverse holo;
-  also one the price data doesn't list), storage box (1–999, the last one is remembered),
+  any of the shop's 15 can be chosen), type (**N** normal, **H** holo, **RH** reverse holo,
+  **1st** when the card has a 1st edition; also one the price data doesn't list, then
+  without a market price), storage box (1–999, the last one is remembered),
   selling price (suggested: the shop's price, else the market value for the condition, but
   never below your **minimum selling price** from ⚙ → Webshop, for cards worth only a few
   cents; the number pad shows "Market price: x") and condition (M … PO; **sky blue**: the
   shop already has this card in that condition, same language and type); a new product can
-  get a comment (shown on its product page). Each booking adds one copy.
+  get a comment (shown on its product page). Each booking adds one copy. The line above the
+  button says what it will do: "2 in stock now – this adds 1 to box 014", or for a new
+  product "Glurak-ex (DE · EX · Holo · 2023 · 199/165) is new". The shop's address at the
+  top of the panel opens ⚙ → Webshop.
   **Scanning books nothing**: the stock changes only with **Add to stock** (the product
   exists) or **Create in the shop** (it doesn't). **Undo** beside it takes the copy out again.
   While you fill in, the camera keeps the card. A card the shop's card list doesn't know
@@ -234,7 +243,9 @@ downgrades), or restore the code from the tag.
     copies, remove lines, then **Complete sale** takes everything out of stock in one go
     (one `/batch` request, reason "sold in person (scanner app)"). A line the shop refuses
     (e.g. the box holds fewer copies by now) stays in the order with the reason; the rest is
-    taken out. **Undo** puts the sold copies back into their boxes. Copies held by an online
+    taken out. The sale's summary stays in the 🧾 order with **Undo**, and a small **Undo
+    sale** sits beside *Add to the order*: it puts the sold copies back into their boxes.
+    The switch remembers Stock in or Sell. Copies held by an online
     checkout are marked: selling them shows the product as sold out and the shop tells the
     admin. The shop's API has no orders, so a sale appears in the shop as stock changes with
     that reason (not as an order with a customer or a payment).
