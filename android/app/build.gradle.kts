@@ -116,6 +116,8 @@ dependencies {
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")
     implementation("androidx.camera:camera-view:$camerax")
+    // the recording's clean camera file (camera.mp4)
+    implementation("androidx.camera:camera-video:$camerax")
 
     implementation("org.opencv:opencv:4.10.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")

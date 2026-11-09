@@ -40,6 +40,7 @@ import io.github.pmaxai.cardscanner.vision.VersionResolver
 import io.github.pmaxai.cardscanner.update.AppRelease
 import io.github.pmaxai.cardscanner.BuildConfig
 import io.github.pmaxai.cardscanner.license.LicenceApi
+import io.github.pmaxai.cardscanner.recording.CameraRecording
 import io.github.pmaxai.cardscanner.recording.EventLog
 import io.github.pmaxai.cardscanner.recording.RecordingController
 import io.github.pmaxai.cardscanner.license.LicenceCheck
@@ -404,8 +405,6 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     private val shopClock = ServerClock()
     /** Webshop Mode, Sell: the customer's order, kept until it's sold or cleared */
     private val orderFile = java.io.File(app.filesDir, "shop-order.json")
-    /** the card's corners in the recording's camera picture (0–1), set by the recording (null: no camera file) */
-    @Volatile private var quadForLog: (() -> List<DoubleArray>?)? = null
     /** the licence on this phone, and the license service next to the shop */
     private val licenceStore = LicenceStore(app)
     private val licenceApi = LicenceApi(BuildConfig.LICENSE_URL)
@@ -528,6 +527,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Called on the camera's analysis thread with an upright RGB frame. Drops frames while busy. */
     fun onFrame(full: Mat) {
+        lastFullW = full.cols(); lastFullH = full.rows()
         if (recognizer == null) return
         if (_state.value.paused || !busy.compareAndSet(false, true)) return
         var crop: Mat? = null
@@ -1109,11 +1109,30 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The app is back in front: look for updates; after "allow from this source", go on installing. */
     // ---------------------------------------------------------------- recording: the event log
+    /** the last camera frame's size (upright), for the card's corners in the recording's camera file */
+    @Volatile private var lastFullW = 0
+    @Volatile private var lastFullH = 0
+
+    /** The shown card's corners in camera.mp4's picture (0–1), clockwise from top left; null without a camera file or an outline. */
+    private fun cameraQuad(): List<DoubleArray>? {
+        if (!CameraRecording.active) return null
+        val (vw, vh) = CameraRecording.size ?: return null
+        val st = _state.value
+        val q = st.liveQuad ?: return null
+        val (cw, ch) = st.liveFrame ?: return null
+        val fw = lastFullW; val fh = lastFullH
+        if (fw <= 0 || fh <= 0 || q.size < 8 || st.shown?.fromPhoto == true) return null
+        val ox = (fw - cw) / 2.0; val oy = (fh - ch) / 2.0
+        return (0 until 4).map { i ->
+            CameraRecording.toCameraFile((ox + q[2 * i]) / fw, (oy + q[2 * i + 1]) / fh, fw.toDouble() / fh, vw.toDouble() / vh)
+        }
+    }
+
     /** Right after the pack or the shown card changed: the recording's log works out what happened. */
     private fun logPack(reason: EventLog.Reason, source: String? = null) {
         val log = RecordingController.log ?: return
         val st = _state.value
-        runCatching { log.observe(reason, source, st.shown, st.session, quadForLog?.invoke()) }
+        runCatching { log.observe(reason, source, st.shown, st.session, cameraQuad()) }
             .onFailure { Log.w(TAG, "event log", it) }
     }
 

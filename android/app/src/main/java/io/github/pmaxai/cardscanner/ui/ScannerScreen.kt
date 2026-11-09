@@ -320,7 +320,7 @@ fun CameraArea(state: UiState, vm: ScannerViewModel, torch: Boolean, video: Bool
     Box(modifier.background(Color.Black).clipToBounds()
         .onSizeChanged { if (it.width > 0 && it.height > 0) vm.setViewAspect(it.width.toFloat() / it.height) }) {
         CameraPreview(onFrame = vm::onFrame, torch = torch, zoom = state.settings.zoom, onMaxZoom = vm::setMaxZoom,
-            modifier = Modifier.fillMaxSize())
+            modifier = Modifier.fillMaxSize(), recordCamera = video)
         GuideOverlay(state, Modifier.fillMaxSize(), dim = !video)
         CameraGestures(state, vm, alwaysShowZoom = !video)
         extra()
@@ -602,9 +602,12 @@ fun GuideOverlay(state: UiState, modifier: Modifier, dim: Boolean) {
 
 @Composable
 fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, zoom: Float, onMaxZoom: (Float) -> Unit,
-                  modifier: Modifier) {
+                  modifier: Modifier, recordCamera: Boolean = false) {
     val ctx = LocalContext.current
     val owner = LocalLifecycleOwner.current
+    // a recording's clean camera file: bound next to preview and analysis while it runs (YouTube mode)
+    val videoCapture by io.github.pmaxai.cardscanner.recording.CameraRecording.capture.collectAsStateWithLifecycle()
+    val video = videoCapture.takeIf { recordCamera }
     val previewView = remember {
         PreviewView(ctx).apply {
             scaleType = PreviewView.ScaleType.FILL_CENTER
@@ -612,7 +615,7 @@ fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, zoom: 
         }
     }
     var camera by remember { mutableStateOf<Camera?>(null) }
-    DisposableEffect(owner) {
+    DisposableEffect(owner, video) {
         val executor = Executors.newSingleThreadExecutor()
         val future = ProcessCameraProvider.getInstance(ctx)
         future.addListener({
@@ -631,9 +634,17 @@ fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, zoom: 
                 .build()
             analysis.setAnalyzer(executor, FrameAnalyzer(onFrame))
             provider.unbindAll()
-            camera = provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis).also { c ->
+            // with the camera file: not every phone takes three use cases; then scanning goes on without it
+            val withVideo = video?.let { v ->
+                runCatching {
+                    check(!io.github.pmaxai.cardscanner.recording.CameraRecording.simulateBindFailure) { "simulated" }
+                    provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis, v)
+                }.onFailure { provider.unbindAll() }.getOrNull()
+            }
+            camera = (withVideo ?: provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)).also { c ->
                 c.cameraInfo.zoomState.observe(owner) { z -> onMaxZoom(z.maxZoomRatio) }
             }
+            if (video != null) io.github.pmaxai.cardscanner.recording.CameraRecording.onBound(ctx, withVideo != null)
         }, ContextCompat.getMainExecutor(ctx))
         onDispose {
             runCatching { future.get().unbindAll() }

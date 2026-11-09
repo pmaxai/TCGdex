@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.content.FileProvider
+import io.github.pmaxai.cardscanner.recording.CameraRecording
 import io.github.pmaxai.cardscanner.recording.EventLog
 import io.github.pmaxai.cardscanner.recording.Finished
 import io.github.pmaxai.cardscanner.recording.FragmentedMp4Writer
@@ -112,6 +113,8 @@ class RecordingCoordinator(
             RecordingController.log = log
         }
         publish { it.copy(lastSummary = null) }
+        // the clean camera file: the camera binds a VideoCapture next to preview and analysis
+        if (s.recordCamera) CameraRecording.prepare(dir.camera, s.hd, s.bitrateMbps * 1_000_000)
         RecordingController.begin(app, StartRequest(dir, resultCode, consent, s.longSide, s.bitrateMbps * 1_000_000, s.mic))
     }
 
@@ -123,6 +126,8 @@ class RecordingCoordinator(
         RecordingController.log = null
         RecordingController.onFirstFrame = null
         val dir = f.dir
+        val s0 = prefs.load()
+        withContext(Dispatchers.IO) { CameraRecording.stop() }
         if (log == null || f.durationMs <= 0) {
             withContext(Dispatchers.IO) { dir.dir.deleteRecursively() }
             message("Recording could not start" + (f.error?.let { ": $it" } ?: ""))
@@ -138,6 +143,7 @@ class RecordingCoordinator(
                 put("width", f.width).put("height", f.height)
                 put("content_rect", contentRectJson(f))
             }
+            header.put("camera", CameraRecording.headerJson(s0.recordCamera, log.zeroNanos))
             val events = log.finish(header, st.session, "complete")
             dir.events.writeText(events)
             dir.packCsv.writeText(PackCsv.build(st.session, st.settings, Locale.getDefault()))
