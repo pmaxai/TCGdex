@@ -1116,12 +1116,13 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     /** The shown card's corners in camera.mp4's picture (0–1), clockwise from top left; null without a camera file or an outline. */
     private fun cameraQuad(): List<DoubleArray>? {
         if (!CameraRecording.active) return null
-        val (vw, vh) = CameraRecording.size ?: return null
         val st = _state.value
         val q = st.liveQuad ?: return null
         val (cw, ch) = st.liveFrame ?: return null
         val fw = lastFullW; val fh = lastFullH
         if (fw <= 0 || fh <= 0 || q.size < 8 || st.shown?.fromPhoto == true) return null
+        // the file plays upright like the scanner's frame (the screen is locked while recording)
+        val (vw, vh) = CameraRecording.size ?: CameraRecording.nominal?.let { (l, sh) -> if (fw >= fh) Pair(l, sh) else Pair(sh, l) } ?: return null
         val ox = (fw - cw) / 2.0; val oy = (fh - ch) / 2.0
         return (0 until 4).map { i ->
             CameraRecording.toCameraFile((ox + q[2 * i]) / fw, (oy + q[2 * i + 1]) / fh, fw.toDouble() / fh, vw.toDouble() / vh)

@@ -40,8 +40,14 @@ object CameraRecording {
         private set
     @Volatile var error: String? = null
         private set
-    /** the camera file's picture size as it is shown (rotation applied) */
+    /** the camera file's picture size as it plays (rotation applied), read from the finished file */
     @Volatile var size: Pair<Int, Int>? = null
+        private set
+    /**
+     * The chosen quality's picture (long side, short side) while the file is being written;
+     * CameraX gives the real size only with the finished file. Both qualities are 16:9.
+     */
+    @Volatile var nominal: Pair<Int, Int>? = null
         private set
     /** a test can make the bind fail */
     @Volatile var simulateBindFailure = false
@@ -51,6 +57,7 @@ object CameraRecording {
     /** A recording with the camera file starts: the camera binds a VideoCapture next to the others. */
     fun prepare(target: File, hd: Boolean, bitrate: Int) {
         file = target; error = null; firstFrameNanos = null; size = null
+        nominal = if (hd) Pair(1920, 1080) else Pair(1280, 720)
         val recorder = Recorder.Builder()
             .setQualitySelector(QualitySelector.from(if (hd) Quality.FHD else Quality.HD,
                 FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)))
@@ -67,10 +74,6 @@ object CameraRecording {
         if (!ok) { error = "bind_failed"; _capture.value = null; return }
         if (recording != null) return
         runCatching {
-            vc.resolutionInfo?.let { info ->
-                val r = info.resolution
-                size = if (info.rotationDegrees % 180 == 0) Pair(r.width, r.height) else Pair(r.height, r.width)
-            }
             val done = CountDownLatch(1)
             finalized = done
             recording = vc.output.prepareRecording(ctx, FileOutputOptions.Builder(f).build())
@@ -109,10 +112,23 @@ object CameraRecording {
             return JSONObject().put("file", JSONObject.NULL).put("width", JSONObject.NULL).put("height", JSONObject.NULL)
                 .put("fps", JSONObject.NULL).put("offset_ms", JSONObject.NULL).put("error", if (!enabled) "off" else error ?: "encoder")
         }
+        if (size == null) size = f?.let(::sizeOf)
         val off = firstFrameNanos?.let { a -> screenZeroNanos?.let { z -> (a - z) / 1_000_000 } }
         return JSONObject().put("file", "camera.mp4").put("width", size?.first ?: JSONObject.NULL).put("height", size?.second ?: JSONObject.NULL)
             .put("fps", 30).put("offset_ms", off ?: JSONObject.NULL).put("error", JSONObject.NULL)
     }
+
+    /** The finished file's picture size as it plays (rotation applied). */
+    fun sizeOf(f: File): Pair<Int, Int>? = runCatching {
+        val m = android.media.MediaMetadataRetriever()
+        try {
+            m.setDataSource(f.path)
+            val w = m.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)!!.toInt()
+            val h = m.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)!!.toInt()
+            val rot = m.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            if (rot % 180 == 0) Pair(w, h) else Pair(h, w)
+        } finally { m.release() }
+    }.getOrNull()
 
     /**
      * A point of the scanner's upright analysis frame (0–1) in the camera file's picture (0–1).
