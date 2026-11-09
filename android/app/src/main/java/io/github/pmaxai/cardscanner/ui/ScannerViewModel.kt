@@ -87,6 +87,10 @@ data class Candidate(val group: String, val info: CardInfo, val score: Float, va
 
 /** The card in the result panel. */
 /** The printing picked, only if the price data has it (else null: a reverse holo without prices has no market value). */
+/** The printing a card starts with: Normal whenever the card has one, else the first it has. */
+fun defaultPrinting(card: CardInfo): Printing.Kind? =
+    card.printings.firstOrNull { it.kind == Printing.Kind.NORMAL }?.kind ?: card.printings.firstOrNull()?.kind
+
 val Shown.pickedPrinting: Printing? get() = if (printing == null) selected else priceCard.printings.firstOrNull { it.kind == printing }
 
 data class Shown(
@@ -1338,7 +1342,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             .mapNotNull { (id, l) -> cat.cardExact(id, l) }
             .let { v -> if (v.none { it.id == version.id && it.lang == version.lang }) listOf(version) + v else v }
         val langs = all.filter { (it.id == version.id || it.lang in ASIAN) && (it.lang != version.lang || it.id != version.id) }
-        return Shown(group, version, english, priceCard, priceCard.printings.firstOrNull()?.kind, false, null, conf,
+        return Shown(group, version, english, priceCard, defaultPrinting(priceCard), false, null, conf,
             alternatives, langs, text, locked, fromPhoto, preview, ++serial, versions = all, scan = scan,
             history = runCatching { cat.history(priceCard.id) }.getOrNull())
     }
@@ -1419,10 +1423,11 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         return FoilEstimate(FoilEstimate.Kind.UNSURE, res.blank, res.text, 0, foilSum / foilN, foilN)
     }
 
-    /** The printing to select for a foil verdict (unless the user picked one). */
+    /** The printing to select for a foil verdict (unless the user picked one); never Holo or Reverse when there is a Normal. */
     private fun autoPrinting(s: Shown, kind: FoilEstimate.Kind): Printing.Kind? {
         if (s.printingByUser) return s.printing
         val kinds = s.priceCard.printings.map { it.kind }
+        if (Printing.Kind.NORMAL in kinds) return Printing.Kind.NORMAL
         return when (kind) {
             FoilEstimate.Kind.HOLO -> Printing.Kind.HOLO.takeIf { it in kinds } ?: s.printing
             FoilEstimate.Kind.REVERSE -> Printing.Kind.REVERSE.takeIf { it in kinds } ?: s.printing
@@ -1755,7 +1760,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             val s = st.shown ?: return@update st
             val shown = build(s.group, info, s.text, s.confidence, s.alternatives, true, s.fromPhoto, s.preview, s.scan)
                 .copy(serial = s.serial, printing = s.printing, printingByUser = s.printingByUser, foil = s.foil, versionByUser = true)
-                .let { if (it.priceCard.printing(s.printing)?.kind != s.printing) it.copy(printing = it.priceCard.printings.firstOrNull()?.kind) else it }
+                .let { if (it.priceCard.printing(s.printing)?.kind != s.printing) it.copy(printing = defaultPrinting(it.priceCard)) else it }
             tracker.lock(s.group)
             st.copy(shown = shown, session = replaceInSession(st.session, shown), tray = replaceInSession(st.tray, shown))
         }

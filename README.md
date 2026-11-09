@@ -91,11 +91,13 @@ downgrades), or restore the code from the tag.
     was printed in several sets.
   - **Other language?** chips let you correct it with one tap.
 - **Printings:** normal, holo, reverse holo and 1st edition each have their own price
-  chip (in YouTube mode too); tap the one in front of you. If a more valuable printing
+  chip (in YouTube mode too); a card starts as *Normal* whenever it has a normal printing;
+  tap the one in front of you. If a more valuable printing
   exists, a ⚠ line says so, so you don't miss a reverse holo or 1st edition in a box
   of commons.
 - **Foil check (experimental):** while you tilt the card a little, the app watches for
-  foil shimmer and may pick *Reverse holo* or *Holo* (marked ✨). A second check that
+  foil shimmer and may pick *Reverse holo* or *Holo* (marked ✨), but only for cards
+  without a normal printing: those always stay *Normal* until you tap another. A second check that
   compares a still frame with the card's scan is measured (see **Details**) but does not
   choose the printing yet: on the first real photos it couldn't tell blurry normal
   cards from reverse holos. Labelled photos of your own cards (see `testdata/real/`)
@@ -226,10 +228,11 @@ downgrades), or restore the code from the tag.
   selling price (suggested: the shop's price, else the market value for the condition, but
   never below your **minimum selling price** from ⚙ → Webshop, for cards worth only a few
   cents; the number pad shows "Market price: x") and condition (M … PO; **sky blue**: the
-  shop already has this card in that condition, same language and type); a new product can
+  shop has copies of this card in stock in that condition, same language and type); a new product can
   get a comment (shown on its product page). Each booking adds one copy. The line above the
   button shows the card and its stock: "Pikachu 58/102 DE - 2 in stock in boxes 014, 021",
-  or for a new product "Glurak-ex (DE · EX · Holo · 2023 · 199/165) is new". The shop's address at the
+  or for a new product "Glurak-ex (DE · EX · Holo · 2023 · 199/165) is new". When a card
+  is detected, the panel scrolls down so this button is in view. The shop's address at the
   top of the panel opens ⚙ → Webshop.
   **Scanning books nothing**: the stock changes only with **Add to stock** (the product
   exists) or **Create in the shop** (it doesn't). **Undo** beside it takes the copy out again.

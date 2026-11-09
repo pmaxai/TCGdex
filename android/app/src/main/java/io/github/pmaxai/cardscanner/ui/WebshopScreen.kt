@@ -41,6 +41,8 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,6 +64,7 @@ import androidx.compose.ui.window.DialogProperties
 import io.github.pmaxai.cardscanner.data.Printing
 import io.github.pmaxai.cardscanner.shop.ShopProduct
 import io.github.pmaxai.cardscanner.shop.ShopTerms
+import kotlinx.coroutines.withTimeoutOrNull
 
 private val ShopGreen = Color(0xFF5BC98A)
 private val SellBlue = Color(0xFF6FA8FF)
@@ -163,7 +166,14 @@ private fun WebshopTopBar(state: UiState, vm: ScannerViewModel, torch: Boolean, 
 
 @Composable
 internal fun WebshopPanel(state: UiState, vm: ScannerViewModel, modifier: Modifier, onPad: (PadRequest) -> Unit) {
-    Column(modifier.verticalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp)) {
+    val scroll = rememberScrollState()
+    // a card detected: scroll down so the button (the last line) is in view, also once the shop's
+    // products have loaded below the card; touching the panel stops it
+    LaunchedEffect(state.shown?.serial, state.shop.loading) {
+        if (state.shown == null) return@LaunchedEffect
+        withTimeoutOrNull(1_500) { snapshotFlow { scroll.maxValue }.collect { if (scroll.value < it) scroll.animateScrollTo(it) } }
+    }
+    Column(modifier.verticalScroll(scroll).padding(horizontal = 12.dp, vertical = 8.dp)) {
         val shop = state.shop
         if (!shop.configured) {
             Text("Connect your Pokeshop first: host, key id and secret (from the shop's admin → API-Schlüssel).", color = Muted)
@@ -375,8 +385,8 @@ private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadReque
     }, color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
         style = LocalTextStyle.current.copy(lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.LastLineBottom)))
     FieldLabel("Condition", top = 2.dp)
-    // sky blue: the shop has this card (language and type as chosen) in that condition
-    val inShop = shop.products.orEmpty().filter { it.cardLanguage == f.language && it.finish == finish && it.grading == null }
+    // sky blue: the shop has copies of this card (language and type as chosen) in stock in that condition
+    val inShop = shop.products.orEmpty().filter { it.cardLanguage == f.language && it.finish == finish && it.grading == null && it.stock.quantity > 0 }
         .map { it.condition }.toSet()
     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         ShopTerms.CONDITIONS.forEach { g ->
