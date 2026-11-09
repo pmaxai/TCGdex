@@ -153,8 +153,10 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
 
     // orientation setting (both modes); YouTube mode also hides the system bars
     val activity = ctx as? Activity
-    LaunchedEffect(state.settings.orientation) {
-        activity?.requestedOrientation = orientationOf(state.settings.orientation)
+    // a recording keeps the orientation it started in (a turn would change the video's frame size)
+    LaunchedEffect(state.settings.orientation, state.recording.recording) {
+        activity?.requestedOrientation = if (state.recording.recording) ActivityInfo.SCREEN_ORIENTATION_LOCKED
+            else orientationOf(state.settings.orientation)
     }
     LaunchedEffect(state.settings.youtube) {
         activity ?: return@LaunchedEffect
@@ -170,7 +172,11 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
     // back in the app: a newer build? (and after "allow from this source": go on installing)
     val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
     androidx.compose.runtime.DisposableEffect(lifecycle) {
-        val obs = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) vm.onResume() }
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
+            if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) vm.onResume()
+            // home, lock, a call: a recording ends, so no other app ends up in the video
+            if (e == androidx.lifecycle.Lifecycle.Event.ON_STOP) vm.onAppStopped()
+        }
         lifecycle.addObserver(obs)
         onDispose { lifecycle.removeObserver(obs) }
     }

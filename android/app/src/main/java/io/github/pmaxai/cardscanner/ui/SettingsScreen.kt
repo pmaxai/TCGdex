@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
@@ -67,6 +68,10 @@ import androidx.compose.ui.unit.sp
 import io.github.pmaxai.cardscanner.trading.Condition
 import io.github.pmaxai.cardscanner.trading.Reference
 import io.github.pmaxai.cardscanner.update.AppUpdate
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.rememberLauncherForActivityResult
+import io.github.pmaxai.cardscanner.recording.S3Provider
+import io.github.pmaxai.cardscanner.recording.RecordingSettings
 
 /** The settings pages, in the order of the sidebar. A new feature gets its own page here. */
 enum class SettingsPage(val short: String, val title: String, val icon: ImageVector) {
@@ -76,6 +81,7 @@ enum class SettingsPage(val short: String, val title: String, val icon: ImageVec
     TRADING("Trading", "Trading Mode", Icons.Filled.ShoppingCart),
     WEBSHOP("Webshop", "Webshop", Icons.AutoMirrored.Filled.List),
     YOUTUBE("YouTube", "YouTube Mode", Icons.Filled.PlayArrow),
+    RECORDING("Record", "Recording & upload", Icons.Filled.Share),
     ADVANCED("Advanced", "Advanced", Icons.Filled.Build),
     LICENCE("Licence", "Licence", Icons.Filled.Lock),
     ABOUT("About", "About & updates", Icons.Filled.Info),
@@ -141,6 +147,7 @@ fun SettingsScreen(state: UiState, vm: ScannerViewModel, start: SettingsPage) {
                     SettingsPage.TRADING -> TradingPage(state, vm)
                     SettingsPage.WEBSHOP -> WebshopPage(state, vm)
                     SettingsPage.YOUTUBE -> YouTubePage(state, vm)
+                    SettingsPage.RECORDING -> RecordingPage(state, vm)
                     SettingsPage.ADVANCED -> AdvancedPage(state, vm)
                     SettingsPage.LICENCE -> LicencePage(state.licence)
                     SettingsPage.ABOUT -> AboutPage(state, vm)
@@ -307,6 +314,100 @@ private fun YouTubePage(state: UiState, vm: ScannerViewModel) {
             label = { Text("e.g. Surging Sparks booster box") })
     }
     Hint("The alert price for the HIT reveal is on the Prices page.")
+}
+
+/** Recording (YouTube mode): how it records, and the S3 bucket the recordings go to. */
+@Composable
+private fun RecordingPage(state: UiState, vm: ScannerViewModel) {
+    val r = state.recording
+    val cur = r.settings
+    var s by remember(cur) { mutableStateOf(cur) }
+    var secret by rememberSaveable { mutableStateOf("") }      // never shown back, only replaced
+    fun save(n: RecordingSettings) { s = n; vm.rec.saveSettings(n, null) }
+    val ctx = LocalContext.current
+    val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> if (ok) save(s.copy(mic = true)) }
+
+    Hint("YouTube mode records its own screen with ● REC, logs every card with its time in the video, and uploads both to " +
+        "your S3 bucket by itself.")
+    Heading("Recording")
+    Setting("Video quality", "applies to the screen and the camera file") {
+        Column {
+            Choices(listOf(false, true), s.hd, label = { if (it) "1080p" else "720p" }) { save(s.copy(hd = it)) }
+            Choices(listOf(6, 8, 12), s.bitrateMbps, label = { "$it Mbit/s" }) { save(s.copy(bitrateMbps = it)) }
+        }
+    }
+    SettingSwitch("Record camera too", "a clean camera.mp4 without overlays, for tight crops and re-rendered overlays", s.recordCamera) {
+        save(s.copy(recordCamera = it))
+    }
+    SettingSwitch("Fit to 16:9", "lays YouTube mode out in a 16:9 area while recording (9:16 upright), black around it", s.fit169) {
+        save(s.copy(fit169 = it))
+    }
+    SettingSwitch("Microphone", "your voice in the video (off: the pipeline can add a voiceover)", s.mic) { on ->
+        if (on && androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.RECORD_AUDIO) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED) askMic.launch(android.Manifest.permission.RECORD_AUDIO)
+        else save(s.copy(mic = on))
+    }
+    SettingSwitch("Show timer in video", "the red dot and the time are part of the recording (off: only in the notification)", s.showTimer) {
+        save(s.copy(showTimer = it))
+    }
+
+    Heading("Upload (S3)")
+    Setting("Provider", null) {
+        Choices(S3Provider.values().toList(), s.provider, label = { it.label }) { p ->
+            val region = p.defaultRegion
+            save(s.copy(provider = p, region = region, endpoint = p.endpointFor(region).ifEmpty { s.endpoint }, pathStyle = p.pathStyle))
+        }
+    }
+    when (s.provider) {
+        S3Provider.AWS, S3Provider.EXOSCALE -> Setting(if (s.provider == S3Provider.AWS) "Region" else "Zone", "used for signing") {
+            Choices(if (s.provider == S3Provider.AWS) S3Provider.AWS_REGIONS else S3Provider.EXOSCALE_ZONES, s.region, label = { it }) { z ->
+                save(s.copy(region = z, endpoint = s.provider.endpointFor(z)))
+            }
+        }
+        S3Provider.OTHER -> Setting("Region", "e.g. us-east-1 for MinIO, auto for R2") {
+            var t by remember(s.region) { mutableStateOf(s.region) }
+            OutlinedTextField(t, { t = it; save(s.copy(region = it.trim())) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        }
+    }
+    Setting("S3 endpoint", "https:// (with port if needed)") {
+        var t by remember(s.endpoint) { mutableStateOf(s.endpoint) }
+        OutlinedTextField(t, { t = it; save(s.copy(endpoint = it.trim())) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    }
+    Setting("Bucket", null) {
+        var t by remember(s.bucket) { mutableStateOf(s.bucket) }
+        OutlinedTextField(t, { t = it; save(s.copy(bucket = it.trim())) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    }
+    Setting("Path prefix", "optional, e.g. tcgdex/") {
+        var t by remember(s.prefix) { mutableStateOf(s.prefix) }
+        OutlinedTextField(t, { t = it; save(s.copy(prefix = it)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    }
+    Setting("Addressing", "path-style is needed for MinIO") {
+        Choices(listOf(false, true), s.pathStyle, label = { if (it) "Path-style" else "Virtual-hosted" }) { save(s.copy(pathStyle = it)) }
+    }
+    Setting("Access key ID", null) {
+        var t by remember(s.accessKeyId) { mutableStateOf(s.accessKeyId) }
+        OutlinedTextField(t, { t = it; save(s.copy(accessKeyId = it.trim())) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    }
+    Setting("Secret access key", if (cur.hasSecret) "stored encrypted on this phone; leave empty to keep it" else "stored encrypted, never shown again") {
+        OutlinedTextField(secret, { secret = it }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+            placeholder = { Text(if (cur.hasSecret) "••••••••" else "") })
+    }
+    SettingSwitch("Allow http (testing)", "only for a test server on your network", s.allowHttp) { save(s.copy(allowHttp = it)) }
+    Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Button(onClick = {
+            vm.rec.saveSettings(s, secret.takeIf { it.isNotBlank() }); secret = ""; vm.rec.testConnection()
+        }, enabled = !r.testing) { Text(if (r.testing) "Testing…" else "Save & test") }
+    }
+    r.connection?.let { Text((if (r.connectionOk == true) "✓ " else "⚠ ") + it, color = if (r.connectionOk == true) Sure else Warn, fontSize = 13.sp,
+        modifier = Modifier.padding(top = 4.dp)) }
+    SettingSwitch("Upload automatically", "each recording is queued when it stops", s.uploadAuto) { save(s.copy(uploadAuto = it)) }
+    SettingSwitch("Only on Wi-Fi", "Upload now (in Recordings…) sends one over mobile data", s.wifiOnly) { save(s.copy(wifiOnly = it)) }
+    SettingSwitch("Delete local copy after upload", "only once the upload is complete and checked", s.deleteAfterUpload) {
+        save(s.copy(deleteAfterUpload = it))
+    }
+    Hint("The key only needs to write (s3:PutObject and multipart uploads) under the prefix. Each recording goes to " +
+        "<prefix>recordings/<id>/; _complete.json comes last.")
 }
 
 @Composable

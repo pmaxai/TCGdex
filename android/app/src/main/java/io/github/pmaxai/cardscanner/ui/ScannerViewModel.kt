@@ -41,6 +41,7 @@ import io.github.pmaxai.cardscanner.update.AppRelease
 import io.github.pmaxai.cardscanner.BuildConfig
 import io.github.pmaxai.cardscanner.license.LicenceApi
 import io.github.pmaxai.cardscanner.recording.EventLog
+import io.github.pmaxai.cardscanner.recording.RecordingController
 import io.github.pmaxai.cardscanner.license.LicenceCheck
 import io.github.pmaxai.cardscanner.license.LicenceException
 import io.github.pmaxai.cardscanner.license.LicenceKey
@@ -356,6 +357,10 @@ data class UiState(
     val pricesDate: String? = null,
     /** the app's licence on this device */
     val licence: LicenceState = LicenceState(),
+    /** YouTube mode's recording: phase, settings, the Recordings list */
+    val recording: RecordingUi = RecordingUi(),
+    /** the data pack's version (date) */
+    val packVersion: String? = null,
 ) {
     val sessionValue: Double get() = session.sumOf { it.value ?: 0.0 }
 }
@@ -364,6 +369,9 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     private val appCtx: Application = app
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
+    /** YouTube mode's recording (screen, event log, uploads) */
+    val rec = RecordingCoordinator(app, viewModelScope, { _state.value },
+        { f -> _state.update { it.copy(recording = f(it.recording)) } }, { m -> _state.update { it.copy(message = m) } })
 
     private var pack: Pack? = null
     private var recognizer: Recognizer? = null
@@ -396,8 +404,6 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     private val shopClock = ServerClock()
     /** Webshop Mode, Sell: the customer's order, kept until it's sold or cleared */
     private val orderFile = java.io.File(app.filesDir, "shop-order.json")
-    /** the running recording's event log (null: not recording) */
-    @Volatile private var eventLog: EventLog? = null
     /** the card's corners in the recording's camera picture (0–1), set by the recording (null: no camera file) */
     @Volatile private var quadForLog: (() -> List<DoubleArray>?)? = null
     /** the licence on this phone, and the license service next to the shop */
@@ -480,7 +486,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                     p.db.rawQuery("SELECT MAX(updated) FROM prices", null).use { c -> if (c.moveToFirst()) c.getString(0) else null }
                 }.getOrNull()
                 _state.update { it.copy(loading = false, packInfo = info, hasPsaData = psa, hasCategories = cat.hasCategory,
-                    pricesDate = prices) }
+                    pricesDate = prices, packVersion = p.version.take(10)) }
                 applyEnergyFilter(_state.value.settings.energyFilter)
                 checkForUpdate()
             } catch (t: Throwable) {
@@ -1105,7 +1111,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     // ---------------------------------------------------------------- recording: the event log
     /** Right after the pack or the shown card changed: the recording's log works out what happened. */
     private fun logPack(reason: EventLog.Reason, source: String? = null) {
-        val log = eventLog ?: return
+        val log = RecordingController.log ?: return
         val st = _state.value
         runCatching { log.observe(reason, source, st.shown, st.session, quadForLog?.invoke()) }
             .onFailure { Log.w(TAG, "event log", it) }
@@ -1176,7 +1182,11 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** The app left the screen: a recording ends here, so nothing else gets into the video. */
+    fun onAppStopped() { if (RecordingController.recording) rec.stop("background") }
+
     fun onResume() {
+        rec.refresh()
         checkLicence()
         checkForUpdate()
         val u = _state.value.update ?: return

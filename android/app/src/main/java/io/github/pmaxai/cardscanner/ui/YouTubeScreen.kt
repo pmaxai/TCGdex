@@ -52,6 +52,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
@@ -106,19 +108,29 @@ fun YouTubeScreen(state: UiState, vm: ScannerViewModel) {
         }
     }
     var torch by rememberSaveable { mutableStateOf(false) }
+    var startSheet by rememberSaveable { mutableStateOf(false) }
+    var recordings by rememberSaveable { mutableStateOf(false) }
+    val startRec = { if (state.recording.settings.uploadReady) startSheet = true else vm.openSettings(SettingsPage.RECORDING) }
     val menu: @Composable () -> Unit = {
         MenuButton(state, vm, torch, onTorch = { torch = it }, onSettings = { vm.openSettings(SettingsPage.YOUTUBE) },
-            onSave = { savePack.launch(PackCsv.fileName(state.settings)) })
+            onSave = { savePack.launch(PackCsv.fileName(state.settings)) }, onRecord = startRec, onRecordings = { recordings = true })
     }
+    val rec: @Composable () -> Unit = { RecButton(state, vm, startRec) }
 
-    Box(Modifier.fillMaxSize().background(Ink)) {
+    // while recording with Fit to 16:9: the screen in a centred 16:9 (upright 9:16) area, black around it
+    val fit = state.recording.recording && state.recording.settings.fit169
+    Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+    Box(if (fit) Modifier.aspectRatio(if (landscape) 16f / 9f else 9f / 16f).background(Ink)
+            .onGloballyPositioned { c -> vm.rec.contentRect = c.boundsInWindow().let { b ->
+                android.graphics.Rect(b.left.toInt(), b.top.toInt(), b.right.toInt(), b.bottom.toInt()) } }
+        else Modifier.fillMaxSize().background(Ink).onGloballyPositioned { vm.rec.contentRect = null }) {
         if (landscape) {
             Row(Modifier.fillMaxSize()) {
                 CameraArea(state, vm, torch, video = true, modifier = Modifier.weight(1f).fillMaxHeight())
                 Column(Modifier.weight(1f).fillMaxHeight().padding(horizontal = 16.dp, vertical = 10.dp)) {
                     TitleLine(state.settings.title)
                     Reveal(state, vm, Modifier.weight(1f).fillMaxWidth())
-                    SessionBar(state, menu, vm::addAgain)
+                    SessionBar(state, menu, rec, vm::addAgain)
                 }
             }
         } else {
@@ -127,11 +139,20 @@ fun YouTubeScreen(state: UiState, vm: ScannerViewModel) {
                 CameraArea(state, vm, torch, video = true, modifier = Modifier.fillMaxWidth().weight(1f))
                 Column(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Reveal(state, vm, Modifier.weight(1f).fillMaxWidth())
-                    SessionBar(state, menu, vm::addAgain)
+                    SessionBar(state, menu, rec, vm::addAgain)
                 }
             }
         }
+        // after Stop: what was recorded and where it stands (gone at the next Start)
+        if (!state.recording.recording) state.recording.lastSummary?.let { line ->
+            Text(line, color = Color.White, fontSize = 13.sp, maxLines = 2,
+                modifier = Modifier.align(Alignment.TopCenter).padding(8.dp).background(Color(0xCC000000), RoundedCornerShape(10.dp))
+                    .clickable { recordings = true }.padding(horizontal = 12.dp, vertical = 6.dp))
+        }
     }
+    }
+    if (startSheet) StartSheet(state, vm, landscape) { startSheet = false }
+    if (recordings) RecordingsDialog(state, vm) { recordings = false }
 }
 
 @Composable
@@ -382,7 +403,7 @@ private fun BoxScope.Burst(key: Int) {
 }
 
 @Composable
-private fun SessionBar(state: UiState, menu: @Composable () -> Unit, onPlusOne: () -> Unit) {
+private fun SessionBar(state: UiState, menu: @Composable () -> Unit, rec: @Composable () -> Unit, onPlusOne: () -> Unit) {
     val items = state.session
     val threshold = state.settings.threshold
     Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
@@ -392,6 +413,7 @@ private fun SessionBar(state: UiState, menu: @Composable () -> Unit, onPlusOne: 
                 withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.Bold)) { append(eur(state.sessionValue)) }
             }
             FitText(line, 22.sp, Color.White, Modifier.weight(1f))
+            rec()
             // +1: the shown card once more (two of the same in a row)
             val can = state.shown != null
             Box(Modifier.padding(end = 8.dp).size(44.dp).border(2.dp, if (can) Gold else Muted.copy(alpha = 0.4f), CircleShape)
@@ -418,7 +440,7 @@ private fun SessionBar(state: UiState, menu: @Composable () -> Unit, onPlusOne: 
 /** The settings button (⚙) with the YouTube mode's menu. */
 @Composable
 private fun MenuButton(state: UiState, vm: ScannerViewModel, torch: Boolean, onTorch: (Boolean) -> Unit, onSettings: () -> Unit,
-                       onSave: () -> Unit) {
+                       onSave: () -> Unit, onRecord: () -> Unit, onRecordings: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         Box(Modifier.size(44.dp).background(Panel, CircleShape).clickable { open = true }, contentAlignment = Alignment.Center) {
@@ -432,6 +454,8 @@ private fun MenuButton(state: UiState, vm: ScannerViewModel, torch: Boolean, onT
                 Triple("Next card", true) { vm.next() },
                 Triple(if (torch) "Light off" else "Light on", true) { onTorch(!torch) },
                 Triple("Search a card…", true) { vm.openSearch(SearchMode.LOOK_UP) },
+                if (state.recording.recording) Triple("Stop recording", true) { vm.rec.stop() } else Triple("Start recording", true, onRecord),
+                Triple("Recordings…", true, onRecordings),
                 Triple("Settings…", true, onSettings),
                 Triple("Exit YouTube mode", true) { vm.updateSettings { it.copy(youtube = false) } },
             )

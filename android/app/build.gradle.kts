@@ -126,6 +126,8 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.7.0")
     // QR codes for the licence: reading (activation) and showing (switch to new device)
     implementation("com.google.zxing:core:3.5.3")
+    // recording uploads that go on with the app closed, when the network fits (spec UP-7)
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 
     androidTestImplementation(composeBom)
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
