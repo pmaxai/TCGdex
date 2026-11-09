@@ -290,8 +290,11 @@ downgrades), or restore the code from the tag.
     pack** or **New pack**, the microphone (off by default; the pipeline can add a
     voiceover) and the space it needs (a warning below an hour). Android then asks to share
     the screen; on Android 14 and later choose *A single app* → Card Scanner.
-    While recording, the button shows a red dot and the time (tap it to stop; the
-    notification has Stop too) and the screen orientation is locked. There is no length
+    While recording, ● REC leaves the bar (nothing covers the pack value): a red dot and the
+    time sit in the black border beside the 16:9 area, in a window the screen recording
+    leaves out, so they are not in the video (tap them to stop; ⚙ → *Stop recording* and
+    the notification's Stop work too, also without Fit to 16:9, where there is no border
+    and so no timer on screen). The screen orientation is locked. There is no length
     limit. The recording stops by itself when the app goes into the background or the
     phone has less than 300 MB left. If the app crashes, at most the last 10 seconds are
     lost: the next start repairs the file and marks the recording *recovered*.

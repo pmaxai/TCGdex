@@ -13,6 +13,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
 import io.github.pmaxai.cardscanner.license.Activated
 import io.github.pmaxai.cardscanner.license.LicenceStore
 import io.github.pmaxai.cardscanner.recording.RecordingController
@@ -92,6 +93,11 @@ class RecordingEndToEndTest {
             .takeLast(40).forEach { Log.i("RecordingE2E", "log: $it") }
     }
 
+    private fun savePicture(name: String, bmp: android.graphics.Bitmap?) {
+        bmp ?: return
+        runCatching { androidx.test.services.storage.TestStorage().openOutputFile(name).use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
+    }
+
     @Test
     fun aRecordingFromConsentToUpload() {
         val pkg = ctx.packageName
@@ -123,6 +129,16 @@ class RecordingEndToEndTest {
             assumeTrue("screen capture not granted on this device", res != null && res.resultCode == Activity.RESULT_OK && res.data != null)
             scenario.onActivity { vm.rec.start(res!!.resultCode, res.data!!, landscape = false) }
             waitUntil(30_000, "first frame") { RecordingController.phase.value is RecordingController.Phase.Recording && RecordingController.log != null }
+            // the red dot and the time: on the screen, in the black border (they must not be in the video, see below)
+            val dev = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+            val timer = dev.wait(Until.findObject(By.pkg(ctx.packageName).text(Pattern.compile("\\d+:\\d\\d(:\\d\\d)?"))), 5_000)
+            assertTrue("the recording's time is on the screen", timer != null)
+            val timerBounds = timer!!.visibleBounds
+            val screen = android.graphics.Point().also { p ->
+                @Suppress("DEPRECATION") ctx.getSystemService(android.view.WindowManager::class.java).defaultDisplay.getRealSize(p) }
+            Log.i("RecordingE2E", "timer '${timer.text}' at $timerBounds on a ${screen.x}x${screen.y} screen")
+            savePicture("recording-3-screen-while-recording.png",
+                runCatching { InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot() }.getOrNull())
 
             // a scripted pack: two cards looked up and put into the pack, the last one removed again
             val cards = runBlocking { vm.search("pikachu") }.take(2)
@@ -167,6 +183,29 @@ class RecordingEndToEndTest {
             Log.i("RecordingE2E", "reveals at " + reveals.joinToString { "${it.getString("type")}@${it.getLong("t_ms")}" })
             reveals.forEach { e -> Log.i("RecordingE2E", "  ${e.getString("type")}@${e.getLong("t_ms")} entry=${e.opt("entry")} " +
                 "in_pack=${e.opt("in_pack")} source=${e.opt("source")} card=${e.getJSONObject("card").optString("id")}") }
+
+            // the red dot and the time are not in the video (their window is secure: recorded black, on black)
+            val frame = android.media.MediaMetadataRetriever().run {
+                try { setDataSource(dir.video.path); getFrameAtTime(3_000_000, android.media.MediaMetadataRetriever.OPTION_CLOSEST) } finally { release() }
+            }!!
+            savePicture("recording-4-the-video-at-3s.png", frame)
+            val sy = frame.height.toDouble() / screen.y
+            val bandTop = cr.getInt("y") + cr.getInt("height")
+            assertTrue("the timer sits in the border below the 16:9 area: $timerBounds", timerBounds.top * sy >= bandTop - 2)
+            // the whole border below the 16:9 area: no red dot, no red frame
+            var red = 0; var px = 0
+            for (y in bandTop until frame.height)
+                for (x in 0 until frame.width) {
+                    val c = frame.getPixel(x, y); px++
+                    if (android.graphics.Color.red(c) > 150 && android.graphics.Color.green(c) < 120 && android.graphics.Color.blue(c) < 120) red++
+                }
+            var lit = 0
+            for (y in cr.getInt("y") until cr.getInt("y") + cr.getInt("height") step 4)
+                for (x in cr.getInt("x") until cr.getInt("x") + cr.getInt("width") step 4)
+                    if (frame.getPixel(x.coerceAtMost(frame.width - 1), y.coerceAtMost(frame.height - 1)).let { android.graphics.Color.green(it) } > 60) lit++
+            Log.i("RecordingE2E", "video frame at 3 s: $red red of $px pixels in the border with the timer; $lit lit samples in the 16:9 area")
+            assertTrue("the YouTube screen is in the video", lit > 50)
+            assertEquals("the timer is not in the video", 0, red)
 
             // FIX-4: the screen file plays, at a constant 30 fps
             val ex = MediaExtractor()

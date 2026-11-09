@@ -50,6 +50,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.SecureFlagPolicy
+import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.window.Popup
 import androidx.core.content.ContextCompat
 import io.github.pmaxai.cardscanner.recording.RecStatus
 import io.github.pmaxai.cardscanner.recording.RecordingController
@@ -59,34 +62,57 @@ import java.util.Locale
 val RecRed = Color(0xFFE5484D)
 
 /**
- * ● REC next to +1 and ⚙. Idle: opens the start sheet (or the Recording settings while the
- * upload settings are incomplete). Recording: a red dot and the time; a tap stops.
+ * ● REC next to +1 and ⚙: opens the start sheet (or the Recording settings while the upload
+ * settings are incomplete). While recording it is gone from the bar (nothing covers the pack
+ * value, nothing of it is in the video): [RecIndicator] shows the time outside the video.
  */
 @Composable
 fun RecButton(state: UiState, vm: ScannerViewModel, onStart: () -> Unit) {
     val r = state.recording
-    val phase = r.phase
-    if (phase is RecordingController.Phase.Recording || phase is RecordingController.Phase.Starting || phase is RecordingController.Phase.Stopping) {
-        if (!r.settings.showTimer) return
-        var now by remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
-        LaunchedEffect(phase) { while (true) { now = android.os.SystemClock.elapsedRealtime(); delay(250) } }
-        val secs = if (phase is RecordingController.Phase.Recording) ((now - phase.since) / 1000).coerceAtLeast(0) else 0
-        val blink = (now / 600) % 2 == 0L
-        Row(Modifier.padding(end = 8.dp).height(44.dp).background(Panel, RoundedCornerShape(22.dp)).border(2.dp, RecRed, RoundedCornerShape(22.dp))
-            .clickable(enabled = phase is RecordingController.Phase.Recording) { vm.rec.stop() }.padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(12.dp).background(if (blink || phase !is RecordingController.Phase.Recording) RecRed else RecRed.copy(alpha = 0.35f), CircleShape))
-            Text(when (phase) {
-                is RecordingController.Phase.Stopping -> "  saving…"
-                is RecordingController.Phase.Starting -> "  starting…"
-                else -> "  %d:%02d".format(Locale.ROOT, secs / 60, secs % 60)
-            }, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+    if (r.recording) return
+    Box(Modifier.padding(end = 8.dp).height(44.dp).border(2.dp, RecRed, RoundedCornerShape(22.dp))
+        .clickable { if (r.settings.uploadReady) onStart() else vm.openSettings(SettingsPage.RECORDING) }.padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center) {
+        Text("● REC", color = RecRed, fontSize = 15.sp, fontWeight = FontWeight.Black)
+    }
+}
+
+/**
+ * While recording: a red dot and the time (a tap stops), in the black border around the 16:9
+ * area and in a window of its own that is marked secure, so the screen recording doesn't take
+ * it (it records black there, on black). Stacked ([vertical]) for the narrow side borders.
+ */
+@Composable
+fun RecIndicator(state: UiState, vm: ScannerViewModel, vertical: Boolean) {
+    val phase = state.recording.phase
+    if (phase is RecordingController.Phase.Idle) return
+    var now by remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
+    LaunchedEffect(phase) { while (true) { now = android.os.SystemClock.elapsedRealtime(); delay(250) } }
+    val secs = if (phase is RecordingController.Phase.Recording) ((now - phase.since) / 1000).coerceAtLeast(0) else 0
+    val blink = (now / 600) % 2 == 0L
+    val label = when (phase) {
+        is RecordingController.Phase.Stopping -> "saving"
+        is RecordingController.Phase.Starting -> "start"
+        else -> if (secs >= 3600) "%d:%02d:%02d".format(Locale.ROOT, secs / 3600, secs / 60 % 60, secs % 60)
+            else "%d:%02d".format(Locale.ROOT, secs / 60, secs % 60)
+    }
+    Popup(alignment = Alignment.Center, properties = PopupProperties(focusable = false, clippingEnabled = false,
+        securePolicy = SecureFlagPolicy.SecureOn)) {
+        val m = Modifier.background(Panel, RoundedCornerShape(14.dp)).border(1.5.dp, RecRed, RoundedCornerShape(14.dp))
+            .clickable(enabled = phase is RecordingController.Phase.Recording) { vm.rec.stop() }
+        val dot: @Composable () -> Unit = {
+            Box(Modifier.size(10.dp).background(if (blink || phase !is RecordingController.Phase.Recording) RecRed else RecRed.copy(alpha = 0.35f), CircleShape))
         }
-    } else {
-        Box(Modifier.padding(end = 8.dp).height(44.dp).border(2.dp, RecRed, RoundedCornerShape(22.dp))
-            .clickable { if (r.settings.uploadReady) onStart() else vm.openSettings(SettingsPage.RECORDING) }.padding(horizontal = 12.dp),
-            contentAlignment = Alignment.Center) {
-            Text("● REC", color = RecRed, fontSize = 15.sp, fontWeight = FontWeight.Black)
+        if (vertical) {
+            Column(m.padding(horizontal = 6.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                dot()
+                Text(label, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
+            }
+        } else {
+            Row(m.padding(horizontal = 10.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                dot()
+                Text("  $label", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
         }
     }
 }

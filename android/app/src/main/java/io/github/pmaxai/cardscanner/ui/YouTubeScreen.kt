@@ -24,6 +24,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -123,7 +124,18 @@ fun YouTubeScreen(state: UiState, vm: ScannerViewModel) {
     // the area in screen pixels goes into the log (kept until the log is written after Stop)
     val fit = state.recording.recording && state.recording.settings.fit169
     val view = LocalView.current
-    Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+    // the black border around the 16:9 area: the recording's dot and time go there, in a window the
+    // screen recording doesn't see (black on black in the video), so nothing covers the pack value
+    if (fit && state.recording.settings.showTimer) {
+        if (landscape) {
+            val side = (maxWidth - minOf(maxWidth, maxHeight * 16f / 9f)) / 2
+            if (side >= 44.dp) Box(Modifier.align(Alignment.CenterEnd).width(side).fillMaxHeight()) { RecIndicator(state, vm, vertical = true) }
+        } else {
+            val band = (maxHeight - minOf(maxHeight, maxWidth * 16f / 9f)) / 2
+            if (band >= 28.dp) Box(Modifier.align(Alignment.BottomCenter).height(band).fillMaxWidth()) { RecIndicator(state, vm, vertical = false) }
+        }
+    }
     Box(if (fit) Modifier.aspectRatio(if (landscape) 16f / 9f else 9f / 16f).background(Ink)
             .onGloballyPositioned { c ->
                 if (!state.recording.recording) return@onGloballyPositioned

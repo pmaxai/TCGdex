@@ -347,7 +347,7 @@ private fun RecordingPage(state: UiState, vm: ScannerViewModel) {
             android.content.pm.PackageManager.PERMISSION_GRANTED) askMic.launch(android.Manifest.permission.RECORD_AUDIO)
         else save(s.copy(mic = on))
     }
-    SettingSwitch("Show timer in video", "the red dot and the time are part of the recording (off: only in the notification)", s.showTimer) {
+    SettingSwitch("Show timer", "the red dot and the time beside the 16:9 area while recording, never in the video (off: only in the notification)", s.showTimer) {
         save(s.copy(showTimer = it))
     }
 
