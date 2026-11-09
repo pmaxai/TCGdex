@@ -32,6 +32,8 @@ android {
         // Only the test run gets them, never the app.
         System.getenv("POKESHOP_STAGING_KEY_ID")?.takeIf { it.isNotBlank() }?.let { testInstrumentationRunnerArguments["shopKeyId"] = it }
         System.getenv("POKESHOP_STAGING_SECRET")?.takeIf { it.isNotBlank() }?.let { testInstrumentationRunnerArguments["shopSecret"] = it }
+        // a MinIO the CI starts for the S3 upload test (recordings); the test is skipped without it
+        System.getenv("S3_TEST_ENDPOINT")?.takeIf { it.isNotBlank() }?.let { testInstrumentationRunnerArguments["s3Endpoint"] = it }
         // Licence: the app asks for one only when this is on (gradle.properties), i.e. once the
         // license service runs. The service's address can be changed the same way.
         val licenceRequired = providers.gradleProperty("cardscanner.licenceRequired").orNull == "true"
