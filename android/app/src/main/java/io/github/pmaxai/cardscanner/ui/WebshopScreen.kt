@@ -60,7 +60,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import io.github.pmaxai.cardscanner.data.Printing
-import io.github.pmaxai.cardscanner.shop.ShopClient
 import io.github.pmaxai.cardscanner.shop.ShopProduct
 import io.github.pmaxai.cardscanner.shop.ShopTerms
 
@@ -389,9 +388,12 @@ private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadReque
         }
     }
 
-    // what the button does, said plainly
-    val box = f.box?.let { ShopClient.box(it) }
-    Text(if (match != null) "${match.stock.quantity} in stock now – this adds 1 to box ${box ?: "…"}"
+    // the card and its stock, or what the button creates
+    Text(if (match != null) {
+            val boxes = match.stock.boxes.filter { it.quantity > 0 }.map { it.box }
+            "${s.version.name} ${s.version.numberText} ${match.cardLanguage} - ${match.stock.quantity} in stock" +
+                (if (boxes.isNotEmpty()) " in boxes " + boxes.joinToString(", ") else "")
+        }
         else "${s.version.name} (" + listOfNotNull(f.language, f.condition, ShopTerms.finishLabel(finish), s.version.year, s.version.numberText)
             .joinToString(" · ") + ") is new" + (if (f.price == null) " – without a price it stays a draft" else ""),
         color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))

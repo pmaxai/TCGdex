@@ -228,8 +228,8 @@ downgrades), or restore the code from the tag.
   cents; the number pad shows "Market price: x") and condition (M … PO; **sky blue**: the
   shop already has this card in that condition, same language and type); a new product can
   get a comment (shown on its product page). Each booking adds one copy. The line above the
-  button says what it will do: "2 in stock now – this adds 1 to box 014", or for a new
-  product "Glurak-ex (DE · EX · Holo · 2023 · 199/165) is new". The shop's address at the
+  button shows the card and its stock: "Pikachu 58/102 DE - 2 in stock in boxes 014, 021",
+  or for a new product "Glurak-ex (DE · EX · Holo · 2023 · 199/165) is new". The shop's address at the
   top of the panel opens ⚙ → Webshop.
   **Scanning books nothing**: the stock changes only with **Add to stock** (the product
   exists) or **Create in the shop** (it doesn't). **Undo** beside it takes the copy out again.
