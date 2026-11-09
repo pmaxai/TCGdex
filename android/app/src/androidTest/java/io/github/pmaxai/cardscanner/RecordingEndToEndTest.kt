@@ -94,6 +94,7 @@ class RecordingEndToEndTest {
         val pkg = ctx.packageName
         Log.i("RecordingE2E", "appops: " + shell("appops set $pkg PROJECT_MEDIA allow") + shell("appops get $pkg PROJECT_MEDIA").trim())
         shell("pm grant $pkg android.permission.POST_NOTIFICATIONS")
+        shell("pm grant $pkg android.permission.CAMERA") // else the app's camera question covers the screen
         RecordingPrefs(ctx).save(RecordingSettings(recordCamera = false, uploadAuto = false, mic = false, fit169 = false))
         val scenario = ActivityScenario.launch(MainActivity::class.java)
         try {
