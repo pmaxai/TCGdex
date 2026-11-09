@@ -165,6 +165,8 @@ class RecordingEndToEndTest {
             val reveals = o.getJSONArray("events").let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
                 .filter { it.getString("type") == "card_shown" || it.getString("type") == "card_added_again" }
             Log.i("RecordingE2E", "reveals at " + reveals.joinToString { "${it.getString("type")}@${it.getLong("t_ms")}" })
+            reveals.forEach { e -> Log.i("RecordingE2E", "  ${e.getString("type")}@${e.getLong("t_ms")} entry=${e.opt("entry")} " +
+                "in_pack=${e.opt("in_pack")} source=${e.opt("source")} card=${e.getJSONObject("card").optString("id")}") }
 
             // FIX-4: the screen file plays, at a constant 30 fps
             val ex = MediaExtractor()
@@ -178,8 +180,8 @@ class RecordingEndToEndTest {
             val fps = (times.size - 1) * 1_000_000.0 / (times.last() - times.first())
             val even = gaps.count { kotlin.math.abs(it - 33_333) <= 1_000 }
             Log.i("RecordingE2E", "video: ${times.size} frames, %.2f fps, %d of %d gaps 1/30 s".format(fps, even, gaps.size))
-            assertTrue("%.2f fps".format(fps), fps in 28.0..30.5)
-            assertTrue("frames 1/30 s apart: $even of ${gaps.size}", even >= gaps.size * 0.9)
+            assertTrue("%.2f fps".format(fps), fps in 29.5..30.5)
+            assertTrue("frames 1/30 s apart: $even of ${gaps.size}", even >= gaps.size * 0.98)
 
             // and goes up into a real S3 (the CI's MinIO), marker last
             val endpoint = InstrumentationRegistry.getArguments().getString("s3Endpoint").orEmpty()

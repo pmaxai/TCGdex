@@ -60,9 +60,10 @@ class FramePacer(private val target: Surface, private val width: Int, private va
             if (!running) return
             try {
                 val now = System.nanoTime()
-                // far behind (the phone stalled): skip ahead instead of a burst of old frames
+                // behind (the phone stalled): the missed ticks are drawn now, each with its own time, so the
+                // rate stays constant; only after a stall of over 2 s the clock skips ahead
                 val due = first + frame * period
-                if (now - due > 4 * period) frame += (now - due) / period
+                if (now - due > 60 * period) frame += (now - due) / period
                 draw(first + frame * period)
                 frame++
                 val next = first + frame * period
