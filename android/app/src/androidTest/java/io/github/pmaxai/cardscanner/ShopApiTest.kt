@@ -102,6 +102,16 @@ class ShopApiTest {
         assertEquals(1, sent.map { it.body.readUtf8() }.toSet().size)            // identical bytes every time
     }
 
+    /** No picture in the shop: the app's picture of the card goes along (front, https only), and a draft can be made live. */
+    @Test
+    fun aBookingCanBringThePicture() {
+        val url = "https://images.pokemontcg.io/swsh11tg/TG11_hires.png"
+        val body = ShopClient.intakeBody("swsh11tg-TG11", "EN", "NM", "holo", 1, ShopClient.box(3), imageUrl = url, status = "active")
+        assertEquals("""{"card_ref":"swsh11tg-TG11","card_language":"EN","condition":"NM","finish":"holo","delta":1,"storage_location":"003",""" +
+            """"images":[{"role":"front","url":"https:\/\/images.pokemontcg.io\/swsh11tg\/TG11_hires.png"}],"status":"active"}""", body.toString())
+        assertTrue(!ShopClient.intakeBody("x", "DE", "NM", "normal", 1, "001", imageUrl = "http://example.com/a.png").has("images"))
+    }
+
     @Test
     fun aWrongClockIsCorrectedFromTheDateHeader() {
         val serverNow = System.currentTimeMillis() + 10 * 60_000L                 // the shop is 10 minutes ahead

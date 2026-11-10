@@ -313,8 +313,13 @@ class ShopClient(
         private val JSON = "application/json".toMediaType()
 
         /** The body of POST /stock/intake (only documented fields; nothing null). */
+        /**
+         * The body of POST /stock/intake. [imageUrl]: a picture of the card for the product (the shop fetches
+         * it), when the shop has none; [status]: "active" to make a draft product live.
+         */
         fun intakeBody(cardRef: String, language: String, condition: String, finish: String, delta: Int, box: String,
-                       price: Money? = null, descriptionDe: String? = null, nameDe: String? = null, nameEn: String? = null): JSONObject =
+                       price: Money? = null, descriptionDe: String? = null, nameDe: String? = null, nameEn: String? = null,
+                       imageUrl: String? = null, status: String? = null): JSONObject =
             JSONObject().apply {
                 put("card_ref", cardRef); put("card_language", language); put("condition", condition); put("finish", finish)
                 put("delta", delta); put("storage_location", box)
@@ -322,6 +327,8 @@ class ShopClient(
                 descriptionDe?.takeIf { it.isNotBlank() }?.let { put("description_de", it.trim()) }
                 nameDe?.takeIf { it.isNotBlank() }?.let { put("name_de", it.trim()) }
                 nameEn?.takeIf { it.isNotBlank() }?.let { put("name_en", it.trim()) }
+                imageUrl?.takeIf { it.startsWith("https://") }?.let { put("images", JSONArray().put(JSONObject().put("role", "front").put("url", it))) }
+                status?.let { put("status", it) }
             }
 
         /** The body of POST /batch changing the stock of several products: (sku, box, delta) each, with a reason. */

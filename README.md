@@ -232,7 +232,11 @@ downgrades), or restore the code from the tag.
   get a comment (shown on its product page). Each booking adds one copy. The line above the
   button shows the card and its stock: "Pikachu 58/102 DE - 2 in stock in boxes 014, 021",
   or for a new product "Glurak-ex (DE · EX · Holo · 2023 · 199/165) is new". When a card
-  is detected, the panel scrolls down so this button is in view. The shop's address at the
+  is detected, the panel scrolls down so this button is in view. A product goes live only
+  with a price and a picture: when the shop's card catalogue has no picture of the card
+  (it takes them from TCGdex, which lacks some, e.g. Trainer Gallery cards), the booking
+  sends the picture the app shows, and a product that stayed a draft only for that goes
+  live with its next booking. A booking's warnings are cleared with the next card. The shop's address at the
   top of the panel opens ⚙ → Webshop.
   **Scanning books nothing**: the stock changes only with **Add to stock** (the product
   exists) or **Create in the shop** (it doesn't). **Undo** beside it takes the copy out again.

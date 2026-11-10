@@ -60,6 +60,7 @@ import io.github.pmaxai.cardscanner.shop.ShopCredentials
 import io.github.pmaxai.cardscanner.shop.shopWarningText
 import io.github.pmaxai.cardscanner.update.AppUpdate
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -132,6 +133,8 @@ data class Shown(
      */
     val imageCard: CardInfo? get() = (listOfNotNull(version, priceCard, english) +
         versions.sortedBy { if (it.id == version.id) 0 else 1 }).firstOrNull { it.thumbnailUrl != null }
+    /** the large picture of exactly this card (its language, else English), as the app shows it; for the shop */
+    val pictureUrl: String? get() = listOfNotNull(version, english, priceCard).firstNotNullOfOrNull { it.highUrl }
     /** position of the shown version in [versions] */
     val versionIndex: Int get() = versions.indexOfFirst { it.id == version.id && it.lang == version.lang }
     val selected: Printing? get() = priceCard.printing(printing)
@@ -270,6 +273,8 @@ data class ShopState(
     val cardRef: String? = null,
     val loading: Boolean = false,
     val products: List<ShopProduct>? = null,
+    /** the shop's card catalogue has a picture of the card (null: not known) */
+    val catalogPicture: Boolean? = null,
     val lookupError: String? = null,
     val form: ShopForm = ShopForm(),
     /** a booking is on its way */
@@ -715,6 +720,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             else shop.form.let { f -> if (f.languageByUser) f else f.copy(language = lang) }
         updateShop { it.copy(form = withSuggestedPrice(form, s, if (newCard) null else it.products),
             error = if (newCard) null else it.error, unknownCard = null,
+            // the last booking's warnings belong to that card (the booking itself stays, for Undo)
+            booking = if (newCard) it.booking?.copy(warnings = emptyList()) else it.booking,
             sellSku = if (newCard) null else it.sellSku, sellBox = if (newCard) null else it.sellBox) }
         if (newCard) lookupShop(s.version.id)
     }
@@ -724,13 +731,16 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         cardRef ?: return
         val c = client()
         if (c == null) { updateShop { it.copy(cardRef = cardRef, products = null, loading = false, lookupError = null) }; return }
-        updateShop { it.copy(cardRef = cardRef, loading = true, lookupError = null, products = null) }
+        updateShop { it.copy(cardRef = cardRef, loading = true, lookupError = null, products = null, catalogPicture = null) }
         viewModelScope.launch(Dispatchers.IO) {
+            // does the shop's card catalogue have a picture? if not, a booking sends the app's own
+            val picture = async { runCatching { c.masterCards(cardRef = cardRef).any { it.imageUrl != null } }.getOrNull() }
             val r = runCatching { c.productsOfCard(cardRef) }
+            val hasPicture = picture.await()
             updateShop { st ->
                 if (st.cardRef != cardRef) st          // another card meanwhile
                 else r.fold(
-                    { list -> withSellDefaults(st.copy(loading = false, products = list,
+                    { list -> withSellDefaults(st.copy(loading = false, products = list, catalogPicture = hasPicture,
                         form = _state.value.shown?.let { withSuggestedPrice(st.form, it, list) } ?: st.form)) },
                     { e -> st.copy(loading = false, lookupError = (e as? ShopException)?.friendly ?: (e.message ?: "lookup failed")) },
                 )
@@ -800,8 +810,14 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val finish = ShopTerms.finishOf(s.printing)
         // the price goes along for a new product, or when the user typed one (it then replaces the shop's)
         val price = f.price?.takeIf { match == null || f.priceByUser }?.let { Money.ofEuros(it) }
+        // no picture in the shop (its card catalogue has none, the product none of its own): the app's picture of
+        // the card goes along, so the product can go live; a product left a draft for that alone is made live now
+        val ownPicture = match != null && match.images.any { it.status != "failed" }
+        val picture = s.pictureUrl?.takeIf { st.shop.catalogPicture != true && !ownPicture }
+        val activate = picture != null && match != null && match.status == "draft" && (match.price != null || price != null)
         val body = ShopClient.intakeBody(s.version.id, f.language, f.condition, finish, f.quantity, ShopClient.box(box), price,
-            descriptionDe = f.comment.takeIf { match == null }, nameDe = nameDe, nameEn = nameEn)
+            descriptionDe = f.comment.takeIf { match == null }, nameDe = nameDe, nameEn = nameEn,
+            imageUrl = picture, status = if (activate) "active" else null)
         val w = PendingWrite.json("POST", "/stock/intake", body)
         val label = "${s.version.name} (${f.language} · ${f.condition} · ${ShopTerms.finishLabel(finish)})"
         pendingShop = w
