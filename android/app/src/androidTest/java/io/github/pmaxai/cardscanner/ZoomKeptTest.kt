@@ -41,13 +41,16 @@ class ZoomKeptTest {
         android.os.ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(cmd))
             .use { String(it.readBytes()) }
 
-    /** the back camera's zoom now and its largest (null: not known yet) */
+    /**
+     * The app's camera's zoom now and its largest (null: not known yet): the camera bound to the
+     * activity (asking with no use cases hands out that camera and changes nothing).
+     */
     private fun cameraZoom(scenario: ActivityScenario<MainActivity>): Pair<Float, Float>? {
         val provider = ProcessCameraProvider.getInstance(ctx).get()
         var z: Pair<Float, Float>? = null
-        scenario.onActivity {
-            z = CameraSelector.DEFAULT_BACK_CAMERA.filter(provider.availableCameraInfos).firstOrNull()
-                ?.zoomState?.value?.let { it.zoomRatio to it.maxZoomRatio }
+        scenario.onActivity { a ->
+            z = provider.bindToLifecycle(a, CameraSelector.DEFAULT_BACK_CAMERA)
+                .cameraInfo.zoomState.value?.let { it.zoomRatio to it.maxZoomRatio }
         }
         return z
     }
@@ -74,7 +77,7 @@ class ZoomKeptTest {
 
             fun zoomIsTwo(what: String) {
                 Thread.sleep(2_000)        // CameraX has had time to reset it
-                waitUntil(8_000, "$what: zoom 2x, camera at ${cameraZoom(scenario)?.first}") { abs((cameraZoom(scenario)?.first ?: 0f) - 2f) < 0.05f }
+                waitUntil(8_000, "$what: zoom 2x, camera at ${cameraZoom(scenario)?.first}, setting ${vm.state.value.settings.zoom}, max ${vm.state.value.maxZoom}") { abs((cameraZoom(scenario)?.first ?: 0f) - 2f) < 0.05f }
                 Thread.sleep(1_000)
                 val z = cameraZoom(scenario)!!.first
                 Log.i("ZoomKept", "$what: camera at ${z}x, setting ${vm.state.value.settings.zoom}x")

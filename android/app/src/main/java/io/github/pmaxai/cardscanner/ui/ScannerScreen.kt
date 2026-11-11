@@ -697,12 +697,13 @@ private suspend fun applyZoom(c: Camera, zoom: Float, executor: java.util.concur
         val max = c.cameraInfo.zoomState.value?.maxZoomRatio
         val target = if (max != null) zoom.coerceIn(1f, maxOf(1f, max)) else zoom.coerceAtLeast(1f)
         val f = c.cameraControl.setZoomRatio(target)
-        val taken = kotlinx.coroutines.withTimeoutOrNull(2_000) {
-            kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
-                f.addListener({ cont.resume(runCatching { f.get() }.isSuccess) }, executor)
+        val failure = kotlinx.coroutines.withTimeoutOrNull(2_000) {
+            kotlinx.coroutines.suspendCancellableCoroutine<Throwable?> { cont ->
+                f.addListener({ cont.resume(runCatching { f.get() }.exceptionOrNull()) }, executor)
             }
-        }
-        if (taken == true) return
+        } ?: java.util.concurrent.TimeoutException("no answer in 2 s")
+        if (failure == null) return
+        if (it == 0 || it == 29) android.util.Log.w("CardScanner", "zoom ${target}x not taken (try ${it + 1}): ${failure.cause ?: failure}")
         kotlinx.coroutines.delay(150)
     }
 }
