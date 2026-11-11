@@ -141,12 +141,26 @@ data class MasterCard(val cardRef: String, val setCode: String, val setName: Str
 data class IntakeResult(val created: Boolean, val product: ShopProduct, val warnings: List<String>, val replayed: Boolean)
 
 /** A write prepared once: the same bytes and the same Idempotency-Key on every retry. */
-data class PendingWrite(val method: String, val path: String, val body: ByteArray, val idempotencyKey: String = UUID.randomUUID().toString()) {
+data class PendingWrite(val method: String, val path: String, val body: ByteArray, val idempotencyKey: String = UUID.randomUUID().toString(),
+                        val contentType: String = "application/json") {
     override fun equals(other: Any?) = other is PendingWrite && other.idempotencyKey == idempotencyKey
     override fun hashCode() = idempotencyKey.hashCode()
 
     companion object {
         fun json(method: String, path: String, body: JSONObject) = PendingWrite(method, path, body.toString().toByteArray(Charsets.UTF_8))
+
+        /** POST /products/{sku}/images with a photo (JPEG) as multipart/form-data: fields "role" and "file". */
+        fun image(sku: String, jpeg: ByteArray, role: String = "front"): PendingWrite {
+            val boundary = "cardscanner-" + UUID.randomUUID().toString().replace("-", "")
+            val out = java.io.ByteArrayOutputStream(jpeg.size + 512)
+            fun line(t: String) = out.write((t + "\r\n").toByteArray(Charsets.UTF_8))
+            line("--$boundary"); line("Content-Disposition: form-data; name=\"role\""); line(""); line(role)
+            line("--$boundary"); line("Content-Disposition: form-data; name=\"file\"; filename=\"card.jpg\""); line("Content-Type: image/jpeg"); line("")
+            out.write(jpeg); line("")
+            line("--$boundary--")
+            return PendingWrite("POST", "/products/$sku/images", out.toByteArray(),
+                contentType = "multipart/form-data; boundary=$boundary")
+        }
     }
 }
 
@@ -238,6 +252,15 @@ class ShopClient(
             o.optJSONArray("warnings").strings(), replayed)
     }
 
+    /** POST /products/{sku}/images: a photo for the product (the shop makes its sizes in the background). */
+    fun uploadImage(w: PendingWrite) { write(w) }
+
+    /** PATCH /products/{sku}: changed fields (e.g. status); the product as it is now and the shop's warnings. */
+    fun patchProduct(w: PendingWrite): Pair<ShopProduct, List<String>> {
+        val o = write(w).first
+        return ShopProduct.from(o) to o.optJSONArray("warnings").strings()
+    }
+
     /** POST /products/{sku}/stock: add, remove, set or move copies. Returns the new stock. */
     fun stock(w: PendingWrite): Stock = Stock.from(write(w).first)
 
@@ -254,12 +277,12 @@ class ShopClient(
     /** A write with its Idempotency-Key; the response and whether it was a replay of an earlier one. */
     fun write(w: PendingWrite): Pair<JSONObject, Boolean> {
         var replayed = false
-        val o = call(w.method, w.path, emptyList(), w.body, w.idempotencyKey) { replayed = it }
+        val o = call(w.method, w.path, emptyList(), w.body, w.idempotencyKey, w.contentType) { replayed = it }
         return o to replayed
     }
 
     private fun call(method: String, path: String, query: List<Pair<String, String>> = emptyList(), body: ByteArray? = null,
-                     idempotencyKey: String? = null, onReplay: (Boolean) -> Unit = {}): JSONObject {
+                     idempotencyKey: String? = null, contentType: String = "application/json", onReplay: (Boolean) -> Unit = {}): JSONObject {
         val url = base.newBuilder().apply {
             path.trim('/').split('/').forEach { addPathSegment(it) }
             query.forEach { (k, v) -> addQueryParameter(k, v) }
@@ -276,7 +299,7 @@ class ShopClient(
                 .header("X-Signature", ApiSigner.sign(creds.secret, ts, method, pathWithQuery, bytes))
                 .header("Accept", "application/json")
                 .apply { if (idempotencyKey != null) header("Idempotency-Key", idempotencyKey) }
-                .method(method, body?.toRequestBody(JSON))
+                .method(method, body?.toRequestBody(if (contentType == "application/json") JSON else contentType.toMediaType()))
                 .build()
             val retryIn: Long = try {
                 http.newCall(req).execute().use { resp ->
@@ -312,7 +335,6 @@ class ShopClient(
     companion object {
         private val JSON = "application/json".toMediaType()
 
-        /** The body of POST /stock/intake (only documented fields; nothing null). */
         /**
          * The body of POST /stock/intake. [imageUrl]: a picture of the card for the product (the shop fetches
          * it), when the shop has none; [status]: "active" to make a draft product live.

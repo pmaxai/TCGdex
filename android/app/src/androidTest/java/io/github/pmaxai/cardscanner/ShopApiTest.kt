@@ -102,6 +102,37 @@ class ShopApiTest {
         assertEquals(1, sent.map { it.body.readUtf8() }.toSet().size)            // identical bytes every time
     }
 
+    /** A product picture taken with the camera: multipart (role, file), signed over its exact bytes, with an Idempotency-Key. */
+    @Test
+    fun aPhotoGoesUpAsMultipart() {
+        server.enqueue(json(202, """{"id":7,"role":"front","status":"pending","url":null}"""))
+        server.enqueue(json(200, PRODUCT.replace("\"status\":\"draft\"", "\"status\":\"active\"")))
+        val jpeg = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0xE0.toByte(), 1, 2, 3, 0, 13, 10, 4)
+        val w = PendingWrite.image("sv03.5-199-DE-NM-H", jpeg)
+        client().uploadImage(w)
+        val r = server.takeRequest()
+        assertEquals("POST", r.method)
+        assertEquals("/api/v1/products/sv03.5-199-DE-NM-H/images", r.path)
+        val type = r.getHeader("Content-Type")!!
+        assertTrue(type, type.startsWith("multipart/form-data; boundary=cardscanner-"))
+        assertEquals(w.idempotencyKey, r.getHeader("Idempotency-Key"))
+        val bytes = r.body.peek().readByteArray()
+        assertTrue("the photo's bytes are in the body unchanged", String(bytes, Charsets.ISO_8859_1).contains(String(jpeg, Charsets.ISO_8859_1)))
+        val text = String(bytes, Charsets.ISO_8859_1)
+        assertTrue(text.contains("name=\"role\"\r\n\r\nfront\r\n"))
+        assertTrue(text.contains("name=\"file\"; filename=\"card.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n"))
+        assertTrue(text.endsWith("--\r\n"))
+        assertSigned(r)
+        // then the draft goes live
+        val (p, warnings) = client().patchProduct(PendingWrite.json("PATCH", "/products/sv03.5-199-DE-NM-H", JSONObject().put("status", "active")))
+        assertEquals("sv03.5-199-DE-NM-H", p.sku)
+        assertTrue(warnings.isEmpty())
+        val patch = server.takeRequest()
+        assertEquals("PATCH", patch.method)
+        assertEquals("""{"status":"active"}""", patch.body.peek().readUtf8())
+        assertSigned(patch)
+    }
+
     /** No picture in the shop: the app's picture of the card goes along (front, https only), and a draft can be made live. */
     @Test
     fun aBookingCanBringThePicture() {

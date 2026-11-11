@@ -50,6 +50,7 @@ import io.github.pmaxai.cardscanner.license.LicenceStatus
 import io.github.pmaxai.cardscanner.license.LicenceStore
 import io.github.pmaxai.cardscanner.shop.Money
 import io.github.pmaxai.cardscanner.shop.PendingWrite
+import io.github.pmaxai.cardscanner.shop.ProductPhoto
 import io.github.pmaxai.cardscanner.shop.ShopClient
 import io.github.pmaxai.cardscanner.shop.ShopException
 import io.github.pmaxai.cardscanner.shop.ShopProduct
@@ -133,8 +134,10 @@ data class Shown(
      */
     val imageCard: CardInfo? get() = (listOfNotNull(version, priceCard, english) +
         versions.sortedBy { if (it.id == version.id) 0 else 1 }).firstOrNull { it.thumbnailUrl != null }
-    /** the large picture of exactly this card (its language, else English), as the app shows it; for the shop */
-    val pictureUrl: String? get() = listOfNotNull(version, english, priceCard).firstNotNullOfOrNull { it.highUrl }
+    /** a picture of this card as printed in its language (TCGdex's are per language; the second source's are English) */
+    val hasPictureInItsLanguage: Boolean get() = version.imageUrl != null || (version.lang == "en" && version.highUrl != null)
+    /** the large picture of this card in its language, as the app shows it; for the shop (null: none, a photo is needed) */
+    val pictureUrl: String? get() = version.highUrl?.takeIf { hasPictureInItsLanguage }
     /** position of the shown version in [versions] */
     val versionIndex: Int get() = versions.indexOfFirst { it.id == version.id && it.lang == version.lang }
     val selected: Printing? get() = priceCard.printing(printing)
@@ -254,6 +257,9 @@ data class ShopOrderLine(
 data class ShopSale(val text: String, val lines: List<ShopOrderLine>, val undone: Boolean = false)
 
 /** A booking done in this session, for its confirmation and Undo. */
+/** A product picture taken with the camera: for [cardRef], as JPEG, and small for the screen. */
+class ShopPhoto(val cardRef: String, val jpeg: ByteArray, val thumb: android.graphics.Bitmap)
+
 data class ShopBooking(val text: String, val warnings: List<String>, val sku: String, val delta: Int, val box: String,
                        val undone: Boolean = false)
 
@@ -275,6 +281,11 @@ data class ShopState(
     val products: List<ShopProduct>? = null,
     /** the shop's card catalogue has a picture of the card (null: not known) */
     val catalogPicture: Boolean? = null,
+    /** a product picture taken with the camera for the shown card; it goes up with the next booking */
+    val photo: ShopPhoto? = null,
+    val photoBusy: Boolean = false,
+    /** about the product picture: why it couldn't be taken or didn't go up */
+    val photoNote: String? = null,
     val lookupError: String? = null,
     val form: ShopForm = ShopForm(),
     /** a booking is on its way */
@@ -534,9 +545,13 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         return sub.clone().also { sub.release() }
     }
 
+    /** a product picture waits for the next camera frame (when the camera has no still) */
+    @Volatile private var frameWanted: kotlinx.coroutines.CompletableDeferred<Mat>? = null
+
     /** Called on the camera's analysis thread with an upright RGB frame. Drops frames while busy. */
     fun onFrame(full: Mat) {
         lastFullW = full.cols(); lastFullH = full.rows()
+        frameWanted?.let { d -> if (!d.isCompleted) d.complete(full.clone()) }
         if (recognizer == null) return
         if (_state.value.paused || !busy.compareAndSet(false, true)) return
         var crop: Mat? = null
@@ -722,6 +737,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             error = if (newCard) null else it.error, unknownCard = null,
             // the last booking's warnings belong to that card (the booking itself stays, for Undo)
             booking = if (newCard) it.booking?.copy(warnings = emptyList()) else it.booking,
+            photo = it.photo?.takeIf { p -> p.cardRef == s.version.id }, photoNote = if (newCard) null else it.photoNote,
             sellSku = if (newCard) null else it.sellSku, sellBox = if (newCard) null else it.sellBox) }
         if (newCard) lookupShop(s.version.id)
     }
@@ -813,7 +829,9 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         // no picture in the shop (its card catalogue has none, the product none of its own): the app's picture of
         // the card goes along, so the product can go live; a product left a draft for that alone is made live now
         val ownPicture = match != null && match.images.any { it.status != "failed" }
-        val picture = s.pictureUrl?.takeIf { st.shop.catalogPicture != true && !ownPicture }
+        // a photo taken with the camera goes up after the booking instead
+        val photo = st.shop.photo?.takeIf { it.cardRef == s.version.id }
+        val picture = s.pictureUrl?.takeIf { photo == null && st.shop.catalogPicture != true && !ownPicture }
         val activate = picture != null && match != null && match.status == "draft" && (match.price != null || price != null)
         val body = ShopClient.intakeBody(s.version.id, f.language, f.condition, finish, f.quantity, ShopClient.box(box), price,
             descriptionDe = f.comment.takeIf { match == null }, nameDe = nameDe, nameEn = nameEn,
@@ -842,15 +860,36 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val r = c.intake(w)
                 pendingShop = null
-                val p = r.product
+                var p = r.product
+                var warnings = r.warnings
+                // the product picture taken with the camera: up to the product; a draft with a price goes live
+                val photo = _state.value.shop.photo?.takeIf { it.cardRef == p.cardRef }
+                var photoNote: String? = null
+                if (photo != null) {
+                    runCatching {
+                        c.uploadImage(PendingWrite.image(p.sku, photo.jpeg))
+                        if (p.status == "draft" && p.price != null) {
+                            val (p2, w2) = c.patchProduct(PendingWrite.json("PATCH", "/products/${p.sku}", org.json.JSONObject().put("status", "active")))
+                            p = p2; warnings = w2
+                        } else warnings = warnings - "not_activated_no_image"
+                        p = runCatching { c.product(p.sku) }.getOrDefault(p)        // with its new picture
+                    }.onFailure { e ->
+                        Log.w(TAG, "product picture upload failed", e)
+                        photoNote = "The picture didn't go up (${(e as? ShopException)?.friendly ?: e.message}) – it goes along with the next booking"
+                    }
+                }
+                val uploaded = photo != null && photoNote == null
                 val inBox = p.stock.boxes.firstOrNull { it.box == box }?.quantity
                 val text = (if (r.created) "New in the shop: " else "Added: ") + "$delta × $label to box $box" +
                     " · now ${p.stock.quantity} in stock" + (inBox?.let { " ($it in box $box)" } ?: "") +
                     (p.price?.let { " · ${String.format(Locale.getDefault(), "%.2f €", it.euros)}" } ?: "") +
-                    " · ${ShopTerms.statusLabel(p.status)}" + (if (r.replayed) " (already booked before)" else "")
+                    " · ${ShopTerms.statusLabel(p.status)}" + (if (uploaded) " · with your picture" else "") +
+                    (if (r.replayed) " (already booked before)" else "")
+                val finalP = p
                 updateShop { st ->
-                    st.copy(busy = false, booking = ShopBooking(text, r.warnings.map(::shopWarningText), p.sku, delta, box),
-                        products = (st.products.orEmpty().filter { it.sku != p.sku } + p),
+                    st.copy(busy = false, booking = ShopBooking(text, warnings.map(::shopWarningText), finalP.sku, delta, box),
+                        photo = if (uploaded) null else st.photo, photoNote = photoNote,
+                        products = (st.products.orEmpty().filter { it.sku != finalP.sku } + finalP),
                         form = st.form.copy(quantity = 1, priceByUser = false, comment = ""), unknownCard = null)
                 }
                 // booked: on to the next card
@@ -1047,6 +1086,56 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                     (r.exceptionOrNull()?.let { (it as? ShopException)?.friendly ?: it.message } ?: results?.firstNotNullOfOrNull { it.error?.friendly } ?: ""))
             }
             lookupShop()
+        }
+    }
+
+    /**
+     * Webshop: "Create Product Image" – a photo of the shown card for its shop product, when no
+     * picture of the card in its language exists. Only what the camera box shows; the card's
+     * outer edge found and straightened (the guide frame cut out if no edge is found). It goes up
+     * with the next booking.
+     */
+    fun takeProductPhoto() {
+        val s = _state.value.shown ?: return
+        val rec = recognizer ?: return
+        if (_state.value.shop.photoBusy) return
+        holdCard()
+        updateShop { it.copy(photoBusy = true, photoNote = null) }
+        viewModelScope.launch(Dispatchers.Default) {
+            val result = runCatching {
+                val still = runCatching { ProductPhoto.take() }.onFailure { Log.w(TAG, "still photo failed", it) }.getOrNull()
+                val full = if (still != null) Recognizer.bitmapToRgb(still).also { still.recycle() }
+                    else kotlinx.coroutines.CompletableDeferred<Mat>().also { frameWanted = it }.let { d ->
+                        kotlinx.coroutines.withTimeout(3_000) { d.await() }.also { frameWanted = null }
+                    }
+                // what the camera box shows
+                val vis = visiblePart(full)?.also { full.release() } ?: full
+                val prior = Readings.guidePrior(vis.cols(), vis.rows(), _state.value.settings.guideFraction)
+                // the card's outer edge: found on a smaller copy (the matcher knows artwork box from card), used at full size
+                val k = minOf(1.0, 1600.0 / maxOf(vis.cols(), vis.rows()))
+                val small = if (k < 1.0) Mat().also { Imgproc.resize(vis, it, org.opencv.core.Size(), k, k, Imgproc.INTER_AREA) } else vis
+                while (!busy.compareAndSet(false, true)) delay(20)
+                val quad = try {
+                    val r = rec.recognise(small, prior, manual = true)
+                    val hit = r.hits.firstOrNull { it.group == s.group } ?: r.best
+                    (hit?.let { rec.cardQuad(r, it, margin = 0.0) } ?: r.quad)?.map { org.opencv.core.Point(it.x / k, it.y / k) }?.toTypedArray()
+                } finally {
+                    busy.set(false)
+                    if (small !== vis) small.release()
+                }
+                val card = ProductPhoto.cardImage(vis, quad, prior)
+                vis.release()
+                val (jpeg, thumb) = ProductPhoto.encode(card)
+                card.release()
+                Log.i(TAG, "product picture: ${jpeg.size / 1024} kB, outline ${if (quad != null) "found" else "not found, guide frame"}, " +
+                    if (still != null) "still" else "camera frame")
+                ShopPhoto(s.version.id, jpeg, thumb)
+            }
+            updateShop { st ->
+                if (_state.value.shown?.version?.id != s.version.id) st.copy(photoBusy = false)       // another card meanwhile
+                else result.fold({ ph -> st.copy(photoBusy = false, photo = ph, photoNote = null) },
+                    { e -> Log.w(TAG, "product picture failed", e); st.copy(photoBusy = false, photoNote = "No picture taken: ${e.message ?: "camera error"}") })
+            }
         }
     }
 

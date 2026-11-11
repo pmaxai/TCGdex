@@ -1,5 +1,9 @@
 package io.github.pmaxai.cardscanner.ui
 
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.foundation.Image
 import android.content.res.Configuration
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -89,7 +93,8 @@ fun WebshopScreen(state: UiState, vm: ScannerViewModel) {
 
     val topBar: @Composable () -> Unit = { WebshopTopBar(state, vm, torch, { torch = it }) { orderOpen = true } }
     val camera: @Composable (Modifier) -> Unit = { m ->
-        CameraArea(state, vm, torch, video = false, modifier = m) {
+        CameraArea(state, vm, torch, video = false, modifier = m, still = true) {
+            val photoButton = productPhotoWanted(state, vm)
             if (!state.paused) {
                 val hint = when {
                     state.shown?.locked == true -> "Kept – show the next card"
@@ -98,9 +103,10 @@ fun WebshopScreen(state: UiState, vm: ScannerViewModel) {
                     else -> "Fit the card into the frame"
                 }
                 Text(hint, color = Color.White, fontSize = 14.sp, maxLines = 1,
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(10.dp)
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = if (photoButton) 58.dp else 10.dp)
                         .background(Color(0x88000000), RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 4.dp))
             }
+            if (photoButton) ProductPhotoButton(state, vm, Modifier.align(Alignment.BottomCenter).padding(10.dp))
         }
     }
     val panel: @Composable (Modifier) -> Unit = { m -> WebshopPanel(state, vm, m) { pad = it } }
@@ -409,6 +415,7 @@ private fun ShopFormBlock(state: UiState, vm: ScannerViewModel, onPad: (PadReque
         color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
     val last = shop.booking?.takeIf { !it.undone }
     last?.warnings?.forEach { Text("⚠ $it", color = Warn, fontSize = 12.sp) }
+    shop.photoNote?.let { Text("⚠ $it", color = Warn, fontSize = 12.sp) }
     shop.error?.let { e ->
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
             Text("⚠ $e", color = Warn, fontSize = 13.sp, modifier = Modifier.weight(1f))
@@ -602,5 +609,41 @@ private fun StepButton(label: String, enabled: Boolean, onClick: () -> Unit) {
     Box(Modifier.size(38.dp).background(if (enabled) Color(0xFF2A2D34) else Color(0xFF1C1E23), RoundedCornerShape(10.dp))
         .clickable(enabled = enabled, onClick = onClick), contentAlignment = Alignment.Center) {
         Text(label, color = if (enabled) Color.White else Muted, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+/**
+ * "Create Product Image" shows when the shown card has no picture in its language and its
+ * product in the shop has none of its own (Stock in, shop connected); or while one is taken / kept.
+ */
+private fun productPhotoWanted(state: UiState, vm: ScannerViewModel): Boolean {
+    val shop = state.shop
+    val s = state.shown ?: return false
+    if (!shop.configured || shop.selling || s.fromPhoto) return false
+    if (shop.photoBusy || shop.photo?.cardRef == s.version.id) return true
+    if (s.hasPictureInItsLanguage) return false
+    return vm.shopMatch(state)?.images?.none { it.status != "failed" } != false
+}
+
+/** The button on the camera side: takes the picture; afterwards it shows it small (a tap takes it again). */
+@Composable
+private fun ProductPhotoButton(state: UiState, vm: ScannerViewModel, modifier: Modifier) {
+    val shop = state.shop
+    val photo = shop.photo?.takeIf { it.cardRef == state.shown?.version?.id }
+    Row(modifier.height(44.dp).background(Color(0xCC000000), RoundedCornerShape(22.dp)).border(1.5.dp, Gold, RoundedCornerShape(22.dp))
+        .clickable(enabled = !shop.photoBusy) { vm.takeProductPhoto() }.padding(start = if (photo != null) 4.dp else 14.dp, end = 14.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        when {
+            shop.photoBusy -> {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Gold)
+                Text("  Taking the picture…", color = Color.White, fontSize = 14.sp)
+            }
+            photo != null -> {
+                Image(photo.thumb.asImageBitmap(), contentDescription = "Product image", contentScale = ContentScale.Fit,
+                    modifier = Modifier.height(36.dp).clip(RoundedCornerShape(4.dp)))
+                Text("  Product image ✓ · retake", color = Color.White, fontSize = 14.sp)
+            }
+            else -> Text("Create Product Image", color = Gold, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        }
     }
 }

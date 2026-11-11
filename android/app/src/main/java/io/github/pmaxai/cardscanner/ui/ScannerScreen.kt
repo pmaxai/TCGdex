@@ -316,11 +316,11 @@ fun orientationOf(setting: String): Int = when (setting) {
  */
 @Composable
 fun CameraArea(state: UiState, vm: ScannerViewModel, torch: Boolean, video: Boolean, modifier: Modifier,
-               extra: @Composable BoxScope.() -> Unit = {}) {
+               still: Boolean = false, extra: @Composable BoxScope.() -> Unit = {}) {
     Box(modifier.background(Color.Black).clipToBounds()
         .onSizeChanged { if (it.width > 0 && it.height > 0) vm.setViewAspect(it.width.toFloat() / it.height) }) {
         CameraPreview(onFrame = vm::onFrame, torch = torch, zoom = state.settings.zoom, onMaxZoom = vm::setMaxZoom,
-            modifier = Modifier.fillMaxSize(), recordCamera = video)
+            modifier = Modifier.fillMaxSize(), recordCamera = video, still = still)
         GuideOverlay(state, Modifier.fillMaxSize(), dim = !video)
         CameraGestures(state, vm, alwaysShowZoom = !video)
         extra()
@@ -602,7 +602,7 @@ fun GuideOverlay(state: UiState, modifier: Modifier, dim: Boolean) {
 
 @Composable
 fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, zoom: Float, onMaxZoom: (Float) -> Unit,
-                  modifier: Modifier, recordCamera: Boolean = false) {
+                  modifier: Modifier, recordCamera: Boolean = false, still: Boolean = false) {
     val ctx = LocalContext.current
     val owner = LocalLifecycleOwner.current
     // a recording's clean camera file: bound next to preview and analysis while it runs (YouTube mode)
@@ -615,7 +615,7 @@ fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, zoom: 
         }
     }
     var camera by remember { mutableStateOf<Camera?>(null) }
-    DisposableEffect(owner, video) {
+    DisposableEffect(owner, video, still) {
         val executor = Executors.newSingleThreadExecutor()
         val future = ProcessCameraProvider.getInstance(ctx)
         future.addListener({
@@ -634,6 +634,14 @@ fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, zoom: 
                 .build()
             analysis.setAnalyzer(executor, FrameAnalyzer(onFrame))
             provider.unbindAll()
+            // Webshop: a full-resolution still for product pictures, next to preview and analysis (without it,
+            // a product picture is taken from the scanner's own frames)
+            val photo = if (still && video == null) runCatching {
+                io.github.pmaxai.cardscanner.shop.ProductPhoto.newCapture().also { pc ->
+                    camera = provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis, pc)
+                }
+            }.onFailure { provider.unbindAll() }.getOrNull() else null
+            io.github.pmaxai.cardscanner.shop.ProductPhoto.capture = photo
             // with the camera file: not every phone takes three use cases; then scanning goes on without it
             val withVideo = video?.let { v ->
                 runCatching {
@@ -641,12 +649,13 @@ fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, zoom: 
                     provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis, v)
                 }.onFailure { provider.unbindAll() }.getOrNull()
             }
-            camera = (withVideo ?: provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)).also { c ->
+            camera = (withVideo ?: camera.takeIf { photo != null } ?: provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)).also { c ->
                 c.cameraInfo.zoomState.observe(owner) { z -> onMaxZoom(z.maxZoomRatio) }
             }
             if (video != null) io.github.pmaxai.cardscanner.recording.CameraRecording.onBound(ctx, withVideo != null)
         }, ContextCompat.getMainExecutor(ctx))
         onDispose {
+            io.github.pmaxai.cardscanner.shop.ProductPhoto.capture = null
             runCatching { future.get().unbindAll() }
             executor.shutdown()
         }
