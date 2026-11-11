@@ -256,6 +256,7 @@ private fun CardPrice(s: Shown, state: UiState, vm: ScannerViewModel, onPad: (Pa
         Column(Modifier.weight(1f)) {
             FitText(s.version.name, 22.sp, Color.White, weight = FontWeight.Bold, minSize = 14.sp)
             FitText(s.version.setLine(), 13.sp, Muted)
+            PrintedOnlyHint(s)
             s.english?.let { e -> FitText("English: ${e.name}", 12.sp, Color.White) }
             // condition: the camera can't judge it, so it's one tap here
             Row(Modifier.padding(top = 6.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {

@@ -141,6 +141,9 @@ class ShopApiTest {
         assertEquals("""{"card_ref":"swsh11tg-TG11","card_language":"EN","condition":"NM","finish":"holo","delta":1,"storage_location":"003",""" +
             """"images":[{"role":"front","url":"https:\/\/images.pokemontcg.io\/swsh11tg\/TG11_hires.png"}],"status":"active"}""", body.toString())
         assertTrue(!ShopClient.intakeBody("x", "DE", "NM", "normal", 1, "001", imageUrl = "http://example.com/a.png").has("images"))
+        // an Asian print: its printed name goes along
+        assertEquals("メガニウム", ShopClient.intakeBody("M1S-005", "JA", "NM", "normal", 1, "001", nameEn = "Meganium",
+            nameLocal = "メガニウム").getString("name_local"))
     }
 
     @Test

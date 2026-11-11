@@ -6,7 +6,9 @@ import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
+import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.text.Normalizer
 import java.util.concurrent.TimeUnit
@@ -23,55 +25,97 @@ data class CardText(
     /** the name bar text, for matching names */
     val nameText: String,
     val text: String,
+    /** what the script check saw (for the details view): "kana 120 · kanji 40 · hangul 3" */
+    val script: String = "",
 )
 
 /**
  * Reads a straightened card with on-device text recognition (ML Kit, offline) to find
- * its number (037/167) and its language. The language comes from the words every card
- * prints ("Weakness" / "Schwäche" / "Faiblesse"..., HP / KP / PV / PS) and from the name;
- * Japanese is recognised by its script.
+ * its number (037/167) and its language. Western languages come from the words every card
+ * prints ("Weakness" / "Schwäche" / "Faiblesse"..., HP / KP / PV / PS) and from the name.
+ * Without those words the printed script decides: the Japanese and the Korean reader look
+ * at the card, and the one that sees more of its own script wins (characters weighted by
+ * the reader's confidence): Hangul is Korean, kana Japanese, Chinese characters without kana
+ * Chinese - traditional or simplified by the characters only one of the two uses.
  */
 class VersionResolver : AutoCloseable {
     private val latin = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     private val japanese by lazy { TextRecognition.getClient(JapaneseTextRecognizerOptions.Builder().build()) }
+    private val korean by lazy { TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build()) }
+    private val chinese by lazy { TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build()) }
 
-    /** Load both recognition models now (the first use takes a few seconds), off the main thread. */
+    /** Load the recognition models now (the first use takes a few seconds), off the main thread. */
     fun warmUp() {
         val blank = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
         val img = InputImage.fromBitmap(blank, 0)
-        runCatching { Tasks.await(latin.process(img), 30, TimeUnit.SECONDS) }.onFailure { Log.w(TAG, "latin warm-up", it) }
-        runCatching { Tasks.await(japanese.process(img), 30, TimeUnit.SECONDS) }.onFailure { Log.w(TAG, "japanese warm-up", it) }
+        for ((name, r) in listOf("latin" to latin, "japanese" to japanese, "korean" to korean, "chinese" to chinese))
+            runCatching { Tasks.await(r.process(img), 30, TimeUnit.SECONDS) }.onFailure { Log.w(TAG, "$name warm-up", it) }
     }
 
     private fun recognise(r: com.google.mlkit.vision.text.TextRecognizer, img: InputImage, what: String): Text? =
         runCatching { Tasks.await(r.process(img), 20, TimeUnit.SECONDS) }
             .onFailure { Log.w(TAG, "$what text recognition failed", it) }.getOrNull()
 
-    fun read(card: Bitmap, tryJapanese: Boolean): CardText {
+    /** [detectAsian]: check the printed script when the western words are missing (false: western languages only) */
+    fun read(card: Bitmap, detectAsian: Boolean = true): CardText {
         val img = InputImage.fromBitmap(card, 0)
         var text = recognise(latin, img, "latin")
-        val latinCount = text?.let { latinWords(it.text) } ?: 0
         var asian: String? = null
         var asianChars = 0
-        if (tryJapanese && (text == null || cjkCount(text.text) >= 2 || latinCount < 8)) {
-            val jt = recognise(japanese, img, "japanese")
-            if (jt != null) {
-                val cjk = cjkCount(jt.text)
-                // an Asian card is full of CJK text; blurry English cards still give a few stray characters
-                if (cjk >= 8 && cjk > latinCount) {
-                    text = jt
-                    asianChars = cjk
-                    // Japanese always has kana (katakana names, hiragana in the rules); Chinese has none
-                    asian = if (kanaCount(jt.text) >= 3) "ja" else "zh"
-                }
+        var scriptInfo = ""
+        // a western card prints "Weakness", "Schwäche" …; an Asian card doesn't (the Latin reader turns its
+        // script into made-up words, so their number says nothing)
+        val western = text?.let { westernScore(it.text) } ?: 0.0
+        if (detectAsian && western < WESTERN_SURE) {
+            val s = asianScript(img)
+            scriptInfo = s.info
+            if (s.lang != null && s.text != null) {
+                text = s.text
+                asian = s.lang
+                asianChars = s.chars
             }
         }
-        if (text == null) return CardText(null, null, null, 0.0, emptyMap(), "", "")
-        val result = analyse(text, card.height, asian, asianChars)
+        if (text == null) return CardText(null, null, null, 0.0, emptyMap(), "", "", scriptInfo)
+        val result = analyse(text, card.height, asian, asianChars).copy(script = scriptInfo)
         // the set number is tiny: read the bottom strip again, enlarged
         val strip = readNumberStrip(card)
         return if (strip != null) result.copy(number = strip.first, total = strip.second) else result
     }
+
+    /** The printed script: [lang] ja, ko, zh-tw or zh-cn (null: none of them), the text read in it, and what was seen. */
+    private class Script(val lang: String?, val text: Text?, val chars: Int, val info: String)
+
+    private fun asianScript(img: InputImage): Script {
+        val jt = recognise(japanese, img, "japanese")
+        val kt = recognise(korean, img, "korean")
+        val kana = weighted(jt, ::isKana)
+        val han = weighted(jt, ::isHan)
+        val hangul = weighted(kt, ::isHangul)
+        val seen = "kana %.0f · kanji %.0f · hangul %.0f".format(java.util.Locale.ROOT, kana, han, hangul)
+        return when {
+            // each reader turns the other script into a few of its own characters; the real one sees far more
+            hangul >= MIN_SCRIPT && hangul > kana + han -> Script("ko", kt, hangul.toInt(), "$seen → Korean")
+            kana >= 3 && kana + han >= MIN_SCRIPT && kana >= 0.15 * han -> Script("ja", jt, (kana + han).toInt(), "$seen → Japanese")
+            han >= MIN_SCRIPT && han > hangul -> {
+                // Chinese: the Chinese reader knows both character sets; which one is printed
+                val ct = recognise(chinese, img, "chinese")
+                val read = ct?.text ?: jt?.text.orEmpty()
+                val trad = read.count { it in TRADITIONAL }
+                val simp = read.count { it in SIMPLIFIED }
+                val lang = if (simp > trad) "zh-cn" else "zh-tw"
+                Script(lang, ct ?: jt, han.toInt(), "$seen · traditional $trad · simplified $simp → " +
+                    if (lang == "zh-cn") "Chinese (simplified)" else "Chinese (traditional)")
+            }
+            else -> Script(null, null, 0, seen)
+        }
+    }
+
+    /** characters of one script, each counted with its line's confidence */
+    private fun weighted(t: Text?, script: (Char) -> Boolean): Double =
+        t?.textBlocks?.flatMap { it.lines }?.sumOf { l ->
+            val c = runCatching { l.confidence.toDouble() }.getOrDefault(0.0).takeIf { it > 0 } ?: 0.6
+            l.text.count(script) * c
+        } ?: 0.0
 
     private fun readNumberStrip(card: Bitmap): Pair<String, String>? {
         val y0 = (card.height * 0.86).toInt()
@@ -123,6 +167,8 @@ class VersionResolver : AutoCloseable {
     override fun close() {
         latin.close()
         runCatching { japanese.close() }
+        runCatching { korean.close() }
+        runCatching { chinese.close() }
     }
 
     companion object {
@@ -161,10 +207,37 @@ class VersionResolver : AutoCloseable {
         fun cjkCount(s: String): Int = s.count { Character.UnicodeScript.of(it.code).let { sc ->
             sc == Character.UnicodeScript.HIRAGANA || sc == Character.UnicodeScript.KATAKANA || sc == Character.UnicodeScript.HAN } }
 
-        fun kanaCount(s: String): Int = s.count { Character.UnicodeScript.of(it.code).let { sc ->
-            sc == Character.UnicodeScript.HIRAGANA || sc == Character.UnicodeScript.KATAKANA } }
+        fun kanaCount(s: String): Int = s.count(::isKana)
 
-        private fun latinWords(s: String): Int = Regex("[A-Za-z]{3,}").findAll(s).count()
+        fun isKana(c: Char): Boolean = Character.UnicodeScript.of(c.code).let { it == Character.UnicodeScript.HIRAGANA || it == Character.UnicodeScript.KATAKANA }
+        fun isHan(c: Char): Boolean = Character.UnicodeScript.of(c.code) == Character.UnicodeScript.HAN
+        fun isHangul(c: Char): Boolean = Character.UnicodeScript.of(c.code) == Character.UnicodeScript.HANGUL
+
+        /** below this many (confidence-weighted) characters, a script isn't really on the card */
+        private const val MIN_SCRIPT = 8.0
+        /** the western words that make the script check unnecessary (HP and "Illus." are printed on Asian cards too) */
+        private const val WESTERN_SURE = 2.0
+        private val GENERIC = setOf("hp", "kp", "pv", "ps", "illus")
+
+        /** How much of the words every western card prints the Latin reader found. */
+        fun westernScore(text: String): Double {
+            val norm = " " + fold(text) + " "
+            var s = 0.0
+            for ((_, words) in KEYWORDS) for (w in words) {
+                if (fold(w) in GENERIC) continue
+                if (norm.contains(" ${fold(w)} ") || (w.length >= 6 && norm.contains(fold(w)))) s += WEIGHT[w] ?: 1.0
+            }
+            return s
+        }
+
+        /**
+         * Characters only traditional (Taiwan, Hong Kong) or only simplified (mainland) Chinese
+         * uses, as they appear on Pokémon cards (宝可梦 / 寶可夢, 进化 / 進化, 伤害 / 傷害 …).
+         */
+        val TRADITIONAL: Set<Char> = "寶夢進對擊傷點張從時個會這為與場戰鬥選擇數後備棄換隻復狀態氣類屬擁計錢幣給將階變隨機傳說讓種號圖鑑體輕價現開還準卻頭麼們來過當連續於應該發樣邊雙歡戲壓術絕滿獎勵輪"
+            .toSet()
+        val SIMPLIFIED: Set<Char> = "宝梦进对击伤点张从时个会这为与场战选择数备弃换复状态气类属拥计钱币给将阶变随机传说让种号图鉴体轻价现开还却头们来过当连续应该发样边双欢戏压术绝满奖励轮"
+            .toSet() - TRADITIONAL
 
         /** '037' -> '37', 'TG05' -> 'TG5' */
         fun normNumber(s: String?): String {
@@ -196,6 +269,32 @@ class VersionResolver : AutoCloseable {
                 diff++
             }
             return diff <= 1
+        }
+
+        /**
+         * Of the prints with the read number, the one whose name is on the card ([printedName], the name
+         * bar in its own script); with several, the longest name found wins ("メガメガニウムex" over
+         * "メガニウム"); a name the Pokémon has on other prints ([known]) counts too. Without a readable
+         * name: a single print of that number and set size ([totalKnown]).
+         */
+        fun pickPrint(cands: List<io.github.pmaxai.cardscanner.data.CardInfo>, printedName: String?, known: Set<String>,
+                      totalKnown: Boolean): io.github.pmaxai.cardscanner.data.CardInfo? {
+            if (cands.isEmpty()) return null
+            fun norm(s: String?) = Normalizer.normalize(s.orEmpty(), Normalizer.Form.NFKC).lowercase().filter { it.isLetterOrDigit() }
+            val printed = norm(printedName)
+            val knownN = known.map(::norm).toSet()
+            fun score(c: io.github.pmaxai.cardscanner.data.CardInfo): Int {
+                val n = norm(c.name)
+                if (n.isEmpty()) return 0
+                return (if (printed.contains(n)) 10 + n.length else 0) + (if (n in knownN) 5 else 0)
+            }
+            val ranked = cands.map { it to score(it) }.sortedByDescending { it.second }
+            val (best, top) = ranked.first()
+            return when {
+                top > 0 && ranked.getOrNull(1)?.second != top -> best
+                top == 0 && cands.size == 1 && totalKnown && printed.isEmpty() -> best
+                else -> null
+            }
         }
 
         /** similarity 0..1 of two names (OCR noise tolerant) */

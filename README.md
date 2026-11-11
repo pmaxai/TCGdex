@@ -85,8 +85,15 @@ downgrades), or restore the code from the tag.
 - **The exact version:** the artwork finds the card; the printed text then decides
   which one it is:
   - **language:** the card is shown in the language it is printed in (English, German,
-    French, Spanish, Italian, Portuguese, Japanese). For non-English cards, the English
-    name and set are shown under it.
+    French, Spanish, Italian, Portuguese, Japanese, Chinese). For non-English cards, the
+    English name and set are shown under it. Asian cards are told by their script: kana
+    is Japanese, Hangul Korean, Chinese characters without kana Chinese (traditional or
+    simplified by the characters). Most Asian prints have no picture in the card data; they
+    are found by their printed number (e.g. `005/063`) and the name in their own script
+    (the picture shown is the western card's; *Create Product Image* takes one for the
+    shop). Korean prints aren't in the card data yet: the western card is shown with a
+    "Printed in Korean" note, and the Webshop takes KO as the language. ⚙ → Details shows
+    what the script check saw.
   - **set:** the card number (e.g. `059/191`) picks the right set when the same artwork
     was printed in several sets.
   - **Other language?** chips let you correct it with one tap.

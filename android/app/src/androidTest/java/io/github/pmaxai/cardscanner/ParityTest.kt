@@ -136,7 +136,11 @@ class ParityTest {
     @Test
     fun realPhotosLanguageAndNumber() {
         // what the label of each test photo says; photos added later are only logged
-        val expected = mapOf("Magneton 059-191.jpg" to ("de" to "59"), "Plusle 69-101.jpg" to ("en" to "69"))
+        val expected = mapOf("Magneton 059-191.jpg" to ("de" to "59"), "Plusle 69-101.jpg" to ("en" to "69"),
+            // Japanese Meganium of M1S (2025): no picture in the data; script, number and printed name find it
+            "me01-010__Meganium_japanese_shiny_border_screenshot.jpg" to ("ja" to "5"))
+        val expectedCard = mapOf("me01-010__Meganium_japanese_shiny_border_screenshot.jpg" to "M1S-005")
+        val cat = Catalog(pack.db)
         val items = fixtures.getJSONArray("real")
         val resolver = io.github.pmaxai.cardscanner.vision.VersionResolver()
         val tw = System.currentTimeMillis()
@@ -150,7 +154,7 @@ class ParityTest {
             val r = recognizer.recognise(img, prior = null)
             val hit = r.best ?: continue
             val t0 = System.currentTimeMillis()
-            val t = recognizer.readText(img, r, hit, resolver, tryJapanese = true)
+            val t = recognizer.readText(img, r, hit, resolver)
             img.release()
             if (t == null) continue
             val ms = System.currentTimeMillis() - t0
@@ -164,6 +168,16 @@ class ParityTest {
                     (if (num == exp.second) ", number OK" else ", number expected ${exp.second}"))
             lines += "   scores ${t.langScores.entries.sortedByDescending { it.value }.joinToString { "${it.key}=%.1f".format(it.value) }}"
             lines += "   name bar: ${t.nameText.take(60)} | text: ${t.text.replace("\n", " / ").take(160)}"
+            lines += "   script: ${t.script}"
+            // an Asian print: the exact card by its number and printed name (it has no picture)
+            if (t.lang in setOf("ja", "ko", "zh-tw", "zh-cn")) {
+                val langs = if (t.lang!!.startsWith("zh")) listOf("zh-tw", "zh-cn") else listOf(t.lang!!)
+                val cands = cat.byNumber(langs, num, t.total?.let { io.github.pmaxai.cardscanner.vision.VersionResolver.normNumber(it) })
+                val known = cat.englishOf(hit.group)?.name?.let { cat.asianNames(it, langs) }.orEmpty()
+                val picked = io.github.pmaxai.cardscanner.vision.VersionResolver.pickPrint(cands, t.nameText, known, t.total != null)
+                lines += "   print: ${cands.map { "${it.id} ${it.name}" }} -> ${picked?.id}"
+                expectedCard[file]?.let { want -> if (picked?.id != want) { wrong++; lines += "   PRINT EXPECTED $want" } }
+            } else expectedCard[file]?.let { want -> wrong++; lines += "   PRINT EXPECTED $want (language not Asian)" }
         }
         resolver.close()
         lines.forEach { Log.i(TAG, it) }

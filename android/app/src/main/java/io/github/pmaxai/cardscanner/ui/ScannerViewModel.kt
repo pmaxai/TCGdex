@@ -134,6 +134,12 @@ data class Shown(
      */
     val imageCard: CardInfo? get() = (listOfNotNull(version, priceCard, english) +
         versions.sortedBy { if (it.id == version.id) 0 else 1 }).firstOrNull { it.thumbnailUrl != null }
+    /**
+     * The card is printed in an Asian language whose print isn't in the card data (yet): its code
+     * ("ko", "ja", "zh-tw", "zh-cn"); the western card of the same picture is shown meanwhile.
+     */
+    val printedOnly: String? get() = text?.lang?.takeIf { it in ScannerViewModel.ASIAN && version.lang !in ScannerViewModel.ASIAN }
+
     /** a picture of this card as printed in its language (TCGdex's are per language; the second source's are English) */
     val hasPictureInItsLanguage: Boolean get() = version.imageUrl != null || (version.lang == "en" && version.highUrl != null)
     /** the large picture of this card in its language, as the app shows it; for the shop (null: none, a photo is needed) */
@@ -478,7 +484,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         checkLicence(force = true)
         // Webshop Mode: a new card (or language, printing) -> look it up in the shop, fill in the form
         viewModelScope.launch {
-            state.map { s -> if (s.settings.webshop) s.shown?.let { Triple(it.version.id, it.version.lang, it.printing) } else null }
+            state.map { s -> if (s.settings.webshop) s.shown?.let { listOf(it.version.id, it.version.lang, it.printing, it.printedOnly) } else null }
                 .distinctUntilChanged()
                 .collect { key -> if (key != null) onShopCard() }
         }
@@ -730,7 +736,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val s = _state.value.shown ?: return
         val shop = _state.value.shop
         val newCard = force || shop.cardRef != s.version.id
-        val lang = ShopTerms.languageOf(s.version.lang)
+        // an Asian print not in the data yet: the shop gets its language (the card is the western one of the same picture)
+        val lang = ShopTerms.languageOf(s.printedOnly ?: s.version.lang)
         val form = if (newCard) ShopForm(language = lang, condition = shopStore.lastCondition, box = shopStore.lastBox)
             else shop.form.let { f -> if (f.languageByUser) f else f.copy(language = lang) }
         updateShop { it.copy(form = withSuggestedPrice(form, s, if (newCard) null else it.products),
@@ -833,9 +840,15 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val photo = st.shop.photo?.takeIf { it.cardRef == s.version.id }
         val picture = s.pictureUrl?.takeIf { photo == null && st.shop.catalogPicture != true && !ownPicture }
         val activate = picture != null && match != null && match.status == "draft" && (match.price != null || price != null)
+        // an Asian print: the shop doesn't know it; its printed name, and the names of the western card of the same picture
+        val asian = s.version.lang in ASIAN
+        val west = s.english.takeIf { asian }
         val body = ShopClient.intakeBody(s.version.id, f.language, f.condition, finish, f.quantity, ShopClient.box(box), price,
-            descriptionDe = f.comment.takeIf { match == null }, nameDe = nameDe, nameEn = nameEn,
-            imageUrl = picture, status = if (activate) "active" else null)
+            descriptionDe = f.comment.takeIf { match == null },
+            nameDe = nameDe ?: west?.let { catalog?.cardExact(it.id, "de")?.name ?: it.name },
+            nameEn = nameEn ?: west?.name,
+            imageUrl = picture, status = if (activate) "active" else null,
+            nameLocal = s.version.name.takeIf { asian })
         val w = PendingWrite.json("POST", "/stock/intake", body)
         val label = "${s.version.name} (${f.language} · ${f.condition} · ${ShopTerms.finishLabel(finish)})"
         pendingShop = w
@@ -898,7 +911,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                 if (e.code == "unknown_card") {
                     pendingShop = null
                     val s = _state.value.shown
-                    val de = s?.let { sh -> if (sh.version.lang == "de") sh.version.name else catalog?.cardExact(sh.version.id, "de")?.name } ?: ""
+                    val de = s?.let { sh -> if (sh.version.lang == "de") sh.version.name else catalog?.cardExact(sh.version.id, "de")?.name
+                        ?: sh.english?.let { e -> catalog?.cardExact(e.id, "de")?.name } } ?: ""
                     val en = s?.let { sh -> sh.english?.name ?: if (sh.version.lang == "en") sh.version.name else catalog?.cardExact(sh.version.id, "en")?.name } ?: ""
                     updateShop { it.copy(busy = false, unknownCard = de to en) }
                 } else {
@@ -1374,16 +1388,17 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun cardQuad(r: Recognition, hit: Hit): Array<Point>? = recognizer?.cardQuad(r, hit)
 
-    private fun readText(rgb: Mat, r: Recognition, hit: Hit, tryJapanese: Boolean): CardText? = runCatching {
+    private fun readText(rgb: Mat, r: Recognition, hit: Hit): CardText? = runCatching {
         val res = resolver ?: return null
-        recognizer?.readText(rgb, r, hit, res, tryJapanese)
+        recognizer?.readText(rgb, r, hit, res)
     }.onFailure { Log.w(TAG, "text recognition failed", it) }.getOrNull()
 
     /**
      * Which exact card (set, language) of this artwork group the photo shows.
-     * Asian prints (Japanese, Chinese) are only chosen when the printed text is clearly
-     * Japanese or Chinese; otherwise the western version is shown, even when the
-     * picture matched an Asian scan best.
+     * Asian prints (Japanese, Korean, Chinese) are only chosen when the printed script says so;
+     * otherwise the western version is shown, even when the picture matched an Asian scan best.
+     * An Asian print without a picture (most of them) is found by its printed number and the
+     * name in its own script.
      */
     private fun resolveVersion(group: String, entry: Int?, text: CardText?): CardInfo? {
         val cat = catalog ?: return null
@@ -1415,20 +1430,26 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             if (exact != null && exact != entryCard && total == null && num.all { it.isDigit() }) return null
             return exact ?: ids.firstOrNull { m(it, true) }
         }
-        // Asian print: only when the text says so
+        // Asian print: only when the printed script says so
         val asianLangs = when (text?.lang) {
             "ja" -> listOf("ja")
-            "zh" -> listOf("zh-tw", "zh-cn")
+            "ko" -> listOf("ko")
+            "zh-tw" -> listOf("zh-tw", "zh-cn")
+            "zh-cn" -> listOf("zh-cn", "zh-tw")
             else -> emptyList()
         }
         if (asianLangs.isNotEmpty()) {
             val pool = versions.filter { it.second in asianLangs }
+            fun pick(id: String): CardInfo? {
+                val langs = pool.filter { it.first == id }.map { it.second }
+                return cat.cardExact(id, entryLang?.takeIf { entryCard == id && it in langs } ?: asianLangs.first { it in langs })
+            }
+            // a print with a picture and this number; else one without a picture (number and name); else the picture's
+            byNumber(pool)?.let { return pick(it) }
+            asianWithoutPicture(cat, group, asianLangs, num, total, text)?.let { return it }
             if (pool.isNotEmpty()) {
                 val ids = pool.map { it.first }.distinct()
-                val id = byNumber(pool) ?: entryCard?.takeIf { it in ids } ?: ids.first()
-                val langs = pool.filter { it.first == id }.map { it.second }
-                val lang = entryLang?.takeIf { entryCard == id && it in langs } ?: asianLangs.first { it in langs }
-                return cat.cardExact(id, lang)
+                return pick(entryCard?.takeIf { it in ids } ?: ids.first())
             }
         }
         // western print (also when the text could not be read)
@@ -1452,6 +1473,16 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         return cat.cardExact(id, bestLang) ?: cat.card(id, "en")
     }
 
+    /** An Asian print without a picture: by the printed number (and set size) and the name in its own script. */
+    private fun asianWithoutPicture(cat: Catalog, group: String, langs: List<String>, num: String, total: String?, text: CardText?): CardInfo? {
+        if (num.isEmpty()) return null
+        val cands = cat.byNumber(langs, num, total)
+        if (cands.isEmpty()) return null
+        val known = cat.englishOf(group)?.name?.let { cat.asianNames(it, langs) }.orEmpty()
+        return VersionResolver.pickPrint(cands, text?.nameText, known, totalKnown = total != null)
+            .also { Log.i(TAG, "asian print by number $num/$total in $langs: ${cands.map { "${it.id} ${it.name}" }} name '${text?.nameText}' -> ${it?.id}") }
+    }
+
     private fun build(group: String, version: CardInfo, text: CardText?, conf: Confidence, alternatives: List<Candidate>,
                       locked: Boolean, fromPhoto: Boolean, preview: Bitmap?, scan: Bitmap?): Shown {
         val cat = catalog!!
@@ -1471,7 +1502,6 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val cat = catalog ?: return
         val p = pack ?: return
         val hit = r.hits.firstOrNull { it.group == group }
-        val versions = cat.versions(group)
         // shown at once from the picture; the printed text (language, set number) refines it a moment later
         val version = resolveVersion(group, hit?.entry, null) ?: return
         val alternatives = r.hits.filter { it.group != group }.take(3).mapNotNull { h ->
@@ -1495,7 +1525,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val frame = rgb.clone()
         viewModelScope.launch(textDispatcher) {
             val text = try {
-                readText(frame, r, hit, tryJapanese = versions.any { v -> v.second in ASIAN })
+                readText(frame, r, hit)
             } finally {
                 frame.release()
             }
@@ -1595,6 +1625,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                 add("language scores: " + t.langScores.entries.sortedByDescending { it.value }.take(4)
                     .joinToString(" ") { "${it.key} %.1f".format(it.value) })
                 add("name bar: ${t.nameText.take(40)}")
+                if (t.script.isNotBlank()) add("script: ${t.script}")
             }
             st.shown?.foil?.let { f ->
                 add("holo check: ${f.kind}" + (f.staticScore?.let { " – still-frame foil score %.2f (normal cards reach %.2f, %d frames)".format(it, foilThreshold, f.staticFrames) } ?: "") +

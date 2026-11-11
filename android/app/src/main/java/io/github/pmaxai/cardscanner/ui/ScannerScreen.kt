@@ -377,6 +377,7 @@ private fun ResultCard(s: Shown, settings: Settings, vm: ScannerViewModel) {
         Text("⚠ The ${r.kind.label.lowercase()} of this card is worth ${printingPrice(r)} – check the finish!",
             color = Warn, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
     }
+    PrintedOnlyHint(s)
 
     Spacer(Modifier.height(8.dp))
     PriceBlock(s)
@@ -667,6 +668,15 @@ fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, zoom: 
         c.cameraControl.setZoomRatio(zoom.coerceIn(1f, max))
     }
     AndroidView(factory = { previewView }, modifier = modifier)
+}
+
+/** An Asian print the card data doesn't have (yet): which language it is, and that the western card is shown. */
+@Composable
+fun PrintedOnlyHint(s: Shown) {
+    val lang = s.printedOnly ?: return
+    val name = when (lang) { "ja" -> "Japanese"; "ko" -> "Korean"; "zh-tw" -> "Chinese (traditional)"; "zh-cn" -> "Chinese (simplified)"; else -> lang }
+    Text("Printed in $name – this print isn't in the card data yet; shown: the ${s.version.lang.uppercase()} card of the same picture",
+        color = Warn, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
 }
 
 /** Labels shared by both screens. */

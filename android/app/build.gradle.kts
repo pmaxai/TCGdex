@@ -125,6 +125,9 @@ dependencies {
     // on-device text recognition (offline): card number and language
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
+    // the printed script of Asian cards: Hangul (Korean), and Chinese (traditional / simplified)
+    implementation("com.google.mlkit:text-recognition-korean:16.0.1")
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
     // QR codes for the licence: reading (activation) and showing (switch to new device)
     implementation("com.google.zxing:core:3.5.3")

@@ -341,7 +341,7 @@ class ShopClient(
          */
         fun intakeBody(cardRef: String, language: String, condition: String, finish: String, delta: Int, box: String,
                        price: Money? = null, descriptionDe: String? = null, nameDe: String? = null, nameEn: String? = null,
-                       imageUrl: String? = null, status: String? = null): JSONObject =
+                       imageUrl: String? = null, status: String? = null, nameLocal: String? = null): JSONObject =
             JSONObject().apply {
                 put("card_ref", cardRef); put("card_language", language); put("condition", condition); put("finish", finish)
                 put("delta", delta); put("storage_location", box)
@@ -349,6 +349,7 @@ class ShopClient(
                 descriptionDe?.takeIf { it.isNotBlank() }?.let { put("description_de", it.trim()) }
                 nameDe?.takeIf { it.isNotBlank() }?.let { put("name_de", it.trim()) }
                 nameEn?.takeIf { it.isNotBlank() }?.let { put("name_en", it.trim()) }
+                nameLocal?.takeIf { it.isNotBlank() }?.let { put("name_local", it.trim()) }
                 imageUrl?.takeIf { it.startsWith("https://") }?.let { put("images", JSONArray().put(JSONObject().put("role", "front").put("url", it))) }
                 status?.let { put("status", it) }
             }

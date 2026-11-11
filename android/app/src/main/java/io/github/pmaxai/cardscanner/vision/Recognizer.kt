@@ -180,7 +180,7 @@ class Recognizer(pack: Pack) : AutoCloseable {
      * found, its orientation is a guess, so the other way round is tried too if the
      * first attempt finds no number.
      */
-    fun readText(rgb: Mat, r: Recognition, hit: Hit, resolver: VersionResolver, tryJapanese: Boolean): CardText? {
+    fun readText(rgb: Mat, r: Recognition, hit: Hit, resolver: VersionResolver, detectAsian: Boolean = true): CardText? {
         fun attempt(h: Hit): CardText? {
             val quad = cardQuad(r, h) ?: return null
             val card = Readings.cardForReading(rgb, quad, upsideDown = false)
@@ -189,7 +189,7 @@ class Recognizer(pack: Pack) : AutoCloseable {
             Imgproc.cvtColor(card, rgba, Imgproc.COLOR_RGB2RGBA)
             Utils.matToBitmap(rgba, bmp)
             rgba.release(); card.release()
-            return resolver.read(bmp, tryJapanese)
+            return resolver.read(bmp, detectAsian)
         }
         val first = attempt(hit)
         if (first?.number != null) return first

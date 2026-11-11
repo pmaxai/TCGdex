@@ -316,6 +316,37 @@ class Catalog(private val db: SQLiteDatabase) {
         return out
     }
 
+    /**
+     * Cards in [langs] with the printed number [num] (normalised: "5", "TG5") in a set of [total]
+     * cards (null: any set): the Asian prints that have no picture, so the camera can't find them.
+     */
+    fun byNumber(langs: List<String>, num: String, total: String?): List<CardInfo> {
+        if (num.isEmpty() || langs.isEmpty()) return emptyList()
+        val digits = Regex("""\d+""").findAll(num).lastOrNull()?.value?.trimStart('0')?.ifEmpty { "0" } ?: return emptyList()
+        val q = "SELECT c.id, c.lang, c.local_id FROM cards c JOIN sets s ON s.id = c.set_id AND s.lang = c.lang " +
+            "WHERE c.lang IN (${langs.joinToString { "?" }}) AND c.local_id LIKE ?" + (if (total != null) " AND (s.official = ? OR s.total = ?)" else "")
+        val args = langs + listOf("%$digits") + listOfNotNull(total, total)
+        val out = ArrayList<CardInfo>()
+        db.rawQuery(q, args.toTypedArray()).use { c ->
+            while (c.moveToNext()) {
+                if (io.github.pmaxai.cardscanner.vision.VersionResolver.normNumber(c.getString(2)) != num) continue
+                cardExact(c.getString(0), c.getString(1))?.let { out += it }
+            }
+        }
+        return out
+    }
+
+    /** The names the artwork's Pokémon has on Asian prints with a picture (e.g. "メガニウム" for Meganium). */
+    fun asianNames(englishName: String, langs: List<String>): Set<String> {
+        if (!columns("entries").contains("grp") || langs.isEmpty()) return emptySet()
+        val q = "SELECT DISTINCT a.name FROM cards w JOIN entries f ON f.card_id = w.id AND f.lang = 'en' " +
+            "JOIN entries e ON e.grp = f.grp JOIN cards a ON a.id = e.card_id AND a.lang = e.lang " +
+            "WHERE w.lang = 'en' AND w.name = ? AND a.lang IN (${langs.joinToString { "?" }}) LIMIT 20"
+        val out = HashSet<String>()
+        db.rawQuery(q, (listOf(englishName) + langs).toTypedArray()).use { c -> while (c.moveToNext()) out += c.getString(0) }
+        return out
+    }
+
     /** The English version of an artwork, for the translation line and as price fallback. */
     fun englishOf(group: String): CardInfo? =
         groupMembers(group).firstNotNullOfOrNull { cardExact(it, "en") }

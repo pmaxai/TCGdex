@@ -218,6 +218,7 @@ private fun CardAndPrices(s: Shown, state: UiState, vm: ScannerViewModel) {
         Column(Modifier.weight(1f)) {
             FitText(s.version.name, 21.sp, Color.White, weight = FontWeight.Bold, minSize = 14.sp)
             FitText(s.version.setLine(), 13.sp, Muted)
+            PrintedOnlyHint(s)
             s.english?.let { e -> FitText("English: ${e.name}", 12.sp, Color.White) }
             val market = (p?.eur ?: p?.usdEur)?.let { it * ShopTerms.share(condition) }
             if (market != null) {
