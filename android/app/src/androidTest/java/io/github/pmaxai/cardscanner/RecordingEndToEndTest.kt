@@ -165,6 +165,10 @@ class RecordingEndToEndTest {
 
             val dir = RecordingStore(ctx).list().first()
             waitUntil(15_000, "events.json") { dir.events.exists() && dir.packCsv.exists() }
+            // after Stop: kept on the phone, the app asks "Submit or delete?"
+            waitUntil(10_000, "the submit-or-delete question") { vm.state.value.recording.toDecide?.id == dir.id }
+            assertEquals("LOCAL", dir.meta().getString("status"))
+            Log.i("RecordingE2E", "asks: ${vm.state.value.recording.toDecideText}")
             val o = JSONObject(dir.events.readText())
             Log.i("RecordingE2E", "events: " + (0 until o.getJSONArray("events").length()).joinToString { i ->
                 o.getJSONArray("events").getJSONObject(i).let { "${it.getString("type")}@${it.getLong("t_ms")}" } })
@@ -252,7 +256,9 @@ class RecordingEndToEndTest {
                 assertTrue(marker.getJSONObject("files").has("video.mp4"))
                 Log.i("RecordingE2E", "uploaded ${dir.id}: ${marker.getJSONObject("files")}")
             }
-            dir.dir.deleteRecursively()
+            // "Delete": gone from the phone, the question too
+            scenario.onActivity { vm.rec.discard(dir.id) }
+            waitUntil(10_000, "deleted") { !dir.dir.exists() && vm.state.value.recording.toDecide == null }
         } finally {
             modeBefore?.let { m -> runCatching { scenario.onActivity { vm.updateSettings { it.copy(youtube = m.youtube, trading = m.trading, webshop = m.webshop) } } } }
             scenario.close()

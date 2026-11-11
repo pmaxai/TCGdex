@@ -282,7 +282,7 @@ downgrades), or restore the code from the tag.
   - **double tap** the camera picture to take a card the scanner doesn't recognise
   - **swipe the card to the left** to take it out of the pack (wrong match, or a card
     you don't want to count); the same card isn't taken again until you show another
-  - a session bar with card count and total value
+  - a session bar with the pack's value
   - **+1** (next to ⚙) puts the shown card into the pack once more: two of the same card
     in a row are otherwise counted once. Each copy is its own entry (own printing; a
     swipe removes only that copy), and the picture shows ×2, ×3 … when the pack has the
@@ -331,8 +331,9 @@ downgrades), or restore the code from the tag.
       bucket not found, phone clock off, host not reachable). The key needs
       `s3:PutObject`, `s3:AbortMultipartUpload` and `s3:ListMultipartUploadParts` on the
       prefix (and `s3:DeleteObject` to remove the test file).
-    - After Stop, the recording goes up by itself (switch off *Upload automatically* to
-      start it from the list), only over Wi-Fi unless you switch that off, into
+    - After Stop the app asks: **Submit** (the recording goes into the upload queue) or
+      **Delete** (it is thrown away). A recording recovered after a crash asks the same at
+      the next start. Submitted recordings go up only over Wi-Fi unless you switch that off, into
       `<prefix>recordings/<id>/` (id: UTC start time + 4 characters, e.g.
       `20261109T140322Z-7f3a`): `events.json`, `pack.csv`, `video.mp4`, `camera.mp4` and
       last `_complete.json` (sizes and SHA-256 of each file), so the pipeline only takes

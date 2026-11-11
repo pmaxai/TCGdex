@@ -186,6 +186,8 @@ fun YouTubeScreen(state: UiState, vm: ScannerViewModel) {
     }
     if (startSheet) StartSheet(state, vm, landscape) { startSheet = false }
     if (recordings) RecordingsDialog(state, vm) { recordings = false }
+    // a finished recording: submit or delete
+    if (!state.recording.recording && state.recording.toDecide != null) RecordingDoneDialog(state, vm)
 }
 
 @Composable
@@ -449,7 +451,7 @@ private fun SessionBar(state: UiState, menu: @Composable () -> Unit, rec: @Compo
     Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             val line = buildAnnotatedString {
-                withStyle(SpanStyle(color = Muted, fontSize = 15.sp)) { append("${items.size} cards   Pack value ") }
+                withStyle(SpanStyle(color = Muted, fontSize = 15.sp)) { append("Pack value ") }
                 withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.Bold)) { append(eur(state.sessionValue)) }
             }
             FitText(line, 22.sp, Color.White, Modifier.weight(1f))

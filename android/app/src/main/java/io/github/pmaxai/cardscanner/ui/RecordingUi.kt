@@ -165,6 +165,28 @@ private class SecureLabel(private val ctx: android.content.Context) {
 }
 
 /**
+ * After Stop (or a recording recovered after the app stopped): submit it (into the upload
+ * queue) or delete it. One of the two must be chosen; the recording waits on the phone until then.
+ */
+@Composable
+fun RecordingDoneDialog(state: UiState, vm: ScannerViewModel) {
+    val r = state.recording
+    val rec = r.toDecide ?: return
+    AlertDialog(onDismissRequest = {},
+        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+        title = { Text("Recording finished") },
+        text = {
+            Column {
+                Text(r.toDecideText ?: "", fontSize = 15.sp)
+                Text("Submit it, or delete it?", fontSize = 15.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
+                if (r.settings.wifiOnly) Text("It goes up on Wi-Fi.", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+            }
+        },
+        confirmButton = { Button({ vm.rec.submit(rec.id) }) { Text("Submit") } },
+        dismissButton = { TextButton({ vm.rec.discard(rec.id) }) { Text("Delete", color = RecRed) } })
+}
+
+/**
  * Before a recording: continue the pack or start a new one, microphone, the space it needs;
  * then Android's screen-capture consent (on Android 14+: "A single app" → Card Scanner).
  */

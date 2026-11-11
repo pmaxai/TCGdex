@@ -56,6 +56,9 @@ data class RecordingUi(
     val testing: Boolean = false,
     /** uploads may be stopped by the phone's battery saver: a hint with a button to its settings */
     val batteryHint: Boolean = false,
+    /** a finished recording waiting for the user: submit (upload) or delete; with its summary line */
+    val toDecide: RecInfo? = null,
+    val toDecideText: String? = null,
 ) {
     val recording: Boolean get() = phase !is RecordingController.Phase.Idle
 }
@@ -155,7 +158,6 @@ class RecordingCoordinator(
         }
         log.stop(f.reason)
         val st = state()
-        val s = prefs.load()
         withContext(Dispatchers.IO) {
             val header = runCatching { JSONObject(dir.header.readText()) }.getOrElse { JSONObject() }
             header.optJSONObject("video")?.apply {
@@ -168,20 +170,14 @@ class RecordingCoordinator(
             dir.events.writeText(events)
             dir.packCsv.writeText(PackCsv.build(st.session, st.settings, Locale.getDefault()))
             val hits = st.session.count { isHit(it.value, st.settings.threshold) }
-            val queued = s.uploadAuto && s.uploadReady
+            // kept on the phone until the user says: submit (upload) or delete
             dir.updateMeta {
-                it.put("status", (if (queued) RecStatus.QUEUED else RecStatus.LOCAL).name).put("duration_ms", f.durationMs)
-                    .put("cards", st.session.size).put("hits", hits).put("stop_reason", f.reason)
+                it.put("status", RecStatus.LOCAL.name).put("duration_ms", f.durationMs)
+                    .put("cards", st.session.size).put("hits", hits).put("stop_reason", f.reason).put("decide", true)
             }
-            if (queued) UploadWorker.enqueue(app, dir.id, s.wifiOnly)
         }
-        val why = when (f.reason) {
-            "low_storage" -> " (stopped: storage low)"
-            "background" -> " (stopped: the app left the screen)"
-            "error" -> " (stopped: ${f.error ?: "encoder error"})"
-            else -> ""
-        }
-        publish { it.copy(lastSummary = dir.summary() + why) }
+        if (f.reason == "error" && f.error != null) dir.updateMeta { it.put("stop_error", f.error) }
+        publish { it.copy(lastSummary = null) }
         refresh()
     }
 
@@ -199,7 +195,6 @@ class RecordingCoordinator(
     /** A recording the app didn't finish (crash, force-stop): cut to its last whole second, log rebuilt, queued. */
     private fun recover() {
         if (RecordingController.recording) return
-        val s = prefs.load()
         store.list().filter { it.status == RecStatus.RECORDING }.forEach { dir ->
             runCatching {
                 val kept = if (dir.video.exists()) FragmentedMp4Writer.repair(dir.video) else 0
@@ -211,12 +206,12 @@ class RecordingCoordinator(
                 val (events, cards) = RecordingStore.recoverEvents(header, dir.eventsJsonl, dir.id, duration)
                 dir.events.writeText(events)
                 dir.packCsv.writeText(RecordingStore.csvOf(cards))
-                val queued = s.uploadAuto && s.uploadReady
+                // like a finished one: waits for the user's submit or delete
                 dir.updateMeta {
-                    it.put("status", (if (queued) RecStatus.QUEUED else RecStatus.LOCAL).name).put("duration_ms", duration)
+                    it.put("status", RecStatus.LOCAL.name).put("duration_ms", duration)
                         .put("cards", cards.size).put("hits", cards.count { c -> c.optBoolean("hit") }).put("recovered", true)
+                        .put("decide", true)
                 }
-                if (queued) UploadWorker.enqueue(app, dir.id, s.wifiOnly)
             }.onFailure { Log.w(TAG, "recovering ${dir.id}", it) }
         }
     }
@@ -247,7 +242,45 @@ class RecordingCoordinator(
         val optimized = pm != null && !pm.isIgnoringBatteryOptimizations(app.packageName)
         val stopped = store.list().any { it.status != RecStatus.UPLOADED && it.meta().optBoolean("stopped_by_system") }
         val seen = app.getSharedPreferences("recording", 0).getBoolean(HINT_SEEN, false)
-        publish { it.copy(recordings = list, batteryHint = !seen && list.isNotEmpty() && (optimized || stopped)) }
+        // the newest recording still waiting for submit or delete (not while one is running)
+        val decide = if (RecordingController.recording) null else store.list().firstOrNull { it.status == RecStatus.LOCAL && it.meta().optBoolean("decide") }
+        val decideInfo = decide?.let { d -> list.firstOrNull { it.id == d.id } }
+        val decideText = decide?.let { d -> decideLine(d) }
+        publish { it.copy(recordings = list, batteryHint = !seen && list.isNotEmpty() && (optimized || stopped),
+            toDecide = decideInfo, toDecideText = decideText) }
+    }
+
+    /** "4:53 · 12 cards · 2 hits · 412 MB", and why it stopped when it wasn't the user */
+    private fun decideLine(d: RecordingDir): String {
+        val m = d.meta()
+        val secs = m.optLong("duration_ms") / 1000
+        val size = if (d.bytes >= 1_000_000_000) "%.1f GB".format(Locale.ROOT, d.bytes / 1e9) else "%d MB".format(Locale.ROOT, d.bytes / 1_000_000)
+        val why = when {
+            m.optBoolean("recovered") -> " · recovered after the app stopped"
+            m.optString("stop_reason") == "low_storage" -> " · stopped: storage low"
+            m.optString("stop_reason") == "background" -> " · stopped: the app left the screen"
+            m.optString("stop_reason") == "error" -> " · stopped: " + (m.optString("stop_error").ifBlank { "encoder error" })
+            else -> ""
+        }
+        return "%d:%02d · %d cards · %d hits · %s".format(Locale.ROOT, secs / 60, secs % 60, m.optInt("cards"), m.optInt("hits"), size) + why
+    }
+
+    /** "Submit": the finished recording goes into the upload queue (only on Wi-Fi if that is set). */
+    fun submit(id: String) {
+        val d = store.get(id) ?: return
+        val s = prefs.load()
+        d.updateMeta { it.put("decide", false).put("status", RecStatus.QUEUED.name).put("error", "") }
+        UploadWorker.enqueue(app, id, s.wifiOnly)
+        refresh()
+        publish { it.copy(lastSummary = d.summary()) }
+    }
+
+    /** "Delete": the finished recording is thrown away. */
+    fun discard(id: String) {
+        store.get(id)?.updateMeta { it.put("decide", false) }
+        publish { it.copy(toDecide = null, toDecideText = null, lastSummary = null) }
+        delete(id)
+        message("Recording deleted")
     }
 
     /** The battery-saver hint is shown once: "Got it" hides it for good. */

@@ -401,7 +401,6 @@ private fun RecordingPage(state: UiState, vm: ScannerViewModel) {
     }
     r.connection?.let { Text((if (r.connectionOk == true) "✓ " else "⚠ ") + it, color = if (r.connectionOk == true) Sure else Warn, fontSize = 13.sp,
         modifier = Modifier.padding(top = 4.dp)) }
-    SettingSwitch("Upload automatically", "each recording is queued when it stops", s.uploadAuto) { save(s.copy(uploadAuto = it)) }
     SettingSwitch("Only on Wi-Fi", "Upload now (in Recordings…) sends one over mobile data", s.wifiOnly) { save(s.copy(wifiOnly = it)) }
     SettingSwitch("Delete local copy after upload", "only once the upload is complete and checked", s.deleteAfterUpload) {
         save(s.copy(deleteAfterUpload = it))

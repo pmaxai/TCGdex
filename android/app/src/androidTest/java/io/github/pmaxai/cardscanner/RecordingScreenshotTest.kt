@@ -23,6 +23,7 @@ import io.github.pmaxai.cardscanner.ui.Ink
 import io.github.pmaxai.cardscanner.ui.Panel
 import io.github.pmaxai.cardscanner.ui.RecInfo
 import io.github.pmaxai.cardscanner.ui.RecordingUi
+import io.github.pmaxai.cardscanner.ui.RecordingDoneDialog
 import io.github.pmaxai.cardscanner.ui.RecordingsDialog
 import io.github.pmaxai.cardscanner.ui.ScannerViewModel
 import io.github.pmaxai.cardscanner.ui.StartSheet
@@ -59,6 +60,8 @@ class RecordingScreenshotTest {
                 when (shown) {
                     "start" -> StartSheet(state, vm, landscape = true) {}
                     "list" -> RecordingsDialog(state, vm) {}
+                    "done" -> RecordingDoneDialog(state.copy(recording = state.recording.copy(toDecide = recs[0],
+                        toDecideText = "30:34 · 38 cards · 3 hits · 1.8 GB")), vm)
                 }
             }
         }
@@ -68,5 +71,8 @@ class RecordingScreenshotTest {
         compose.runOnIdle { shown = "list" }
         compose.onNodeWithText("Recordings").assertExists()
         Screenshots.saveScreen(compose, "recording-2-list.png")
+        compose.runOnIdle { shown = "done" }
+        compose.onNodeWithText("Recording finished").assertExists()
+        Screenshots.saveScreen(compose, "recording-0-submit-or-delete.png")
     }
 }
