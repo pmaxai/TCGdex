@@ -1,0 +1,68 @@
+name: TCGdex language coverage
+
+# Measures what TCGdex has per card language (sets, cards, pictures) without touching the
+# data pack. Started by hand; the result is on the run's Summary page.
+
+on:
+  workflow_dispatch:
+    inputs:
+      langs:
+        description: "TCGdex language codes, comma separated"
+        default: "ko,ja,zh-tw,zh-cn,th,id"
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Count sets, cards and pictures
+        env:
+          LANGS: ${{ inputs.langs || 'ko,ja,zh-tw,zh-cn,th,id' }}
+        run: |
+          pip install requests >/dev/null
+          python - <<'EOF'
+          import os, requests, collections
+          api = "https://api.tcgdex.net/v2"
+          s = requests.Session()
+          s.headers["User-Agent"] = "pmaxai-tcgdex-coverage"
+          def get(path):
+              for _ in range(4):
+                  r = s.get(f"{api}/{path}", timeout=60)
+                  if r.status_code == 200:
+                      return r.json()
+                  if r.status_code == 404:
+                      return None
+              r.raise_for_status()
+          out = ["# TCGdex coverage per language", "",
+                 "| language | sets | cards | with picture | sets with ≥1 picture |", "|---|---|---|---|---|"]
+          details = []
+          set_ids = {}
+          for lang in [l.strip() for l in os.environ["LANGS"].split(",") if l.strip()]:
+              sets = get(f"{lang}/sets") or []
+              cards = get(f"{lang}/cards") or []
+              set_ids[lang] = {x["id"] for x in sets}
+              by_set = collections.Counter(c["id"].rsplit("-", 1)[0] for c in cards)
+              pic_set = collections.Counter(c["id"].rsplit("-", 1)[0] for c in cards if c.get("image"))
+              pics = sum(1 for c in cards if c.get("image"))
+              out.append(f"| {lang} | {len(sets)} | {len(cards)} | {pics} ({100 * pics // max(1, len(cards))} %) | {len(pic_set)} |")
+              if lang == "ko":
+                  details += ["", "## Korean sets (id · name · cards · with picture · release)", ""]
+                  for x in sets:
+                      d = get(f"{lang}/sets/{x['id']}") or {}
+                      details.append(f"- `{x['id']}` · {x.get('name')} · {by_set.get(x['id'], 0)} · {pic_set.get(x['id'], 0)} · {d.get('releaseDate', '?')}")
+                  sample = [c for c in cards if c.get("image")][:5] or cards[:5]
+                  details += ["", "Sample Korean cards: " + ", ".join(f"`{c['id']}` {c.get('name')}" for c in sample)]
+          if "ko" in set_ids and "ja" in set_ids:
+              both = set_ids["ko"] & set_ids["ja"]
+              details += ["", f"Korean set ids that are also Japanese set ids: {len(both)} of {len(set_ids['ko'])}"]
+          text = "\n".join(out + details) + "\n"
+          print(text)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(text)
+          EOF
