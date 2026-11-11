@@ -118,7 +118,7 @@ def write_catalog(src_db: Path, dst_db: Path, entries, meta: dict, groups: list[
         CREATE TABLE entries(idx INTEGER PRIMARY KEY, card_id TEXT NOT NULL, lang TEXT NOT NULL, grp TEXT NOT NULL);
         CREATE TABLE cards(id TEXT, lang TEXT, set_id TEXT, local_id TEXT, name TEXT, image_url TEXT,
                            image_alt TEXT, image_alt_large TEXT, PRIMARY KEY(id, lang));
-        CREATE TABLE card_info(id TEXT PRIMARY KEY, rarity TEXT, variants TEXT, category TEXT);
+        CREATE TABLE card_info(id TEXT PRIMARY KEY, rarity TEXT, variants TEXT, category TEXT, dex TEXT);
         CREATE TABLE sets(id TEXT, lang TEXT, name TEXT, serie_id TEXT, serie_name TEXT, official INTEGER,
                           total INTEGER, release_date TEXT, PRIMARY KEY(id, lang));
         CREATE TABLE prices(id TEXT PRIMARY KEY, updated TEXT, trend REAL, avg REAL, low REAL, avg1 REAL,
@@ -143,6 +143,9 @@ def write_catalog(src_db: Path, dst_db: Path, entries, meta: dict, groups: list[
     con.execute(f"INSERT INTO cards SELECT c.id, c.lang, c.set_id, c.local_id, c.name, c.image_url, {alt} FROM src.cards c")
     # printings as compact flags; TCGplayer reduced to the market price per printing
     info_rows = []
+    # Pokédex numbers (catalogs built before they were kept have none)
+    has_dex = "dex" in {r[1] for r in con.execute("PRAGMA src.table_info(card_details)")}
+    dex_of = dict(con.execute("SELECT id, dex FROM src.card_details").fetchall()) if has_dex else {}
     for cid, rarity, variants, category in con.execute("SELECT id, rarity, variants, category FROM src.card_details").fetchall():
         v = json.loads(variants) if variants else {}
         if isinstance(v, list):    # older catalogs stored the detailed list
@@ -151,8 +154,8 @@ def write_catalog(src_db: Path, dst_db: Path, entries, meta: dict, groups: list[
                  "firstEdition": any("1st" in str(x.get("subtype", "")) or "first" in str(x.get("subtype", "")).lower()
                                      for x in v if isinstance(x, dict))}
         flags = {k: True for k in ("normal", "holo", "reverse", "firstEdition") if v.get(k)}
-        info_rows.append((cid, rarity, json.dumps(flags, separators=(",", ":")), card_category(category)))
-    con.executemany("INSERT OR REPLACE INTO card_info VALUES (?,?,?,?)", info_rows)
+        info_rows.append((cid, rarity, json.dumps(flags, separators=(",", ":")), card_category(category), dex_of.get(cid)))
+    con.executemany("INSERT OR REPLACE INTO card_info VALUES (?,?,?,?,?)", info_rows)
     cats: dict[str, int] = {}
     raw: dict[str, int] = {}
     for r, (_, _, _, raw_cat) in zip(info_rows, con.execute("SELECT id, rarity, variants, category FROM src.card_details")):

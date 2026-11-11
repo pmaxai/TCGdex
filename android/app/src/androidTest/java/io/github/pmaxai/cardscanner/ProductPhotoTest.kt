@@ -50,6 +50,28 @@ class ProductPhotoTest {
         assertEquals(220, thumb.height)
     }
 
+    /** Another print's picture for the shop: "Printed in Korean" across it, large, white on dark red; the rest untouched. */
+    @Test
+    fun anotherPrintsPictureIsClearlyMarked() {
+        val src = android.graphics.Bitmap.createBitmap(734, 1024, android.graphics.Bitmap.Config.ARGB_8888)
+        src.eraseColor(android.graphics.Color.rgb(230, 210, 60))
+        val out = ProductPhoto.labeled(src, "Printed in Korean")
+        assertEquals(734, out.width); assertEquals(1024, out.height)
+        val top = (1024 * 0.58).toInt(); val band = (1024 * 0.12).toInt()
+        var white = 0; var red = 0
+        for (y in top + 4 until top + band - 4) for (x in 0 until 734) {
+            val c = out.getPixel(x, y)
+            if (android.graphics.Color.red(c) > 230 && android.graphics.Color.green(c) > 230 && android.graphics.Color.blue(c) > 230) white++
+            if (android.graphics.Color.red(c) in 160..200 && android.graphics.Color.green(c) < 50) red++
+        }
+        val area = 734 * (band - 8)
+        assertTrue("letters: $white white pixels", white > area / 20)
+        assertTrue("the band: $red dark red pixels", red > area / 2)
+        assertEquals("above the band unchanged", android.graphics.Color.rgb(230, 210, 60), out.getPixel(360, 200))
+        assertEquals("below the band unchanged", android.graphics.Color.rgb(230, 210, 60), out.getPixel(360, 1000))
+        androidx.test.services.storage.TestStorage().openOutputFile("printed-in-label.png").use { out.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
     @Test
     fun withoutAnEdgeTheGuideFrameIsCutOut() {
         val (rgb, _) = photo()

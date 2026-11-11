@@ -336,6 +336,19 @@ class Catalog(private val db: SQLiteDatabase) {
         return out
     }
 
+    private val hasDex: Boolean by lazy { hasInfo && columns("card_info").contains("dex") }
+
+    /** The card's National Pokédex numbers (empty: not a Pokémon, or a data pack without them). */
+    fun dexOf(id: String): Set<Int> {
+        if (!hasDex) return emptySet()
+        return db.rawQuery("SELECT dex FROM card_info WHERE id = ?", arrayOf(id)).use { c ->
+            if (c.moveToFirst() && !c.isNull(0)) c.getString(0).split(",").mapNotNull { it.trim().toIntOrNull() }.toSet() else emptySet()
+        }
+    }
+
+    /** The Pokédex numbers of an artwork's cards (the recognised picture's Pokémon). */
+    fun dexOfGroup(group: String): Set<Int> = groupMembers(group).flatMap { dexOf(it) }.toSet()
+
     /** The names the artwork's Pokémon has on Asian prints with a picture (e.g. "メガニウム" for Meganium). */
     fun asianNames(englishName: String, langs: List<String>): Set<String> {
         if (!columns("entries").contains("grp") || langs.isEmpty()) return emptySet()

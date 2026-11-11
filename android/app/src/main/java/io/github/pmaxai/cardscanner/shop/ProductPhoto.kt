@@ -90,6 +90,47 @@ object ProductPhoto {
         return out
     }
 
+    /**
+     * A picture of another print (the Japanese original, the western card) for a product printed in
+     * another language: a band across the lower half says so, e.g. "Printed in Korean" - large
+     * white letters on dark red, the full width of the card, so nobody takes it for the print sold.
+     */
+    fun labeled(src: Bitmap, label: String): Bitmap {
+        val out = src.copy(Bitmap.Config.ARGB_8888, true)
+        val c = android.graphics.Canvas(out)
+        val w = out.width.toFloat(); val h = out.height.toFloat()
+        val bandH = h * 0.12f
+        val top = h * 0.58f
+        c.drawRect(0f, top, w, top + bandH, android.graphics.Paint().apply { color = 0xEEB71C1C.toInt() })
+        val line = android.graphics.Paint().apply { color = android.graphics.Color.WHITE; strokeWidth = h * 0.006f }
+        c.drawLine(0f, top, w, top, line)
+        c.drawLine(0f, top + bandH, w, top + bandH, line)
+        val text = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+            textAlign = android.graphics.Paint.Align.CENTER
+            textSize = bandH * 0.56f
+            while (measureText(label) > w * 0.9f && textSize > 8f) textSize *= 0.92f
+        }
+        val fm = text.fontMetrics
+        c.drawText(label, w / 2, top + bandH / 2 - (fm.ascent + fm.descent) / 2, text)
+        return out
+    }
+
+    /** A picture from the web (TCGdex, pokemontcg.io); null if it can't be loaded. */
+    fun download(url: String): Bitmap? = runCatching {
+        val http = okhttp3.OkHttpClient.Builder().connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS).build()
+        http.newCall(okhttp3.Request.Builder().url(url).build()).execute().use { r ->
+            if (!r.isSuccessful) return@use null
+            val bytes = r.body?.bytes() ?: return@use null
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        }
+    }.getOrNull()
+
+    /** A picture → JPEG bytes (quality 92). */
+    fun jpegOf(bmp: Bitmap): ByteArray = ByteArrayOutputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it); it.toByteArray() }
+
     /** RGB Mat → JPEG bytes (quality 92) and a small picture for the screen. */
     fun encode(card: Mat, thumbHeight: Int = 220): Pair<ByteArray, Bitmap> {
         val rgba = Mat()

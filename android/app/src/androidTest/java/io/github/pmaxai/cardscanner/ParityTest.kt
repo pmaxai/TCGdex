@@ -184,6 +184,23 @@ class ParityTest {
         assertTrue("language/number differ:\n" + lines.joinToString("\n"), wrong == 0)
     }
 
+    /**
+     * A Korean print isn't in the card data; its set is the Japanese one (same code and number): the
+     * Korean Meganium 005/063 is the Japanese M1S-005 - the only 005/063 of that Pokémon (Pokédex 154).
+     */
+    @Test
+    fun aKoreanPrintIsItsJapaneseOriginal() {
+        val cat = Catalog(pack.db)
+        val group = cat.groupOf("me01-010")
+        val dex = cat.dexOfGroup(group)
+        val cands = cat.byNumber(listOf("ja"), "5", "63")
+        Log.i(TAG, "korean 005/063 of $group (dex $dex): ${cands.map { "${it.id} ${it.name} ${cat.dexOf(it.id)}" }}")
+        assertTrue("candidates 005/063 in Japanese: ${cands.map { it.id }}", cands.any { it.id == "M1S-005" })
+        if (dex.isEmpty()) { Log.i(TAG, "this data pack has no Pokédex numbers yet"); return }
+        val same = cands.filter { c -> cat.dexOf(c.id).any { it in dex } }
+        assertEquals(listOf("M1S-005"), same.map { it.id })
+    }
+
     @Test
     fun takingACardByHandFindsAtLeastTheAutomaticMatch() {
         val items = fixtures.getJSONArray("real")

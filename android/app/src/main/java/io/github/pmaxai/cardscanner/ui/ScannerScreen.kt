@@ -675,8 +675,10 @@ fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, zoom: 
 fun PrintedOnlyHint(s: Shown) {
     val lang = s.printedOnly ?: return
     val name = when (lang) { "ja" -> "Japanese"; "ko" -> "Korean"; "zh-tw" -> "Chinese (traditional)"; "zh-cn" -> "Chinese (simplified)"; else -> lang }
-    Text("Printed in $name – this print isn't in the card data yet; shown: the ${s.version.lang.uppercase()} card of the same picture",
-        color = Warn, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+    val shown = if (s.version.lang in ScannerViewModel.ASIAN) "its Japanese original (same set and number)"
+        else "the ${s.version.lang.uppercase()} card of the same picture"
+    Text("Printed in $name – this print isn't in the card data; shown: $shown", color = Warn, fontSize = 12.sp,
+        modifier = Modifier.padding(top = 2.dp))
 }
 
 /** Labels shared by both screens. */

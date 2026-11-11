@@ -91,8 +91,14 @@ downgrades), or restore the code from the tag.
     simplified by the characters). Most Asian prints have no picture in the card data; they
     are found by their printed number (e.g. `005/063`) and the name in their own script
     (the picture shown is the western card's; *Create Product Image* takes one for the
-    shop). Korean prints aren't in the card data yet: the western card is shown with a
-    "Printed in Korean" note, and the Webshop takes KO as the language. ⚙ → Details shows
+    shop). Korean prints aren't in the card data (TCGdex has almost none), but their sets
+    are the Japanese ones with the same codes and numbers: a Korean card is shown as its
+    Japanese original (same number and set size, the Pokémon of the recognised picture by
+    its Pokédex number) with a "Printed in Korean" note; the Webshop takes KO as the
+    language, the name read off the card as its printed name and the Japanese card's set and
+    number. When a product gets another print's picture (the Japanese or the western card),
+    a band across it says "Printed in Korean" (Japanese, Chinese); your own photos from
+    *Create Product Image* show the real card and stay unmarked. ⚙ → Details shows
     what the script check saw.
   - **set:** the card number (e.g. `059/191`) picks the right set when the same artwork
     was printed in several sets.

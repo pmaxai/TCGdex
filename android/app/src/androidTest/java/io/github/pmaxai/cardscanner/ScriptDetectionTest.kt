@@ -55,22 +55,24 @@ class ScriptDetectionTest {
         return bmp
     }
 
-    private fun check(lang: String?, bmp: Bitmap) {
+    private fun check(lang: String?, bmp: Bitmap, name: String? = null) {
         val t = resolver.read(bmp)
         Log.i("ScriptDetection", "expected $lang: got ${t.lang} · ${t.script} · number ${t.number}/${t.total} · name '${t.nameText}'")
         assertEquals("language (${t.script})", lang, t.lang)
         if (lang != null && lang != "en") assertTrue("the name bar is read in its script: '${t.nameText}'", t.nameText.isNotBlank())
+        Log.i("ScriptDetection", "   printed name: '${t.title}'")
+        if (name != null) assertEquals("the printed name (the largest line of the name bar)", name, t.title)
     }
 
     @Test fun japanese() = check("ja", card(Locale.JAPANESE, "メガニウム", "2進化  ベイリーフから進化", listOf(
         "特性  おいしげる",
         "このポケモンがいるかぎり、自分のポケモン全員についている「基本草エネルギー」は、それぞれ草エネルギー2個ぶんとしてはたらく。この特性の効果は重ならない。"),
-        "ソーラービーム    140", "弱点 ×2   抵抗力   にげる", "005/063"))
+        "ソーラービーム    140", "弱点 ×2   抵抗力   にげる", "005/063"), name = "メガニウム")
 
     @Test fun korean() = check("ko", card(Locale.KOREAN, "메가니움", "2진화  베이리프에서 진화", listOf(
         "특성  무성하다",
         "이 포켓몬이 있는 한, 자신의 포켓몬 전원에게 붙어 있는 「기본 풀 에너지」는 각각 풀 에너지 2개만큼으로 작동한다. 이 특성의 효과는 중복되지 않는다."),
-        "솔라빔    140", "약점 ×2   저항력   후퇴", "005/063"))
+        "솔라빔    140", "약점 ×2   저항력   후퇴", "005/063"), name = "메가니움")
 
     @Test fun chineseTraditional() = check("zh-tw", card(Locale.TRADITIONAL_CHINESE, "大竺葵", "2階進化  從月桂葉進化", listOf(
         "特性  茂盛",

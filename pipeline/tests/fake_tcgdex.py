@@ -142,7 +142,7 @@ class FakeTCGdex(TCGdexClient):
                                       "cards": cards})
         if path[1] == "cards":
             cid = path[2]
-            return FakeResponse(200, {"id": cid, "rarity": "Common", "category": "Pokemon", "hp": 60,
+            return FakeResponse(200, {"id": cid, "rarity": "Common", "category": "Pokemon", "hp": 60, "dexId": [25],
                                       "variants": {"normal": True, "reverse": True},
                                       "pricing": {"cardmarket": {"updated": "2026-11-01", "unit": "EUR", "avg": 0.5,
                                                                  "trend": 0.4, "low": 0.02, "avg-holo": 1.2},

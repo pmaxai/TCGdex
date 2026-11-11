@@ -27,6 +27,8 @@ data class CardText(
     val text: String,
     /** what the script check saw (for the details view): "kana 120 · kanji 40 · hangul 3" */
     val script: String = "",
+    /** the card's name as printed: the largest line of the name bar, without "HP 160" */
+    val title: String = "",
 )
 
 /**
@@ -142,8 +144,11 @@ class VersionResolver : AutoCloseable {
             if (y > bestY) { bestY = y; number = cleanNumber(m.groupValues[1], m.groupValues[2]); total = m.groupValues[2] }
         }
         if (number == null) PROMO.find(all.replace(" ", ""))?.let { number = it.value }
-        // name bar: the upper 16% of the card
-        val nameText = lines.filter { (it.boundingBox?.centerY() ?: height) < height * 0.16 }.joinToString(" ") { it.text }
+        // name bar: the upper 16% of the card; the name is its largest line
+        val bar = lines.filter { (it.boundingBox?.centerY() ?: height) < height * 0.16 }
+        val nameText = bar.joinToString(" ") { it.text }
+        val title = bar.maxByOrNull { it.boundingBox?.height() ?: 0 }?.text.orEmpty()
+            .replace(Regex("""(?i)\bHP\s*\d+"""), "").replace(Regex("""\s\d{2,3}\s*$"""), "").trim()
 
         val scores = HashMap<String, Double>()
         val norm = " " + fold(all) + " "
@@ -161,7 +166,7 @@ class VersionResolver : AutoCloseable {
         val ranked = scores.entries.sortedByDescending { it.value }
         val top = ranked.firstOrNull()?.takeIf { it.value > 0 }
         val margin = if (top == null) 0.0 else top.value - (ranked.getOrNull(1)?.value ?: 0.0)
-        return CardText(number, total, top?.key, margin, scores, nameText, all)
+        return CardText(number, total, top?.key, margin, scores, nameText, all, title = title)
     }
 
     override fun close() {

@@ -138,10 +138,10 @@ data class Shown(
      * The card is printed in an Asian language whose print isn't in the card data (yet): its code
      * ("ko", "ja", "zh-tw", "zh-cn"); the western card of the same picture is shown meanwhile.
      */
-    val printedOnly: String? get() = text?.lang?.takeIf { it in ScannerViewModel.ASIAN && version.lang !in ScannerViewModel.ASIAN }
+    val printedOnly: String? get() = text?.lang?.takeIf { it in ScannerViewModel.ASIAN && it != version.lang }
 
     /** a picture of this card as printed in its language (TCGdex's are per language; the second source's are English) */
-    val hasPictureInItsLanguage: Boolean get() = version.imageUrl != null || (version.lang == "en" && version.highUrl != null)
+    val hasPictureInItsLanguage: Boolean get() = printedOnly == null && (version.imageUrl != null || (version.lang == "en" && version.highUrl != null))
     /** the large picture of this card in its language, as the app shows it; for the shop (null: none, a photo is needed) */
     val pictureUrl: String? get() = version.highUrl?.takeIf { hasPictureInItsLanguage }
     /** position of the shown version in [versions] */
@@ -840,6 +840,11 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val photo = st.shop.photo?.takeIf { it.cardRef == s.version.id }
         val picture = s.pictureUrl?.takeIf { photo == null && st.shop.catalogPicture != true && !ownPicture }
         val activate = picture != null && match != null && match.status == "draft" && (match.price != null || price != null)
+        // an Asian print with no picture of its own (Korean ones never have one): another print's picture goes up,
+        // with a band across it saying in which language this one is printed
+        val printed = s.printedOnly ?: s.version.lang
+        val substitute = if (photo == null && printed in ASIAN && !s.hasPictureInItsLanguage && st.shop.catalogPicture != true && !ownPicture)
+            s.imageCard?.highUrl?.let { url -> url to "Printed in " + languageName(printed) } else null
         // an Asian print: the shop doesn't know it; its printed name, and the names of the western card of the same picture
         val asian = s.version.lang in ASIAN
         val west = s.english.takeIf { asian }
@@ -848,14 +853,18 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             nameDe = nameDe ?: west?.let { catalog?.cardExact(it.id, "de")?.name ?: it.name },
             nameEn = nameEn ?: west?.name,
             imageUrl = picture, status = if (activate) "active" else null,
-            nameLocal = s.version.name.takeIf { asian })
+            nameLocal = if (s.printedOnly != null) s.text?.title?.takeIf { it.isNotBlank() } else s.version.name.takeIf { asian })
         val w = PendingWrite.json("POST", "/stock/intake", body)
         val label = "${s.version.name} (${f.language} · ${f.condition} · ${ShopTerms.finishLabel(finish)})"
         pendingShop = w
         pendingShopText = label
         shopStore.lastBox = box
         shopStore.lastCondition = f.condition
-        send(w, label, f.quantity, ShopClient.box(box))
+        send(w, label, f.quantity, ShopClient.box(box), substitute)
+    }
+
+    private fun languageName(code: String) = when (code) {
+        "ja" -> "Japanese"; "ko" -> "Korean"; "zh-tw", "zh-cn" -> "Chinese"; "th" -> "Thai"; else -> code
     }
 
     /** Sends the failed booking again: the same bytes, the same idempotency key (never booked twice). */
@@ -866,7 +875,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         send(w, pendingShopText, delta, box)
     }
 
-    private fun send(w: PendingWrite, label: String, delta: Int, box: String) {
+    /** [substitute]: another print's picture and the label to put across it, when the product has none */
+    private fun send(w: PendingWrite, label: String, delta: Int, box: String, substitute: Pair<String, String>? = null) {
         val c = client() ?: run { updateShop { it.copy(error = "Connect the shop first (⚙ → Webshop)", retryable = false) }; return }
         updateShop { it.copy(busy = true, error = null) }
         viewModelScope.launch(Dispatchers.IO) {
@@ -875,20 +885,33 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                 pendingShop = null
                 var p = r.product
                 var warnings = r.warnings
-                // the product picture taken with the camera: up to the product; a draft with a price goes live
+                // the product picture taken with the camera (or another print's, labelled): up to the product;
+                // a draft with a price goes live
                 val photo = _state.value.shop.photo?.takeIf { it.cardRef == p.cardRef }
                 var photoNote: String? = null
+                fun upload(jpeg: ByteArray) {
+                    c.uploadImage(PendingWrite.image(p.sku, jpeg))
+                    if (p.status == "draft" && p.price != null) {
+                        val (p2, w2) = c.patchProduct(PendingWrite.json("PATCH", "/products/${p.sku}", org.json.JSONObject().put("status", "active")))
+                        p = p2; warnings = w2
+                    } else warnings = warnings - "not_activated_no_image"
+                    p = runCatching { c.product(p.sku) }.getOrDefault(p)        // with its new picture
+                }
                 if (photo != null) {
-                    runCatching {
-                        c.uploadImage(PendingWrite.image(p.sku, photo.jpeg))
-                        if (p.status == "draft" && p.price != null) {
-                            val (p2, w2) = c.patchProduct(PendingWrite.json("PATCH", "/products/${p.sku}", org.json.JSONObject().put("status", "active")))
-                            p = p2; warnings = w2
-                        } else warnings = warnings - "not_activated_no_image"
-                        p = runCatching { c.product(p.sku) }.getOrDefault(p)        // with its new picture
-                    }.onFailure { e ->
+                    runCatching { upload(photo.jpeg) }.onFailure { e ->
                         Log.w(TAG, "product picture upload failed", e)
                         photoNote = "The picture didn't go up (${(e as? ShopException)?.friendly ?: e.message}) – it goes along with the next booking"
+                    }
+                }
+                var labelled = false
+                if (photo == null && substitute != null && p.images.none { it.status != "failed" }) {
+                    runCatching {
+                        val src = ProductPhoto.download(substitute.first) ?: error("the picture couldn't be loaded")
+                        upload(ProductPhoto.jpegOf(ProductPhoto.labeled(src, substitute.second)))
+                        labelled = true
+                    }.onFailure { e ->
+                        Log.w(TAG, "labelled picture failed", e)
+                        photoNote = "No picture went up (${(e as? ShopException)?.friendly ?: e.message}) – Create Product Image takes one"
                     }
                 }
                 val uploaded = photo != null && photoNote == null
@@ -897,6 +920,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                     " · now ${p.stock.quantity} in stock" + (inBox?.let { " ($it in box $box)" } ?: "") +
                     (p.price?.let { " · ${String.format(Locale.getDefault(), "%.2f €", it.euros)}" } ?: "") +
                     " · ${ShopTerms.statusLabel(p.status)}" + (if (uploaded) " · with your picture" else "") +
+                    (if (labelled) " · with a picture marked \"${substitute?.second}\"" else "") +
                     (if (r.replayed) " (already booked before)" else "")
                 val finalP = p
                 updateShop { st ->
@@ -1447,6 +1471,9 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             // a print with a picture and this number; else one without a picture (number and name); else the picture's
             byNumber(pool)?.let { return pick(it) }
             asianWithoutPicture(cat, group, asianLangs, num, total, text)?.let { return it }
+            // Korean prints aren't in the card data; their sets are the Japanese ones (same codes and numbers):
+            // the Japanese original is shown, the card is noted as printed in Korean
+            if (text?.lang == "ko") asianWithoutPicture(cat, group, listOf("ja"), num, total, null)?.let { return it }
             if (pool.isNotEmpty()) {
                 val ids = pool.map { it.first }.distinct()
                 return pick(entryCard?.takeIf { it in ids } ?: ids.first())
@@ -1473,14 +1500,23 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         return cat.cardExact(id, bestLang) ?: cat.card(id, "en")
     }
 
-    /** An Asian print without a picture: by the printed number (and set size) and the name in its own script. */
+    /**
+     * An Asian print without a picture: by the printed number (and set size), the recognised picture's
+     * Pokémon (its Pokédex number) and the name in its own script.
+     */
     private fun asianWithoutPicture(cat: Catalog, group: String, langs: List<String>, num: String, total: String?, text: CardText?): CardInfo? {
         if (num.isEmpty()) return null
         val cands = cat.byNumber(langs, num, total)
         if (cands.isEmpty()) return null
+        // the same Pokémon as the picture: one print left is the card
+        val dex = cat.dexOfGroup(group)
+        val sameDex = if (dex.isEmpty()) emptyList() else cands.filter { c -> cat.dexOf(c.id).any { it in dex } }
         val known = cat.englishOf(group)?.name?.let { cat.asianNames(it, langs) }.orEmpty()
-        return VersionResolver.pickPrint(cands, text?.nameText, known, totalKnown = total != null)
-            .also { Log.i(TAG, "asian print by number $num/$total in $langs: ${cands.map { "${it.id} ${it.name}" }} name '${text?.nameText}' -> ${it?.id}") }
+        val picked = sameDex.singleOrNull()
+            ?: VersionResolver.pickPrint(sameDex.ifEmpty { cands }, text?.nameText, known, totalKnown = total != null)
+        Log.i(TAG, "asian print by number $num/$total in $langs, dex $dex: ${cands.map { "${it.id} ${it.name}" }} " +
+            "name '${text?.nameText}' -> ${picked?.id}")
+        return picked
     }
 
     private fun build(group: String, version: CardInfo, text: CardText?, conf: Confidence, alternatives: List<Candidate>,

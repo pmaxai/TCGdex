@@ -29,7 +29,7 @@ CREATE TABLE cards(
   PRIMARY KEY(lang, id));
 CREATE TABLE card_details(
   id TEXT PRIMARY KEY, rarity TEXT, category TEXT, illustrator TEXT,
-  hp INTEGER, regulation_mark TEXT, variants TEXT, updated TEXT);
+  hp INTEGER, regulation_mark TEXT, variants TEXT, updated TEXT, dex TEXT);
 CREATE TABLE prices_cardmarket(
   id TEXT PRIMARY KEY, updated TEXT, unit TEXT,
   avg REAL, low REAL, trend REAL, avg1 REAL, avg7 REAL, avg30 REAL,
@@ -156,10 +156,12 @@ def fetch_catalog(client: TCGdexClient, out_db: Path, langs: list[str], price_la
             if not d:
                 continue
             hp = d.get("hp")
+            # National Pokédex numbers ("154"; "6,150" for tag teams): links an Asian print to its Pokémon
+            dex = ",".join(str(int(x)) for x in (d.get("dexId") or []) if isinstance(x, (int, float)) or str(x).isdigit()) or None
             detail_rows.append((cid, d.get("rarity"), d.get("category"), d.get("illustrator"),
                                 int(hp) if isinstance(hp, (int, float)) else None, d.get("regulationMark"),
                                 json.dumps(d.get("variants") or {}, ensure_ascii=False),
-                                d.get("updated")))
+                                d.get("updated"), dex))
             pricing = d.get("pricing") or {}
             cm = pricing.get("cardmarket")
             if isinstance(cm, dict):
@@ -212,7 +214,7 @@ def fetch_catalog(client: TCGdexClient, out_db: Path, langs: list[str], price_la
     con.executescript(SCHEMA)
     con.executemany("INSERT OR REPLACE INTO sets VALUES (?,?,?,?,?,?,?,?)", sets_rows)
     con.executemany("INSERT OR REPLACE INTO cards VALUES (?,?,?,?,?,?,?)", [tuple(r) for r in cards_rows])
-    con.executemany("INSERT OR REPLACE INTO card_details VALUES (?,?,?,?,?,?,?,?)", detail_rows)
+    con.executemany("INSERT OR REPLACE INTO card_details VALUES (?,?,?,?,?,?,?,?,?)", detail_rows)
     con.executemany(f"INSERT OR REPLACE INTO prices_cardmarket VALUES ({','.join('?' * 15)})", cm_rows)
     con.executemany("INSERT OR REPLACE INTO prices_tcgplayer VALUES (?,?,?,?)", tp_rows)
     con.executemany("INSERT INTO card_products VALUES (?,?,?,?,?)", product_rows)
