@@ -165,7 +165,7 @@ downgrades), or restore the code from the tag.
   the result the other, in portrait (camera on top) and landscape (camera left).
 - **Screen orientation** (⚙): *Auto* turns with the phone, *Portrait* and *Landscape* stay
   put. Works in both modes.
-- **Zoom:** pinch the camera picture, or pick 1× … 4× in ⚙. The zoom is kept.
+- **Zoom:** pinch the camera picture, or pick 1× … 4× in ⚙. The zoom is kept – also when a recording starts or stops (YouTube mode) and when you come back to the app.
 - **Capture frame size** (⚙, 50–90 %): how tall the frame is in the camera picture.
   Bigger means holding the card closer (more detail), smaller suits a tripod further away.
 - **Search cards** (🔍 at the top, or ⚙ → *Search a card…* in YouTube mode): look up any

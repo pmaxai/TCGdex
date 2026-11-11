@@ -57,6 +57,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -115,6 +117,7 @@ import io.github.pmaxai.cardscanner.vision.Readings
 import java.net.URLEncoder
 import java.util.Locale
 import java.util.concurrent.Executors
+import kotlin.coroutines.resume
 
 val Gold = Color(0xFFF2C14E)
 val Sure = Color(0xFF4CD07D)
@@ -616,6 +619,10 @@ fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, zoom: 
         }
     }
     var camera by remember { mutableStateOf<Camera?>(null) }
+    // CameraX puts the zoom back to 1x whenever the camera is bound anew (a recording's camera file joins
+    // or leaves, the Webshop still) or opens again (back in the app) - each time, the chosen zoom is set again
+    var bindings by remember { mutableIntStateOf(0) }
+    val maxZoomSeen by rememberUpdatedState(onMaxZoom)
     DisposableEffect(owner, video, still) {
         val executor = Executors.newSingleThreadExecutor()
         val future = ProcessCameraProvider.getInstance(ctx)
@@ -650,9 +657,8 @@ fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, zoom: 
                     provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis, v)
                 }.onFailure { provider.unbindAll() }.getOrNull()
             }
-            camera = (withVideo ?: camera.takeIf { photo != null } ?: provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)).also { c ->
-                c.cameraInfo.zoomState.observe(owner) { z -> onMaxZoom(z.maxZoomRatio) }
-            }
+            camera = withVideo ?: camera.takeIf { photo != null } ?: provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+            bindings++
             if (video != null) io.github.pmaxai.cardscanner.recording.CameraRecording.onBound(ctx, withVideo != null)
         }, ContextCompat.getMainExecutor(ctx))
         onDispose {
@@ -662,12 +668,43 @@ fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, zoom: 
         }
     }
     LaunchedEffect(torch, camera) { camera?.cameraControl?.enableTorch(torch) }
-    LaunchedEffect(zoom, camera) {
+    DisposableEffect(camera, owner) {
+        val c = camera ?: return@DisposableEffect onDispose {}
+        val zoomSeen = androidx.lifecycle.Observer<androidx.camera.core.ZoomState> { z -> maxZoomSeen(z.maxZoomRatio) }
+        val opened = androidx.lifecycle.Observer<androidx.camera.core.CameraState> { s ->
+            if (s.type == androidx.camera.core.CameraState.Type.OPEN) bindings++
+        }
+        c.cameraInfo.zoomState.observe(owner, zoomSeen)
+        c.cameraInfo.cameraState.observe(owner, opened)
+        onDispose {
+            c.cameraInfo.zoomState.removeObserver(zoomSeen)
+            c.cameraInfo.cameraState.removeObserver(opened)
+        }
+    }
+    LaunchedEffect(zoom, camera, bindings) {
         val c = camera ?: return@LaunchedEffect
-        val max = maxOf(1f, c.cameraInfo.zoomState.value?.maxZoomRatio ?: 1f)
-        c.cameraControl.setZoomRatio(zoom.coerceIn(1f, max))
+        applyZoom(c, zoom, ContextCompat.getMainExecutor(ctx))
     }
     AndroidView(factory = { previewView }, modifier = modifier)
+}
+
+/**
+ * Sets the zoom (within what the camera can do) and waits until the camera has taken it. A camera
+ * that is still starting refuses it ("not active"); then it is tried again, for a few seconds.
+ */
+private suspend fun applyZoom(c: Camera, zoom: Float, executor: java.util.concurrent.Executor) {
+    repeat(30) {
+        val max = c.cameraInfo.zoomState.value?.maxZoomRatio
+        val target = if (max != null) zoom.coerceIn(1f, maxOf(1f, max)) else zoom.coerceAtLeast(1f)
+        val f = c.cameraControl.setZoomRatio(target)
+        val taken = kotlinx.coroutines.withTimeoutOrNull(2_000) {
+            kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
+                f.addListener({ cont.resume(runCatching { f.get() }.isSuccess) }, executor)
+            }
+        }
+        if (taken == true) return
+        kotlinx.coroutines.delay(150)
+    }
 }
 
 /** An Asian print the card data doesn't have (yet): which language it is, and that the western card is shown. */
