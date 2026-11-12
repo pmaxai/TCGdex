@@ -100,6 +100,13 @@ class ZoomKeptTest {
                 val ok = runCatching { waitUntil(8_000, what) { abs((cameraZoom(scenario)?.first ?: 0f) - 2f) < 0.05f } }.isSuccess
                 if (!ok) {
                     val seen = "camera at ${cameraZoom(scenario)?.first}, camera ${cameraState(scenario)}, setting ${vm.state.value.settings.zoom}, max ${vm.state.value.maxZoom}"
+                    val st = vm.state.value
+                    val screen = "loading ${st.loading}, error ${st.error}, settings page ${st.settingsPage}, locked ${st.licence.locked}, youtube ${st.settings.youtube}, paused ${st.paused}"
+                    Log.i("ZoomKept", "$what: app: $screen")
+                    runCatching {
+                        val bmp = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+                        androidx.test.services.storage.TestStorage().openOutputFile("zoom-test-screen.png").use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                    }
                     val direct = directSet(scenario)
                     Log.i("ZoomKept", "$what: not 2x - $seen; $direct")
                     throw AssertionError("$what: the camera's zoom isn't 2x - $seen; $direct")
