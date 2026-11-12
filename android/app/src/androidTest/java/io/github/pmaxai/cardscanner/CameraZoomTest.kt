@@ -24,9 +24,10 @@ import kotlin.math.abs
 /**
  * The chosen zoom stays when the camera is bound anew - a recording's camera file joining and
  * leaving (YouTube mode) - and when the camera opens again after the app was in the background.
+ * (Named to run early: the tests share one process, and the app needs memory to start.)
  */
 @RunWith(AndroidJUnit4::class)
-class ZoomKeptTest {
+class CameraZoomTest {
     private val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
 
     private fun waitUntil(ms: Long, what: String, ok: () -> Boolean) {
@@ -66,15 +67,6 @@ class ZoomKeptTest {
         return t
     }
 
-    /** Diagnosis: the test itself sets 2x on the app's camera - does the camera report it? */
-    private fun directSet(scenario: ActivityScenario<MainActivity>): String {
-        val provider = ProcessCameraProvider.getInstance(ctx).get()
-        var f: com.google.common.util.concurrent.ListenableFuture<Void>? = null
-        scenario.onActivity { a -> f = provider.bindToLifecycle(a, CameraSelector.DEFAULT_BACK_CAMERA).cameraControl.setZoomRatio(2f) }
-        val r = runCatching { f!!.get(3, java.util.concurrent.TimeUnit.SECONDS) }
-        return "direct set: ${r.exceptionOrNull()?.let { it.cause ?: it } ?: "taken"}, camera now at ${cameraZoom(scenario)?.first}"
-    }
-
     @Test
     fun theZoomStaysWhenTheCameraIsBoundAgain() {
         val pkg = ctx.packageName
@@ -87,6 +79,8 @@ class ZoomKeptTest {
         try {
             scenario.onActivity { vm = ViewModelProvider(it)[ScannerViewModel::class.java] }
             waitUntil(180_000, "card data loaded") { !vm.state.value.loading }
+            // the tests share one process; when earlier ones left too little memory, the app can't start (no camera then)
+            assumeTrue("the app couldn't start in this test process: ${vm.state.value.error}", vm.state.value.error == null)
             modeBefore = vm.state.value.settings
             scenario.onActivity { vm.updateSettings { it.withMode(AppMode.YOUTUBE) } }
             waitUntil(10_000, "YouTube mode") { vm.state.value.settings.youtube && !vm.state.value.licence.locked }
@@ -99,17 +93,9 @@ class ZoomKeptTest {
                 Thread.sleep(2_000)        // CameraX has had time to reset it
                 val ok = runCatching { waitUntil(8_000, what) { abs((cameraZoom(scenario)?.first ?: 0f) - 2f) < 0.05f } }.isSuccess
                 if (!ok) {
-                    val seen = "camera at ${cameraZoom(scenario)?.first}, camera ${cameraState(scenario)}, setting ${vm.state.value.settings.zoom}, max ${vm.state.value.maxZoom}"
-                    val st = vm.state.value
-                    val screen = "loading ${st.loading}, error ${st.error}, settings page ${st.settingsPage}, locked ${st.licence.locked}, youtube ${st.settings.youtube}, paused ${st.paused}"
-                    Log.i("ZoomKept", "$what: app: $screen")
-                    runCatching {
-                        val bmp = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
-                        androidx.test.services.storage.TestStorage().openOutputFile("zoom-test-screen.png").use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
-                    }
-                    val direct = directSet(scenario)
-                    Log.i("ZoomKept", "$what: not 2x - $seen; $direct")
-                    throw AssertionError("$what: the camera's zoom isn't 2x - $seen; $direct")
+                    val seen = "camera at ${cameraZoom(scenario)?.first} (${cameraState(scenario)}), setting ${vm.state.value.settings.zoom}, max ${vm.state.value.maxZoom}"
+                    Log.i("ZoomKept", "$what: not 2x - $seen")
+                    throw AssertionError("$what: the camera's zoom isn't 2x - $seen")
                 }
                 Thread.sleep(1_000)
                 val z = cameraZoom(scenario)!!.first

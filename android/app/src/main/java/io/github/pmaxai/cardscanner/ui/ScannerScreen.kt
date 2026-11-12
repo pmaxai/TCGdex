@@ -683,7 +683,6 @@ fun CameraPreview(onFrame: (org.opencv.core.Mat) -> Unit, torch: Boolean, zoom: 
     }
     LaunchedEffect(zoom, camera, bindings) {
         val c = camera ?: return@LaunchedEffect
-        android.util.Log.i("Zoom", "apply ${zoom}x (binding $bindings, camera ${c.cameraInfo.cameraState.value?.type})")
         applyZoom(c, zoom, ContextCompat.getMainExecutor(ctx))
     }
     AndroidView(factory = { previewView }, modifier = modifier)
@@ -703,7 +702,7 @@ private suspend fun applyZoom(c: Camera, zoom: Float, executor: java.util.concur
                 f.addListener({ cont.resume(runCatching { f.get() }) }, executor)
             }
         }
-        if (answer?.isSuccess == true) { android.util.Log.i("Zoom", "zoom ${target}x taken (try ${it + 1})"); return }
+        if (answer?.isSuccess == true) return
         val failure = answer?.exceptionOrNull() ?: java.util.concurrent.TimeoutException("no answer in 2 s")
         if (it == 0 || it == 29) android.util.Log.w("CardScanner", "zoom ${target}x not taken (try ${it + 1}): ${failure.cause ?: failure}")
         kotlinx.coroutines.delay(150)
