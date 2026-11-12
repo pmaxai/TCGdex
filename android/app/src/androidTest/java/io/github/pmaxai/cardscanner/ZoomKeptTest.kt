@@ -55,6 +55,26 @@ class ZoomKeptTest {
         return z
     }
 
+    /** the app's camera's state (open, opening, closed …) and its error, for the log */
+    private fun cameraState(scenario: ActivityScenario<MainActivity>): String {
+        val provider = ProcessCameraProvider.getInstance(ctx).get()
+        var t = "?"
+        scenario.onActivity { a ->
+            val st = provider.bindToLifecycle(a, CameraSelector.DEFAULT_BACK_CAMERA).cameraInfo.cameraState.value
+            t = "${st?.type} ${st?.error?.code ?: ""}"
+        }
+        return t
+    }
+
+    /** Diagnosis: the test itself sets 2x on the app's camera - does the camera report it? */
+    private fun directSet(scenario: ActivityScenario<MainActivity>): String {
+        val provider = ProcessCameraProvider.getInstance(ctx).get()
+        var f: com.google.common.util.concurrent.ListenableFuture<Void>? = null
+        scenario.onActivity { a -> f = provider.bindToLifecycle(a, CameraSelector.DEFAULT_BACK_CAMERA).cameraControl.setZoomRatio(2f) }
+        val r = runCatching { f!!.get(3, java.util.concurrent.TimeUnit.SECONDS) }
+        return "direct set: ${r.exceptionOrNull()?.let { it.cause ?: it } ?: "taken"}, camera now at ${cameraZoom(scenario)?.first}"
+    }
+
     @Test
     fun theZoomStaysWhenTheCameraIsBoundAgain() {
         val pkg = ctx.packageName
@@ -77,7 +97,13 @@ class ZoomKeptTest {
 
             fun zoomIsTwo(what: String) {
                 Thread.sleep(2_000)        // CameraX has had time to reset it
-                waitUntil(8_000, "$what: zoom 2x, camera at ${cameraZoom(scenario)?.first}, setting ${vm.state.value.settings.zoom}, max ${vm.state.value.maxZoom}") { abs((cameraZoom(scenario)?.first ?: 0f) - 2f) < 0.05f }
+                val ok = runCatching { waitUntil(8_000, what) { abs((cameraZoom(scenario)?.first ?: 0f) - 2f) < 0.05f } }.isSuccess
+                if (!ok) {
+                    val seen = "camera at ${cameraZoom(scenario)?.first}, camera ${cameraState(scenario)}, setting ${vm.state.value.settings.zoom}, max ${vm.state.value.maxZoom}"
+                    val direct = directSet(scenario)
+                    Log.i("ZoomKept", "$what: not 2x - $seen; $direct")
+                    throw AssertionError("$what: the camera's zoom isn't 2x - $seen; $direct")
+                }
                 Thread.sleep(1_000)
                 val z = cameraZoom(scenario)!!.first
                 Log.i("ZoomKept", "$what: camera at ${z}x, setting ${vm.state.value.settings.zoom}x")
