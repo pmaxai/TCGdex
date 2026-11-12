@@ -117,7 +117,7 @@ fun SubmitDialog(
                                     colors = CheckboxDefaults.colors(checkedColor = Gold, checkmarkColor = Ink))
                                 Column(Modifier.weight(1f).padding(top = 12.dp)) {
                                     Text(t.name, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                                    if (t.description.isNotBlank()) Text(t.description, color = Muted, fontSize = 12.sp)
+                                    if (t.description.isNotBlank()) Text(t.description, color = Muted, fontSize = 12.sp, lineHeight = 16.sp)
                                 }
                             }
                         }
