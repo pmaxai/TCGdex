@@ -23,6 +23,8 @@ class RecordingDir(val dir: File) {
     val events: File get() = File(dir, "events.json")
     val packCsv: File get() = File(dir, "pack.csv")
     val header: File get() = File(dir, "header.json")
+    /** which video templates to make, and the user's inputs (written on Submit) */
+    val submission: File get() = File(dir, Submission.FILE)
     val uploadState: File get() = File(dir, "upload.json")
     private val metaFile: File get() = File(dir, "meta.json")
 
@@ -35,10 +37,14 @@ class RecordingDir(val dir: File) {
     val status: RecStatus get() = runCatching { RecStatus.valueOf(meta().optString("status", "LOCAL")) }.getOrDefault(RecStatus.LOCAL)
     val bytes: Long get() = listOf(video, camera, events, packCsv).filter { it.exists() }.sumOf { it.length() }
 
-    /** The files to upload, in order: events.json, pack.csv, video.mp4, camera.mp4 (if recorded). */
+    /**
+     * The files to upload, in order: events.json, pack.csv, submission.json (if submitted with
+     * templates), video.mp4, camera.mp4 (if recorded). The uploader puts `_complete.json` last.
+     */
     fun uploadFiles(): List<UploadFile> = listOfNotNull(
         UploadFile("events.json", events, "application/json"),
         UploadFile("pack.csv", packCsv, "text/csv; charset=utf-8"),
+        submission.takeIf { it.exists() }?.let { UploadFile(Submission.FILE, it, "application/json") },
         UploadFile("video.mp4", video, "video/mp4"),
         camera.takeIf { it.exists() && it.length() > 0 }?.let { UploadFile("camera.mp4", it, "video/mp4") },
     )
@@ -58,6 +64,7 @@ class RecordingDir(val dir: File) {
             RecStatus.UPLOADING -> "uploading ${m.optInt("progress")} %"
             RecStatus.FAILED -> "failed: ${m.optString("error")}"
             RecStatus.QUEUED -> if (m.optBoolean("waiting_wifi")) "waiting for Wi-Fi" else "queued"
+            RecStatus.LOCAL -> "not submitted yet"
             else -> status.label
         }
     }

@@ -165,28 +165,6 @@ private class SecureLabel(private val ctx: android.content.Context) {
 }
 
 /**
- * After Stop (or a recording recovered after the app stopped): submit it (into the upload
- * queue) or delete it. One of the two must be chosen; the recording waits on the phone until then.
- */
-@Composable
-fun RecordingDoneDialog(state: UiState, vm: ScannerViewModel) {
-    val r = state.recording
-    val rec = r.toDecide ?: return
-    AlertDialog(onDismissRequest = {},
-        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
-        title = { Text("Recording finished") },
-        text = {
-            Column {
-                Text(r.toDecideText ?: "", fontSize = 15.sp)
-                Text("Submit it, or delete it?", fontSize = 15.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
-                if (r.settings.wifiOnly) Text("It goes up on Wi-Fi.", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
-            }
-        },
-        confirmButton = { Button({ vm.rec.submit(rec.id) }) { Text("Submit") } },
-        dismissButton = { TextButton({ vm.rec.discard(rec.id) }) { Text("Delete", color = RecRed) } })
-}
-
-/**
  * Before a recording: continue the pack or start a new one, microphone, the space it needs;
  * then Android's screen-capture consent (on Android 14+: "A single app" → Card Scanner).
  */
@@ -258,7 +236,7 @@ fun StartSheet(state: UiState, vm: ScannerViewModel, landscape: Boolean, onClose
         dismissButton = { TextButton(onClose) { Text("Cancel") } })
 }
 
-/** ⚙ → Recordings…: every recording with its upload status; Retry, Upload now, Share, Delete. */
+/** ⚙ → Recordings…: every recording with its upload status; Submit (not submitted yet), Retry, Upload now, Share, Delete. */
 @Composable
 fun RecordingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) {
     val ctx = LocalContext.current
@@ -266,6 +244,7 @@ fun RecordingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) 
     LaunchedEffect(Unit) { while (true) { vm.rec.refresh(); delay(2_000) } }
     var confirm by remember { mutableStateOf<String?>(null) }
     var askUploadNow by remember { mutableStateOf<RecInfo?>(null) }
+    var submitting by remember { mutableStateOf<RecInfo?>(null) }
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(shape = RoundedCornerShape(18.dp), color = Panel, modifier = Modifier.fillMaxWidth(0.95f)) {
             Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
@@ -304,8 +283,10 @@ fun RecordingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) 
                             RecStatus.UPLOADED -> Sure; RecStatus.FAILED -> Warn; RecStatus.UPLOADING -> Gold; else -> Color.White
                         }, fontSize = 13.sp)
                         Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            // not submitted yet: the submit screen (templates, inputs) first
+                            if (rec.status == RecStatus.LOCAL) TextButton({ submitting = rec }) { Text("Submit…") }
                             if (rec.status == RecStatus.FAILED) TextButton({ vm.rec.retry(rec.id) }) { Text("Retry") }
-                            if (rec.status == RecStatus.QUEUED || rec.status == RecStatus.LOCAL || rec.status == RecStatus.FAILED)
+                            if (rec.status == RecStatus.QUEUED || rec.status == RecStatus.FAILED)
                                 TextButton({ askUploadNow = rec }) { Text("Upload now") }
                             if (rec.status != RecStatus.RECORDING && rec.bytes > 0) TextButton({
                                 vm.rec.shareIntent(rec.id)?.let { runCatching { ctx.startActivity(it) } }
@@ -323,6 +304,12 @@ fun RecordingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) 
             text = { Text("It is deleted on this phone; an upload in progress stops (files already in the bucket stay).") },
             confirmButton = { Button({ vm.rec.delete(id); confirm = null }) { Text("Delete") } },
             dismissButton = { TextButton({ confirm = null }) { Text("Keep") } })
+    }
+    submitting?.let { rec ->
+        val d = rec.durationMs / 1000
+        SubmitDialog(state, vm, rec.id, "Submit recording",
+            "%s · %d:%02d · %d cards · %d hits · %s".format(Locale.ROOT, rec.date, d / 60, d % 60, rec.cards, rec.hits, size(rec.bytes)),
+            onSubmitted = { submitting = null }, onLeave = { submitting = null }, onDeleted = { submitting = null })
     }
     askUploadNow?.let { rec ->
         AlertDialog(onDismissRequest = { askUploadNow = null }, title = { Text("Upload now?") },

@@ -14,6 +14,10 @@ import io.github.pmaxai.cardscanner.recording.CameraRecording
 import io.github.pmaxai.cardscanner.recording.EventLog
 import io.github.pmaxai.cardscanner.recording.Finished
 import io.github.pmaxai.cardscanner.recording.FragmentedMp4Writer
+import io.github.pmaxai.cardscanner.recording.LoadedTemplates
+import io.github.pmaxai.cardscanner.recording.PackCard
+import io.github.pmaxai.cardscanner.recording.Submission
+import io.github.pmaxai.cardscanner.recording.Templates
 import io.github.pmaxai.cardscanner.recording.RecStatus
 import io.github.pmaxai.cardscanner.recording.RecordingController
 import io.github.pmaxai.cardscanner.recording.RecordingDir
@@ -32,6 +36,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.text.DateFormat
 import java.time.Instant
@@ -265,14 +270,69 @@ class RecordingCoordinator(
         return "%d:%02d · %d cards · %d hits · %s".format(Locale.ROOT, secs / 60, secs % 60, m.optInt("cards"), m.optInt("hits"), size) + why
     }
 
-    /** "Submit": the finished recording goes into the upload queue (only on Wi-Fi if that is set). */
-    fun submit(id: String) {
+    // ------------------------------------------------------------------ submit: templates and inputs
+    /** the last templates list read from the bucket, kept on the phone */
+    private val templatesCache = java.io.File(app.filesDir, "templates/index.json")
+
+    /**
+     * The templates list for the submit screen (R2): the bucket's (saved on the phone), else the
+     * last saved one, else the built-in default. At most about 10 s; offline answers at once.
+     */
+    suspend fun loadTemplates(): LoadedTemplates = withContext(Dispatchers.IO) {
+        val cfg = prefs.s3Config()
+        val fetch: (() -> ByteArray)? = cfg?.let { c -> {
+            val http = okhttp3.OkHttpClient.Builder().connectTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(8, java.util.concurrent.TimeUnit.SECONDS).build()
+            val client = S3Client(c, http, sleep = { Thread.sleep(minOf(it, 300L)) })
+            val pool = java.util.concurrent.Executors.newSingleThreadExecutor()
+            try { pool.submit<ByteArray> { client.getObject(Templates.key(c)) }.get(10, java.util.concurrent.TimeUnit.SECONDS) }
+            catch (e: java.util.concurrent.ExecutionException) { throw (e.cause as? Exception) ?: e }
+            finally { pool.shutdownNow() }
+        } }
+        Templates.load(fetch, templatesCache)
+    }
+
+    /** The recording's pack at Stop, for the "cards" inputs. */
+    suspend fun packCards(id: String): List<PackCard> = withContext(Dispatchers.IO) {
+        store.get(id)?.let { Submission.packOf(it.events) } ?: emptyList()
+    }
+
+    /** Whether the recording has the microphone's sound (the voice option "own" needs it). */
+    suspend fun hasMicSound(id: String): Boolean = withContext(Dispatchers.IO) {
+        store.get(id)?.let { Submission.hasMicSound(it.events, it.header) } ?: false
+    }
+
+    /**
+     * "Submit" (R1, R5): submission.json with the ticked templates and the filled-in inputs goes
+     * into the recording's folder; then the recording goes into the upload queue (only on Wi-Fi
+     * if that is set). The uploader sends it before `_complete.json`.
+     */
+    fun submit(id: String, templates: List<String>, inputs: JSONObject) {
         val d = store.get(id) ?: return
         val s = prefs.load()
-        d.updateMeta { it.put("decide", false).put("status", RecStatus.QUEUED.name).put("error", "") }
-        UploadWorker.enqueue(app, id, s.wifiOnly)
-        refresh()
-        publish { it.copy(lastSummary = d.summary()) }
+        // answered: the question doesn't come back (a failed write leaves it in the list, not submitted)
+        d.updateMeta { it.put("decide", false) }
+        publish { it.copy(toDecide = null, toDecideText = null) }
+        scope.launch(Dispatchers.IO) {
+            val written = runCatching { Submission.write(d.dir, Submission.build(templates, inputs, appVersion())) }
+            if (written.isFailure) {
+                Log.w(TAG, "submission.json", written.exceptionOrNull())
+                message("Could not save the submission: ${written.exceptionOrNull()?.message}")
+                refresh()
+                return@launch
+            }
+            d.updateMeta { it.put("status", RecStatus.QUEUED.name).put("error", "").put("templates", JSONArray(templates)) }
+            UploadWorker.enqueue(app, id, s.wifiOnly)
+            refresh()
+            publish { it.copy(lastSummary = d.summary()) }
+        }
+    }
+
+    /** Leaving the submit screen without choosing: the recording stays on the phone, unsubmitted (in the list). */
+    fun later(id: String) {
+        store.get(id)?.updateMeta { it.put("decide", false) }
+        publish { it.copy(toDecide = null, toDecideText = null) }
+        scope.launch(Dispatchers.IO) { refresh() }
     }
 
     /** "Delete": the finished recording is thrown away. */

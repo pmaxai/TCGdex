@@ -343,20 +343,32 @@ downgrades), or restore the code from the tag.
       what is wrong (unknown key, wrong secret, no permission for the bucket or prefix,
       bucket not found, phone clock off, host not reachable). The key needs
       `s3:PutObject`, `s3:AbortMultipartUpload` and `s3:ListMultipartUploadParts` on the
-      prefix (and `s3:DeleteObject` to remove the test file).
-    - After Stop the app asks: **Submit** (the recording goes into the upload queue) or
-      **Delete** (it is thrown away). A recording recovered after a crash asks the same at
-      the next start. Submitted recordings go up only over Wi-Fi unless you switch that off, into
+      prefix (and `s3:DeleteObject` to remove the test file), and `s3:GetObject` on
+      `<prefix>templates/index.json` (the templates list).
+    - After Stop the app shows the **submit screen**. *Videos to make*: the video templates
+      from the pipeline's list `<prefix>templates/index.json` (read from the bucket each time,
+      saved on the phone; offline the saved list; without one only *Long Form · Smooth*),
+      the default one ticked; tick one or more. Below, the *details* the ticked templates
+      take, all optional: notes and title ideas, numbers (what we paid, cards in a Short),
+      switches (music), choices (voice: AI, own – only with microphone sound –, none) and
+      cards from the recording's pack (*Always show*, *Never show*; a card can't be in
+      both). Fields of a type the app doesn't know yet are left out. **Submit** writes
+      `submission.json` (the templates and the filled-in details) and puts the recording into
+      the upload queue; **Delete** asks once more and throws it away; **Later** (or Back)
+      keeps it on the phone, not submitted – ⚙ → Recordings… → **Submit…** later. A
+      recording recovered after a crash asks the same at the next start. Submitted
+      recordings go up only over Wi-Fi unless you switch that off, into
       `<prefix>recordings/<id>/` (id: UTC start time + 4 characters, e.g.
-      `20261109T140322Z-7f3a`): `events.json`, `pack.csv`, `video.mp4`, `camera.mp4` and
-      last `_complete.json` (sizes and SHA-256 of each file), so the pipeline only takes
+      `20261109T140322Z-7f3a`): `events.json`, `pack.csv`, `submission.json`, `video.mp4`,
+      `camera.mp4` and last `_complete.json` (sizes and SHA-256 of each file), so the pipeline only takes
       complete folders. Big files go in 16 MB parts, three at a time; a dropped connection
       or a closed app resumes where it stopped. Temporary errors are retried (5 s up to every
       10 minutes); a wrong key or missing permission stops it as *Failed* with the reason.
       With *Delete after upload* (on by default) the two videos are removed from the phone
       once everything is up.
     - **⚙ → Recordings…**: every recording with length, cards, hits, size and status
-      (waiting for Wi-Fi, uploading 62 %, uploaded, failed: reason). **Retry**, **Upload
+      (not submitted yet, waiting for Wi-Fi, uploading 62 %, uploaded, failed: reason).
+      **Submit…** (not submitted yet: the submit screen), **Retry**, **Upload
       now** (also over mobile data, this one time), **Share** and **Delete** (stops its
       upload; files already in the bucket stay). If the phone's battery saver may stop
       uploads (Xiaomi HyperOS/MIUI, Samsung), it shows a hint once with buttons to the

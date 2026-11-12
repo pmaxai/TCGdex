@@ -13,6 +13,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -23,7 +25,11 @@ import io.github.pmaxai.cardscanner.ui.Ink
 import io.github.pmaxai.cardscanner.ui.Panel
 import io.github.pmaxai.cardscanner.ui.RecInfo
 import io.github.pmaxai.cardscanner.ui.RecordingUi
-import io.github.pmaxai.cardscanner.ui.RecordingDoneDialog
+import io.github.pmaxai.cardscanner.ui.SubmitDialog
+import io.github.pmaxai.cardscanner.recording.LoadedTemplates
+import io.github.pmaxai.cardscanner.recording.PackCard
+import io.github.pmaxai.cardscanner.recording.TemplatesIndex
+import io.github.pmaxai.cardscanner.recording.TemplatesSource
 import io.github.pmaxai.cardscanner.ui.RecordingsDialog
 import io.github.pmaxai.cardscanner.ui.ScannerViewModel
 import io.github.pmaxai.cardscanner.ui.StartSheet
@@ -60,8 +66,17 @@ class RecordingScreenshotTest {
                 when (shown) {
                     "start" -> StartSheet(state, vm, landscape = true) {}
                     "list" -> RecordingsDialog(state, vm) {}
-                    "done" -> RecordingDoneDialog(state.copy(recording = state.recording.copy(toDecide = recs[0],
-                        toDecideText = "30:34 · 38 cards · 3 hits · 1.8 GB")), vm)
+                    // after Stop: the submit screen with the requirements' two templates and a small pack
+                    "done" -> SubmitDialog(state, vm, recs[0].id, "Recording finished", "30:34 · 38 cards · 3 hits · 1.8 GB",
+                        onSubmitted = {}, onLeave = {}, onDeleted = {},
+                        preset = LoadedTemplates(TemplatesIndex.parse(TemplatesTest.DOC), TemplatesSource.BUCKET),
+                        presetPack = listOf(
+                            PackCard(1, "Charizard ex", "Obsidian Flames", "223/197", 61.40, "EUR", true),
+                            PackCard(2, "Pikachu", "151", "025/165", 0.35, "EUR", false),
+                            PackCard(3, "Umbreon VMAX", "Evolving Skies", "215/203", 412.00, "EUR", true),
+                            PackCard(4, "Energy Switch", "Scarlet & Violet", "173/198", 0.05, "EUR", false),
+                            PackCard(5, "Gardevoir ex", "Paldean Fates", "233/091", 18.90, "EUR", true)),
+                        presetMic = false)
                 }
             }
         }
@@ -73,6 +88,14 @@ class RecordingScreenshotTest {
         Screenshots.saveScreen(compose, "recording-2-list.png")
         compose.runOnIdle { shown = "done" }
         compose.onNodeWithText("Recording finished").assertExists()
-        Screenshots.saveScreen(compose, "recording-0-submit-or-delete.png")
+        compose.onNodeWithText("Long Form · Smooth").assertExists()
+        Screenshots.saveScreen(compose, "recording-0-submit.png")
+        // both templates, "Always show" open with a card ticked
+        compose.onNodeWithText("Shorts · Hype").performClick()
+        compose.onNodeWithText("What we paid (€)").assertExists()
+        compose.onNodeWithText("Always show").performScrollTo().performClick()
+        compose.onNodeWithText("★ Umbreon VMAX").performScrollTo().performClick()
+        compose.onNodeWithText("1 selected").assertExists()
+        Screenshots.saveScreen(compose, "recording-0-submit-two-templates.png")
     }
 }
