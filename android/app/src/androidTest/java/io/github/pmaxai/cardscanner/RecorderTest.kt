@@ -38,7 +38,7 @@ class RecorderTest {
     @After fun tearDown() { dir.deleteRecursively() }
 
     /** A tone, delivered in real time like a microphone. */
-    private class Tone(override val sampleRate: Int = 48_000) : PcmSource {
+    internal class Tone(override val sampleRate: Int = 48_000) : PcmSource {
         private var start = 0L
         private var frames = 0L
         @Volatile private var stopped = false

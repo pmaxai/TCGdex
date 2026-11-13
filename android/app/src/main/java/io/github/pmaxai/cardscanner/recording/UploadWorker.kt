@@ -92,7 +92,7 @@ class UploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         val nm = applicationContext.getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) nm.createNotificationChannel(NotificationChannel(CHANNEL, "Uploads", NotificationManager.IMPORTANCE_LOW))
         val waiting = store.list().count { it.status == RecStatus.QUEUED || it.status == RecStatus.UPLOADING }
-        val all = store.list().filter { it.status != RecStatus.LOCAL && it.status != RecStatus.FAILED }
+        val all = store.list().filter { it.status != RecStatus.LOCAL && it.status != RecStatus.FAILED && it.status != RecStatus.SAVED }
         val n = all.sortedBy { it.id }.indexOfFirst { it.id == rec.id } + 1
         val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(applicationContext, CHANNEL)
             else @Suppress("DEPRECATION") Notification.Builder(applicationContext)

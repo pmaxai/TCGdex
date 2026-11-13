@@ -72,7 +72,7 @@ fun RecButton(state: UiState, vm: ScannerViewModel, onStart: () -> Unit) {
     val r = state.recording
     if (r.recording) return
     Box(Modifier.padding(end = 8.dp).height(44.dp).border(2.dp, RecRed, RoundedCornerShape(22.dp))
-        .clickable { if (r.settings.uploadReady) onStart() else vm.openSettings(SettingsPage.RECORDING) }.padding(horizontal = 12.dp),
+        .clickable { if (r.settings.readyToRecord) onStart() else vm.openSettings(SettingsPage.RECORDING) }.padding(horizontal = 12.dp),
         contentAlignment = Alignment.Center) {
         Text("● REC", color = RecRed, fontSize = 15.sp, fontWeight = FontWeight.Black)
     }
@@ -236,7 +236,7 @@ fun StartSheet(state: UiState, vm: ScannerViewModel, landscape: Boolean, onClose
         dismissButton = { TextButton(onClose) { Text("Cancel") } })
 }
 
-/** ⚙ → Recordings…: every recording with its upload status; Submit (not submitted yet), Retry, Upload now, Share, Delete. */
+/** ⚙ → Recordings…: every recording with its status; Submit or Save (not sent yet), Retry, Upload now, Share, Delete. */
 @Composable
 fun RecordingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) {
     val ctx = LocalContext.current
@@ -280,18 +280,20 @@ fun RecordingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) 
                         Text("%d:%02d · %d cards · %d hits · %s".format(Locale.ROOT, d / 60, d % 60, rec.cards, rec.hits, size(rec.bytes)),
                             color = Muted, fontSize = 12.sp)
                         Text(rec.statusText, color = when (rec.status) {
-                            RecStatus.UPLOADED -> Sure; RecStatus.FAILED -> Warn; RecStatus.UPLOADING -> Gold; else -> Color.White
+                            RecStatus.UPLOADED, RecStatus.SAVED -> Sure; RecStatus.FAILED -> Warn; RecStatus.UPLOADING -> Gold; else -> Color.White
                         }, fontSize = 13.sp)
                         Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                            // not submitted yet: the submit screen (templates, inputs) first
-                            if (rec.status == RecStatus.LOCAL) TextButton({ submitting = rec }) { Text("Submit…") }
+                            // not sent yet: the submit screen first (templates, inputs; or Save into the Gallery with S3 off)
+                            if (rec.status == RecStatus.LOCAL && !rec.statusText.startsWith("saving"))
+                                TextButton({ submitting = rec }) { Text(if (r.settings.uploadS3) "Submit…" else "Save…") }
                             if (rec.status == RecStatus.FAILED) TextButton({ vm.rec.retry(rec.id) }) { Text("Retry") }
                             if (rec.status == RecStatus.QUEUED || rec.status == RecStatus.FAILED)
                                 TextButton({ askUploadNow = rec }) { Text("Upload now") }
                             if (rec.status != RecStatus.RECORDING && rec.bytes > 0) TextButton({
                                 vm.rec.shareIntent(rec.id)?.let { runCatching { ctx.startActivity(it) } }
                             }) { Text("Share") }
-                            if (rec.status != RecStatus.RECORDING) TextButton({ confirm = rec.id }) { Text("Delete", color = Warn) }
+                            if (rec.status != RecStatus.RECORDING && !rec.statusText.startsWith("saving"))
+                                TextButton({ confirm = rec.id }) { Text("Delete", color = Warn) }
                         }
                     }
                 }
@@ -301,13 +303,15 @@ fun RecordingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) 
     }
     confirm?.let { id ->
         AlertDialog(onDismissRequest = { confirm = null }, title = { Text("Delete this recording?") },
-            text = { Text("It is deleted on this phone; an upload in progress stops (files already in the bucket stay).") },
+            text = { Text(if (r.recordings.firstOrNull { it.id == id }?.status == RecStatus.SAVED)
+                "It leaves this list; its videos in the Gallery stay."
+                else "It is deleted on this phone; an upload in progress stops (files already in the bucket stay).") },
             confirmButton = { Button({ vm.rec.delete(id); confirm = null }) { Text("Delete") } },
             dismissButton = { TextButton({ confirm = null }) { Text("Keep") } })
     }
     submitting?.let { rec ->
         val d = rec.durationMs / 1000
-        SubmitDialog(state, vm, rec.id, "Submit recording",
+        SubmitDialog(state, vm, rec.id, if (r.settings.uploadS3) "Submit recording" else "Save recording",
             "%s · %d:%02d · %d cards · %d hits · %s".format(Locale.ROOT, rec.date, d / 60, d % 60, rec.cards, rec.hits, size(rec.bytes)),
             onSubmitted = { submitting = null }, onLeave = { submitting = null }, onDeleted = { submitting = null })
     }

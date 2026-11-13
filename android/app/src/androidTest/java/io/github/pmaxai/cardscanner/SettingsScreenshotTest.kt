@@ -29,6 +29,9 @@ import io.github.pmaxai.cardscanner.ui.Settings
 import io.github.pmaxai.cardscanner.ui.SettingsPage
 import io.github.pmaxai.cardscanner.ui.SettingsScreen
 import io.github.pmaxai.cardscanner.ui.UiState
+import io.github.pmaxai.cardscanner.recording.RecordingSettings
+import io.github.pmaxai.cardscanner.recording.S3Provider
+import androidx.compose.ui.test.performScrollTo
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -50,9 +53,10 @@ class SettingsScreenshotTest {
             licence = LicenceState(required = true, status = LicenceStatus.ACTIVE, key = "CS-7K2QX-9MZ4D-01ABC-1XYZW",
                 since = 1_762_630_800_000L, lastCheck = 1_762_634_400_000L))
         var page by mutableStateOf(SettingsPage.MODE)
+        var shown by mutableStateOf(state)
         compose.setContent {
             MaterialTheme(colorScheme = darkColorScheme(primary = Gold, onPrimary = Ink, background = Ink, surface = Panel)) {
-                key(page) { SettingsScreen(state, vm, page) }
+                key(page, shown) { SettingsScreen(shown, vm, page) }
             }
         }
         if (!Screenshots.ready(compose)) { Log.w("SettingsScreenshot", "skipped: the test screen didn't come up"); return }
@@ -61,6 +65,20 @@ class SettingsScreenshotTest {
             compose.waitForIdle()
             compose.onNodeWithText("  ·  ${p.title}").assertExists()
             Screenshots.save(compose, "settings-${p.ordinal + 1}-${p.name.lowercase()}.png")
+            if (p == SettingsPage.RECORDING) {
+                // Upload to S3 off (the default): the S3 fields hidden
+                compose.onNodeWithText("Upload to S3").assertExists()
+                compose.onNodeWithText("Bucket").assertDoesNotExist()
+            }
         }
+        // Upload to S3 on: the S3 fields, filled in as they were
+        compose.runOnIdle {
+            shown = state.copy(recording = state.recording.copy(settings = RecordingSettings(uploadS3 = true, provider = S3Provider.EXOSCALE,
+                region = "at-vie-1", endpoint = S3Provider.EXOSCALE.endpointFor("at-vie-1"), bucket = "my-recordings", accessKeyId = "EXO…", hasSecret = true)))
+            page = SettingsPage.RECORDING
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText("Bucket").performScrollTo().assertExists()
+        Screenshots.save(compose, "settings-record-s3-on.png")
     }
 }

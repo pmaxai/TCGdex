@@ -113,7 +113,7 @@ fun YouTubeScreen(state: UiState, vm: ScannerViewModel) {
     var torch by rememberSaveable { mutableStateOf(false) }
     var startSheet by rememberSaveable { mutableStateOf(false) }
     var recordings by rememberSaveable { mutableStateOf(false) }
-    val startRec = { if (state.recording.settings.uploadReady) startSheet = true else vm.openSettings(SettingsPage.RECORDING) }
+    val startRec = { if (state.recording.settings.readyToRecord) startSheet = true else vm.openSettings(SettingsPage.RECORDING) }
     val menu: @Composable () -> Unit = {
         MenuButton(state, vm, torch, onTorch = { torch = it }, onSettings = { vm.openSettings(SettingsPage.YOUTUBE) },
             onSave = { savePack.launch(PackCsv.fileName(state.settings)) }, onRecord = startRec, onRecordings = { recordings = true })

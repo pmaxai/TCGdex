@@ -11,7 +11,9 @@ import java.util.TimeZone
 
 /** Where a recording stands. */
 enum class RecStatus(val label: String) {
-    RECORDING("recording"), QUEUED("queued"), UPLOADING("uploading"), UPLOADED("uploaded"), FAILED("failed"), LOCAL("on this phone")
+    RECORDING("recording"), QUEUED("queued"), UPLOADING("uploading"), UPLOADED("uploaded"), FAILED("failed"), LOCAL("on this phone"),
+    /** its videos were moved into the Gallery (Movies/Card Scanner); not uploaded */
+    SAVED("saved in the Gallery")
 }
 
 /** One recording: a folder on the phone with its files and meta.json (status, counts, sizes). */
@@ -53,18 +55,24 @@ class RecordingDir(val dir: File) {
     fun summary(): String {
         val m = meta()
         val d = m.optLong("duration_ms") / 1000
-        val gb = bytes / 1e9
+        val b = shownBytes
+        val gb = b / 1e9
         return "Recording %d:%02d · %d cards · %d hits · %s · %s".format(Locale.ROOT, d / 60, d % 60, m.optInt("cards"), m.optInt("hits"),
-            if (gb >= 1) "%.1f GB".format(Locale.ROOT, gb) else "%d MB".format(Locale.ROOT, bytes / 1_000_000), statusText())
+            if (gb >= 1) "%.1f GB".format(Locale.ROOT, gb) else "%d MB".format(Locale.ROOT, b / 1_000_000), statusText())
     }
 
-    fun statusText(): String {
+    /** the size to show: for a recording saved in the Gallery the size of its videos (they left the app) */
+    val shownBytes: Long get() = if (status == RecStatus.SAVED) meta().optLong("saved_bytes", bytes) else bytes
+
+    /** [uploadS3]: recordings go to S3 (a recording not sent yet is "not submitted"; else "not saved") */
+    fun statusText(uploadS3: Boolean = true): String {
         val m = meta()
         return when (status) {
             RecStatus.UPLOADING -> "uploading ${m.optInt("progress")} %"
             RecStatus.FAILED -> "failed: ${m.optString("error")}"
             RecStatus.QUEUED -> if (m.optBoolean("waiting_wifi")) "waiting for Wi-Fi" else "queued"
-            RecStatus.LOCAL -> "not submitted yet"
+            RecStatus.LOCAL -> if (uploadS3) "not submitted yet" else "not saved yet"
+            RecStatus.SAVED -> "saved in the Gallery (${GallerySaver.place})"
             else -> status.label
         }
     }

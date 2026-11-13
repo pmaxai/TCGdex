@@ -140,7 +140,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           disable-animations: true
           working-directory: android
-          script: ./gradlew --no-daemon connectedDebugAndroidTest; s=$?; adb logcat -d -s ParityTest:I ScriptDetection:I ShopStaging:I RecordingE2E:I ZoomKept:I Templates:I Recording:W CardScanner:W AndroidRuntime:E; exit $s
+          script: ./gradlew --no-daemon connectedDebugAndroidTest; s=$?; adb logcat -d -s ParityTest:I ScriptDetection:I ShopStaging:I RecordingE2E:I ZoomKept:I Templates:I GallerySaver:I Recording:W CardScanner:W AndroidRuntime:E; exit $s
 
       - uses: actions/upload-artifact@v4
         continue-on-error: true      # a hiccup of GitHub's artifact store doesn't fail a good build

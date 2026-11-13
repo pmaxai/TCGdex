@@ -51,9 +51,13 @@ data class RecordingSettings(
     val fit169: Boolean = true,
     val mic: Boolean = false,
     val showTimer: Boolean = true,
+    /** recordings go to the S3 bucket; off (the default): saved on this phone, in the Gallery. The S3 fields stay either way. */
+    val uploadS3: Boolean = false,
 ) {
     /** everything the upload needs is filled in */
     val uploadReady: Boolean get() = endpoint.isNotBlank() && region.isNotBlank() && bucket.isNotBlank() && accessKeyId.isNotBlank() && hasSecret
+    /** ● REC can start: saving on the phone needs nothing, uploading needs the bucket set up */
+    val readyToRecord: Boolean get() = !uploadS3 || uploadReady
     val longSide: Int get() = if (hd) 1920 else 1280
 }
 
@@ -83,6 +87,7 @@ class RecordingPrefs(ctx: Context) {
         fit169 = prefs.getBoolean("fit169", true),
         mic = prefs.getBoolean("mic", false),
         showTimer = prefs.getBoolean("timer", true),
+        uploadS3 = prefs.getBoolean("upload_s3", false),
     )
 
     /** Saves the settings; [secret] null keeps the stored one. */
@@ -92,7 +97,7 @@ class RecordingPrefs(ctx: Context) {
             .putString("access_key", s.accessKeyId.trim()).putBoolean("allow_http", s.allowHttp).putBoolean("upload_auto", s.uploadAuto)
             .putBoolean("wifi_only", s.wifiOnly).putBoolean("delete_after", s.deleteAfterUpload).putBoolean("hd", s.hd)
             .putInt("bitrate", s.bitrateMbps).putBoolean("camera", s.recordCamera).putBoolean("fit169", s.fit169)
-            .putBoolean("mic", s.mic).putBoolean("timer", s.showTimer)
+            .putBoolean("mic", s.mic).putBoolean("timer", s.showTimer).putBoolean("upload_s3", s.uploadS3)
         if (!secret.isNullOrBlank()) e.putString("secret", encrypt(secret.trim()))
         e.apply()
     }

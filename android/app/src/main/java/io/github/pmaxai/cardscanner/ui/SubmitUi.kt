@@ -40,6 +40,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import android.Manifest
+import android.content.pm.PackageManager
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
+import io.github.pmaxai.cardscanner.recording.GallerySaver
 import io.github.pmaxai.cardscanner.recording.LoadedTemplates
 import io.github.pmaxai.cardscanner.recording.PackCard
 import io.github.pmaxai.cardscanner.recording.SubmissionForm
@@ -65,6 +73,7 @@ fun RecordingDoneDialog(state: UiState, vm: ScannerViewModel) {
  * Submit or delete a recording (R1): the video templates to make (R3) and their inputs (R4),
  * drawn from the templates list (R2). Submit writes submission.json and queues the upload;
  * Delete asks once more; Later, Back: the recording stays on the phone, unsubmitted.
+ * With uploading to S3 off (⚙ → Record): Save puts the videos into the Gallery instead.
  * [preset], [presetPack], [presetMic]: given by tests instead of loading.
  */
 @Composable
@@ -82,7 +91,15 @@ fun SubmitDialog(
     var open by remember(id) { mutableStateOf<String?>(null) }
     var confirmDelete by remember(id) { mutableStateOf(false) }
     var sent by remember(id) { mutableStateOf(false) }
-    LaunchedEffect(id) {
+    // uploading to S3 off: saved on the phone, in the Gallery - no templates (they are for the pipeline)
+    val local = !state.recording.settings.uploadS3
+    val ctx = LocalContext.current
+    fun saveNow() { sent = true; vm.rec.saveToPhone(id); onSubmitted() }
+    val askStorage = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) saveNow() else Toast.makeText(ctx, "Saving into the Gallery needs the storage permission", Toast.LENGTH_LONG).show()
+    }
+    LaunchedEffect(id, local) {
+        if (local) return@LaunchedEffect
         if (loaded == null) loaded = vm.rec.loadTemplates()
         if (pack == null) pack = vm.rec.packCards(id)
         if (presetMic == null) mic = vm.rec.hasMicSound(id)
@@ -102,65 +119,76 @@ fun SubmitDialog(
                     Text(title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     line?.let { Text(it, color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 2.dp)) }
 
-                    Text("Videos to make", color = Gold, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 14.dp))
-                    if (l == null) {
-                        Row(Modifier.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                            Text("Loading the templates…", color = Muted, fontSize = 14.sp, modifier = Modifier.padding(start = 10.dp))
-                        }
+                    if (local) {
+                        Text("Save puts the video into the Gallery of this phone, in ${GallerySaver.place}" +
+                            " (and the camera video, if recorded). Uploading to S3 is off (⚙ → Record).",
+                            color = Color.White, fontSize = 14.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 14.dp))
                     } else {
-                        l.index.templates.forEach { t ->
-                            val on = t.id in chosen
-                            Row(Modifier.fillMaxWidth().clickable { ticked = if (on) chosen - t.id else chosen + t.id }.padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.Top) {
-                                Checkbox(checked = on, onCheckedChange = { ticked = if (it) chosen + t.id else chosen - t.id },
-                                    colors = CheckboxDefaults.colors(checkedColor = Gold, checkmarkColor = Ink))
-                                Column(Modifier.weight(1f).padding(top = 12.dp)) {
-                                    Text(t.name, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                                    if (t.description.isNotBlank()) Text(t.description, color = Muted, fontSize = 12.sp, lineHeight = 16.sp)
+                        Text("Videos to make", color = Gold, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 14.dp))
+                        if (l == null) {
+                            Row(Modifier.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                                Text("Loading the templates…", color = Muted, fontSize = 14.sp, modifier = Modifier.padding(start = 10.dp))
+                            }
+                        } else {
+                            l.index.templates.forEach { t ->
+                                val on = t.id in chosen
+                                Row(Modifier.fillMaxWidth().clickable { ticked = if (on) chosen - t.id else chosen + t.id }.padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.Top) {
+                                    Checkbox(checked = on, onCheckedChange = { ticked = if (it) chosen + t.id else chosen - t.id },
+                                        colors = CheckboxDefaults.colors(checkedColor = Gold, checkmarkColor = Ink))
+                                    Column(Modifier.weight(1f).padding(top = 12.dp)) {
+                                        Text(t.name, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                        if (t.description.isNotBlank()) Text(t.description, color = Muted, fontSize = 12.sp, lineHeight = 16.sp)
+                                    }
                                 }
                             }
+                            sourceNote(l)?.let { (text, warn) -> Text(text, color = if (warn) Warn else Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp)) }
+                            if (chosen.isEmpty()) Text("Tick at least one.", color = Warn, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
                         }
-                        sourceNote(l)?.let { (text, warn) -> Text(text, color = if (warn) Warn else Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp)) }
-                        if (chosen.isEmpty()) Text("Tick at least one.", color = Warn, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
-                    }
 
-                    if (fields.isNotEmpty()) {
-                        Text("Details (all optional)", color = Gold, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 14.dp))
-                        fields.forEach { f ->
-                            Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                                when (f.type) {
-                                    "text" -> TextInput(f, value(f) as? String ?: "") { values = values + (f.id to it) }
-                                    "number" -> NumberInput(f, value(f) as? String ?: "") { values = values + (f.id to it) }
-                                    "toggle" -> Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                        Text(f.label, color = Color.White, fontSize = 15.sp, modifier = Modifier.weight(1f))
-                                        Switch(checked = value(f) as? Boolean ?: false, onCheckedChange = { values = values + (f.id to it) })
-                                    }
-                                    "choice" -> {
-                                        Text(f.label, color = Color.White, fontSize = 15.sp)
-                                        // "own" voice: only with the microphone's sound in the recording
-                                        val options = f.options.filter { !(f.id == "voice" && it == "own" && !mic) }
-                                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                            options.forEach { o ->
-                                                FilterChip(selected = value(f) == o, onClick = { values = values + (f.id to o) }, label = { Text(o) })
+                        if (fields.isNotEmpty()) {
+                            Text("Details (all optional)", color = Gold, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 14.dp))
+                            fields.forEach { f ->
+                                Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                                    when (f.type) {
+                                        "text" -> TextInput(f, value(f) as? String ?: "") { values = values + (f.id to it) }
+                                        "number" -> NumberInput(f, value(f) as? String ?: "") { values = values + (f.id to it) }
+                                        "toggle" -> Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                            Text(f.label, color = Color.White, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                                            Switch(checked = value(f) as? Boolean ?: false, onCheckedChange = { values = values + (f.id to it) })
+                                        }
+                                        "choice" -> {
+                                            Text(f.label, color = Color.White, fontSize = 15.sp)
+                                            // "own" voice: only with the microphone's sound in the recording
+                                            val options = f.options.filter { !(f.id == "voice" && it == "own" && !mic) }
+                                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                options.forEach { o ->
+                                                    FilterChip(selected = value(f) == o, onClick = { values = values + (f.id to o) }, label = { Text(o) })
+                                                }
                                             }
                                         }
-                                    }
-                                    "cards" -> CardsInput(f, fields, pack, open == f.id, onOpen = { open = if (open == f.id) null else f.id },
-                                        chosen = { g -> (value(g) as? List<*>)?.filterIsInstance<Int>() ?: emptyList() }) { entry, on ->
-                                        values = values + SubmissionForm.tickCard(fields, current(), f.id, entry, on)
+                                        "cards" -> CardsInput(f, fields, pack, open == f.id, onOpen = { open = if (open == f.id) null else f.id },
+                                            chosen = { g -> (value(g) as? List<*>)?.filterIsInstance<Int>() ?: emptyList() }) { entry, on ->
+                                            values = values + SubmissionForm.tickCard(fields, current(), f.id, entry, on)
+                                        }
                                     }
                                 }
                             }
                         }
+                        if (state.recording.settings.wifiOnly) Text("It goes up on Wi-Fi.", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp))
                     }
-                    if (state.recording.settings.wifiOnly) Text("It goes up on Wi-Fi.", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp))
                 }
                 Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     TextButton({ confirmDelete = true }, enabled = !sent) { Text("Delete", color = RecRed) }
                     Spacer(Modifier.weight(1f))
                     TextButton(onLeave, enabled = !sent) { Text("Later") }
-                    Button({
+                    if (local) Button({
+                        if (GallerySaver.needsPermission && ContextCompat.checkSelfPermission(ctx, Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+                            PackageManager.PERMISSION_GRANTED) askStorage.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                        else saveNow()
+                    }, enabled = !sent) { Text("Save") }
+                    else Button({
                         val ll = l ?: return@Button
                         sent = true
                         val order = ll.index.templates.filter { it.id in chosen }.map { it.id }
@@ -173,7 +201,8 @@ fun SubmitDialog(
     }
     if (confirmDelete) {
         AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Delete this recording?") },
-            text = { Text("Its video and files are deleted on this phone. Nothing is uploaded.") },
+            text = { Text(if (local) "Its video and files are deleted on this phone. Nothing goes into the Gallery."
+                else "Its video and files are deleted on this phone. Nothing is uploaded.") },
             confirmButton = { Button({ confirmDelete = false; vm.rec.discard(id); onDeleted() }) { Text("Delete") } },
             dismissButton = { TextButton({ confirmDelete = false }) { Text("Keep") } })
     }

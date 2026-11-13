@@ -14,6 +14,7 @@ import io.github.pmaxai.cardscanner.recording.CameraRecording
 import io.github.pmaxai.cardscanner.recording.EventLog
 import io.github.pmaxai.cardscanner.recording.Finished
 import io.github.pmaxai.cardscanner.recording.FragmentedMp4Writer
+import io.github.pmaxai.cardscanner.recording.GallerySaver
 import io.github.pmaxai.cardscanner.recording.LoadedTemplates
 import io.github.pmaxai.cardscanner.recording.PackCard
 import io.github.pmaxai.cardscanner.recording.Submission
@@ -241,7 +242,8 @@ class RecordingCoordinator(
             val m = d.meta()
             if (d.status == RecStatus.QUEUED) d.updateMeta { it.put("waiting_wifi", s.wifiOnly && !wifi) }
             RecInfo(d.id, df.format(Date(m.optLong("created", d.dir.lastModified()))), m.optLong("duration_ms"), m.optInt("cards"),
-                m.optInt("hits"), d.bytes, d.status, d.statusText(), m.optString("error").takeIf { it.isNotBlank() })
+                m.optInt("hits"), d.shownBytes, d.status, if (d.id in saving) "saving to the Gallery…" else d.statusText(s.uploadS3),
+                m.optString("error").takeIf { it.isNotBlank() })
         }
         val pm = app.getSystemService(PowerManager::class.java)
         val optimized = pm != null && !pm.isIgnoringBatteryOptimizations(app.packageName)
@@ -328,6 +330,44 @@ class RecordingCoordinator(
         }
     }
 
+    // ------------------------------------------------------------------ saved on the phone (S3 off)
+    /**
+     * "Save" (uploading to S3 is off): the recording's videos into the Gallery, Movies/Card
+     * Scanner - the screen video rewritten as a plain MP4 (seekable), the camera video as it
+     * is - then the app's copies are removed; the card log stays in the app's list.
+     */
+    fun saveToPhone(id: String) {
+        val d = store.get(id) ?: return
+        d.updateMeta { it.put("decide", false) }
+        publish { it.copy(toDecide = null, toDecideText = null) }
+        if (!saving.add(id)) return
+        scope.launch(Dispatchers.IO) {
+            refresh()
+            val taken = d.meta().optLong("created", d.dir.lastModified())
+            val videos = d.video.length().coerceAtLeast(0) + d.camera.length().coerceAtLeast(0)
+            val saved = ArrayList<android.net.Uri>()
+            val r = runCatching {
+                if (d.video.exists()) saved += GallerySaver.save(app, d.video, "$id.mp4", taken, remux = true)
+                if (d.camera.exists()) saved += GallerySaver.save(app, d.camera, "$id-camera.mp4", taken, remux = false)
+                check(saved.isNotEmpty()) { "this recording has no video" }
+            }
+            if (r.isSuccess) {
+                d.updateMeta { it.put("status", RecStatus.SAVED.name).put("error", "").put("saved_bytes", videos)
+                    .put("gallery", JSONArray(saved.map { u -> u.toString() })) }
+                d.video.delete(); d.camera.delete()
+                message("Saved in the Gallery: ${GallerySaver.place}")
+                publish { it.copy(lastSummary = d.summary()) }
+            } else {
+                // nothing half-saved: what got into the Gallery goes out again; the recording stays in the app
+                saved.forEach { u -> runCatching { if (u.scheme == "file") java.io.File(u.path!!).delete() else app.contentResolver.delete(u, null, null) } }
+                Log.w(TAG, "save to the Gallery", r.exceptionOrNull())
+                message("Could not save in the Gallery: ${r.exceptionOrNull()?.message ?: r.exceptionOrNull()?.javaClass?.simpleName}")
+            }
+            saving.remove(id)
+            refresh()
+        }
+    }
+
     /** Leaving the submit screen without choosing: the recording stays on the phone, unsubmitted (in the list). */
     fun later(id: String) {
         store.get(id)?.updateMeta { it.put("decide", false) }
@@ -380,8 +420,9 @@ class RecordingCoordinator(
     /** The video to share with another app. */
     fun shareIntent(id: String): Intent? {
         val d = store.get(id) ?: return null
-        if (!d.video.exists()) return null
-        val uri = FileProvider.getUriForFile(app, app.packageName + ".updates", d.video)
+        // saved in the Gallery: its video there
+        val uri = if (d.video.exists()) FileProvider.getUriForFile(app, app.packageName + ".updates", d.video)
+            else d.meta().optJSONArray("gallery")?.optString(0)?.takeIf { it.startsWith("content:") }?.let(android.net.Uri::parse) ?: return null
         return Intent.createChooser(Intent(Intent.ACTION_SEND).setType("video/mp4").putExtra(Intent.EXTRA_STREAM, uri)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "Share recording")
     }
@@ -423,6 +464,9 @@ class RecordingCoordinator(
         runCatching { app.packageManager.getPackageInfo(app.packageName, 0).versionName }.getOrNull() ?: "?"
 
     companion object {
+        /** recordings being saved into the Gallery now (this process) */
+        private val saving: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
         private const val TAG = "Recording"
         private const val HINT_SEEN = "battery_hint_seen"
         /** the reveal's animation lengths (YouTube mode), for the pipeline */

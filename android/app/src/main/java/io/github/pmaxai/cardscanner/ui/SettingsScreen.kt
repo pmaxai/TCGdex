@@ -70,6 +70,7 @@ import io.github.pmaxai.cardscanner.trading.Reference
 import io.github.pmaxai.cardscanner.update.AppUpdate
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.rememberLauncherForActivityResult
+import io.github.pmaxai.cardscanner.recording.GallerySaver
 import io.github.pmaxai.cardscanner.recording.S3Provider
 import io.github.pmaxai.cardscanner.recording.RecordingSettings
 
@@ -327,8 +328,8 @@ private fun RecordingPage(state: UiState, vm: ScannerViewModel) {
     val ctx = LocalContext.current
     val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> if (ok) save(s.copy(mic = true)) }
 
-    Hint("YouTube mode records its own screen with ● REC, logs every card with its time in the video, and uploads both to " +
-        "your S3 bucket by itself.")
+    Hint("YouTube mode records its own screen with ● REC and logs every card with its time in the video. The video is saved " +
+        "in the Gallery of this phone, or, with Upload to S3, uploaded with the card log to your S3 bucket by itself.")
     Heading("Recording")
     Setting("Video quality", "applies to the screen and the camera file") {
         Column {
@@ -351,62 +352,68 @@ private fun RecordingPage(state: UiState, vm: ScannerViewModel) {
         save(s.copy(showTimer = it))
     }
 
-    Heading("Upload (S3)")
-    Setting("Provider", null) {
-        Choices(S3Provider.values().toList(), s.provider, label = { it.label }) { p ->
-            val region = p.defaultRegion
-            save(s.copy(provider = p, region = region, endpoint = p.endpointFor(region).ifEmpty { s.endpoint }, pathStyle = p.pathStyle))
-        }
-    }
-    when (s.provider) {
-        S3Provider.AWS, S3Provider.EXOSCALE -> Setting(if (s.provider == S3Provider.AWS) "Region" else "Zone", "used for signing") {
-            Choices(if (s.provider == S3Provider.AWS) S3Provider.AWS_REGIONS else S3Provider.EXOSCALE_ZONES, s.region, label = { it }) { z ->
-                save(s.copy(region = z, endpoint = s.provider.endpointFor(z)))
+    Heading("Where recordings go")
+    // off (the default): saved on this phone; the S3 fields are only hidden, their values stay for when it is on again
+    SettingSwitch("Upload to S3", if (s.uploadS3) "to your bucket, with the card log, for the video pipeline"
+        else "off: Save puts the videos into the Gallery (${GallerySaver.place})", s.uploadS3) { save(s.copy(uploadS3 = it)) }
+    if (s.uploadS3) {
+        Heading("Upload (S3)")
+        Setting("Provider", null) {
+            Choices(S3Provider.values().toList(), s.provider, label = { it.label }) { p ->
+                val region = p.defaultRegion
+                save(s.copy(provider = p, region = region, endpoint = p.endpointFor(region).ifEmpty { s.endpoint }, pathStyle = p.pathStyle))
             }
         }
-        S3Provider.OTHER -> Setting("Region", "e.g. us-east-1 for MinIO, auto for R2") {
-            var t by remember(s.region) { mutableStateOf(s.region) }
-            OutlinedTextField(t, { t = it; save(s.copy(region = it.trim())) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        when (s.provider) {
+            S3Provider.AWS, S3Provider.EXOSCALE -> Setting(if (s.provider == S3Provider.AWS) "Region" else "Zone", "used for signing") {
+                Choices(if (s.provider == S3Provider.AWS) S3Provider.AWS_REGIONS else S3Provider.EXOSCALE_ZONES, s.region, label = { it }) { z ->
+                    save(s.copy(region = z, endpoint = s.provider.endpointFor(z)))
+                }
+            }
+            S3Provider.OTHER -> Setting("Region", "e.g. us-east-1 for MinIO, auto for R2") {
+                var t by remember(s.region) { mutableStateOf(s.region) }
+                OutlinedTextField(t, { t = it; save(s.copy(region = it.trim())) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            }
         }
+        Setting("S3 endpoint", "https:// (with port if needed)") {
+            var t by remember(s.endpoint) { mutableStateOf(s.endpoint) }
+            OutlinedTextField(t, { t = it; save(s.copy(endpoint = it.trim())) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        }
+        Setting("Bucket", null) {
+            var t by remember(s.bucket) { mutableStateOf(s.bucket) }
+            OutlinedTextField(t, { t = it; save(s.copy(bucket = it.trim())) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        }
+        Setting("Path prefix", "optional, e.g. tcgdex/") {
+            var t by remember(s.prefix) { mutableStateOf(s.prefix) }
+            OutlinedTextField(t, { t = it; save(s.copy(prefix = it)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        }
+        Setting("Addressing", "path-style is needed for MinIO") {
+            Choices(listOf(false, true), s.pathStyle, label = { if (it) "Path-style" else "Virtual-hosted" }) { save(s.copy(pathStyle = it)) }
+        }
+        Setting("Access key ID", null) {
+            var t by remember(s.accessKeyId) { mutableStateOf(s.accessKeyId) }
+            OutlinedTextField(t, { t = it; save(s.copy(accessKeyId = it.trim())) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        }
+        Setting("Secret access key", if (cur.hasSecret) "stored encrypted on this phone; leave empty to keep it" else "stored encrypted, never shown again") {
+            OutlinedTextField(secret, { secret = it }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                placeholder = { Text(if (cur.hasSecret) "••••••••" else "") })
+        }
+        SettingSwitch("Allow http (testing)", "only for a test server on your network", s.allowHttp) { save(s.copy(allowHttp = it)) }
+        Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Button(onClick = {
+                vm.rec.saveSettings(s, secret.takeIf { it.isNotBlank() }); secret = ""; vm.rec.testConnection()
+            }, enabled = !r.testing) { Text(if (r.testing) "Testing…" else "Save & test") }
+        }
+        r.connection?.let { Text((if (r.connectionOk == true) "✓ " else "⚠ ") + it, color = if (r.connectionOk == true) Sure else Warn, fontSize = 13.sp,
+            modifier = Modifier.padding(top = 4.dp)) }
+        SettingSwitch("Only on Wi-Fi", "Upload now (in Recordings…) sends one over mobile data", s.wifiOnly) { save(s.copy(wifiOnly = it)) }
+        SettingSwitch("Delete local copy after upload", "only once the upload is complete and checked", s.deleteAfterUpload) {
+            save(s.copy(deleteAfterUpload = it))
+        }
+        Hint("The key only needs to write (s3:PutObject and multipart uploads) under the prefix. Each recording goes to " +
+            "<prefix>recordings/<id>/; _complete.json comes last.")
     }
-    Setting("S3 endpoint", "https:// (with port if needed)") {
-        var t by remember(s.endpoint) { mutableStateOf(s.endpoint) }
-        OutlinedTextField(t, { t = it; save(s.copy(endpoint = it.trim())) }, singleLine = true, modifier = Modifier.fillMaxWidth())
-    }
-    Setting("Bucket", null) {
-        var t by remember(s.bucket) { mutableStateOf(s.bucket) }
-        OutlinedTextField(t, { t = it; save(s.copy(bucket = it.trim())) }, singleLine = true, modifier = Modifier.fillMaxWidth())
-    }
-    Setting("Path prefix", "optional, e.g. tcgdex/") {
-        var t by remember(s.prefix) { mutableStateOf(s.prefix) }
-        OutlinedTextField(t, { t = it; save(s.copy(prefix = it)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
-    }
-    Setting("Addressing", "path-style is needed for MinIO") {
-        Choices(listOf(false, true), s.pathStyle, label = { if (it) "Path-style" else "Virtual-hosted" }) { save(s.copy(pathStyle = it)) }
-    }
-    Setting("Access key ID", null) {
-        var t by remember(s.accessKeyId) { mutableStateOf(s.accessKeyId) }
-        OutlinedTextField(t, { t = it; save(s.copy(accessKeyId = it.trim())) }, singleLine = true, modifier = Modifier.fillMaxWidth())
-    }
-    Setting("Secret access key", if (cur.hasSecret) "stored encrypted on this phone; leave empty to keep it" else "stored encrypted, never shown again") {
-        OutlinedTextField(secret, { secret = it }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-            placeholder = { Text(if (cur.hasSecret) "••••••••" else "") })
-    }
-    SettingSwitch("Allow http (testing)", "only for a test server on your network", s.allowHttp) { save(s.copy(allowHttp = it)) }
-    Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Button(onClick = {
-            vm.rec.saveSettings(s, secret.takeIf { it.isNotBlank() }); secret = ""; vm.rec.testConnection()
-        }, enabled = !r.testing) { Text(if (r.testing) "Testing…" else "Save & test") }
-    }
-    r.connection?.let { Text((if (r.connectionOk == true) "✓ " else "⚠ ") + it, color = if (r.connectionOk == true) Sure else Warn, fontSize = 13.sp,
-        modifier = Modifier.padding(top = 4.dp)) }
-    SettingSwitch("Only on Wi-Fi", "Upload now (in Recordings…) sends one over mobile data", s.wifiOnly) { save(s.copy(wifiOnly = it)) }
-    SettingSwitch("Delete local copy after upload", "only once the upload is complete and checked", s.deleteAfterUpload) {
-        save(s.copy(deleteAfterUpload = it))
-    }
-    Hint("The key only needs to write (s3:PutObject and multipart uploads) under the prefix. Each recording goes to " +
-        "<prefix>recordings/<id>/; _complete.json comes last.")
 }
 
 @Composable

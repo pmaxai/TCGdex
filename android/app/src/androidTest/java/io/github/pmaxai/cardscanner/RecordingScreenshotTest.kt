@@ -49,7 +49,7 @@ class RecordingScreenshotTest {
         InstrumentationRegistry.getInstrumentation().runOnMainSync {
             vm = ScannerViewModel(ApplicationProvider.getApplicationContext<Application>())
         }
-        val settings = RecordingSettings(bucket = "my-recordings", accessKeyId = "AKIA…", hasSecret = true)
+        val settings = RecordingSettings(bucket = "my-recordings", accessKeyId = "AKIA…", hasSecret = true, uploadS3 = true)
         val recs = listOf(
             RecInfo("20261109T140322Z-7f3a", "9 Nov 2026, 15:03", 1_834_000, 38, 3, 1_830_000_000, RecStatus.UPLOADING, "uploading 62 %", null),
             RecInfo("20261108T191001Z-02c1", "8 Nov 2026, 20:10", 2_710_000, 51, 5, 2_640_000_000, RecStatus.QUEUED, "waiting for Wi-Fi", null),
@@ -60,12 +60,20 @@ class RecordingScreenshotTest {
         var shown by mutableStateOf("start")
         val state = UiState(loading = false, recording = RecordingUi(settings = settings, recordings = recs,
             lastSummary = "Recording 30:34 · 38 cards · 3 hits · 1.8 GB · queued", batteryHint = true))
+        // Upload to S3 off: saved on the phone
+        val localState = state.copy(recording = state.recording.copy(settings = settings.copy(uploadS3 = false), batteryHint = false, recordings = listOf(
+            RecInfo("20261113T201500Z-4c1d", "13 Nov 2026, 21:15", 1_210_000, 24, 2, 1_190_000_000, RecStatus.LOCAL, "not saved yet", null),
+            RecInfo("20261112T183000Z-9a7b", "12 Nov 2026, 19:30", 1_834_000, 38, 3, 1_830_000_000, RecStatus.SAVED,
+                "saved in the Gallery (Movies/Card Scanner)", null))))
         compose.setContent {
             MaterialTheme(colorScheme = darkColorScheme(primary = Gold, onPrimary = Ink, background = Ink, surface = Panel)) {
                 Box(Modifier.fillMaxSize().background(Ink))
                 when (shown) {
                     "start" -> StartSheet(state, vm, landscape = true) {}
                     "list" -> RecordingsDialog(state, vm) {}
+                    "local-list" -> RecordingsDialog(localState, vm) {}
+                    "local-done" -> SubmitDialog(localState, vm, "20261113T201500Z-4c1d", "Recording finished", "20:10 · 24 cards · 2 hits · 1.2 GB",
+                        onSubmitted = {}, onLeave = {}, onDeleted = {})
                     // after Stop: the submit screen with the requirements' two templates and a small pack
                     "done" -> SubmitDialog(state, vm, recs[0].id, "Recording finished", "30:34 · 38 cards · 3 hits · 1.8 GB",
                         onSubmitted = {}, onLeave = {}, onDeleted = {},
@@ -97,5 +105,14 @@ class RecordingScreenshotTest {
         compose.onNodeWithText("★ Umbreon VMAX").performScrollTo().performClick()
         compose.onNodeWithText("1 selected").assertExists()
         Screenshots.saveScreen(compose, "recording-0-submit-two-templates.png")
+        // Upload to S3 off: Save into the Gallery, no templates; the list offers Save…
+        compose.runOnIdle { shown = "local-done" }
+        compose.onNodeWithText("Save").assertExists()
+        compose.onNodeWithText("Shorts · Hype").assertDoesNotExist()
+        Screenshots.saveScreen(compose, "recording-0-save-local.png")
+        compose.runOnIdle { shown = "local-list" }
+        compose.onNodeWithText("Save…").assertExists()
+        compose.onNodeWithText("saved in the Gallery (Movies/Card Scanner)").assertExists()
+        Screenshots.saveScreen(compose, "recording-2-list-local.png")
     }
 }

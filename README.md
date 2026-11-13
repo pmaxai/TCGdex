@@ -308,8 +308,9 @@ downgrades), or restore the code from the tag.
     so Excel opens it directly.
   - optional title (e.g. your channel name) at the top; no vibration while recording
   - **Recording** (**● REC** next to +1 and ⚙, or ⚙ → *Start recording*): the app records
-    its own screen and uploads it with a log of every card, for the video pipeline. Until
-    the upload is set up, ● REC opens ⚙ → Recording & upload. Before it starts: **Continue
+    its own screen with a log of every card, and saves the video in the Gallery of the phone
+    or – with *Upload to S3* on – uploads both for the video pipeline. With the upload on
+    but not set up yet, ● REC opens ⚙ → Recording & upload. Before it starts: **Continue
     pack** or **New pack**, the microphone (off by default; the pipeline can add a
     voiceover) and the space it needs (a warning below an hour). Android then asks to share
     the screen; on Android 14 and later choose *A single app* → Card Scanner.
@@ -334,7 +335,16 @@ downgrades), or restore the code from the tag.
     - **Fit to 16:9** (⚙ → Recording & upload, on by default): YouTube mode is laid out in
       a 16:9 area (9:16 upright) with black around it; the log says where that area is
       (`content_rect`), so the pipeline crops it exactly.
-    - **Upload** (⚙ → Recording & upload): an S3 bucket. Provider **AWS** (region, default
+    - **Where recordings go** (⚙ → Recording & upload): *Upload to S3*, off by default.
+      Off: after Stop, **Save** puts the videos into the phone's Gallery, in
+      *Movies/Card Scanner* (`<id>.mp4`, the screen, rewritten as a plain MP4 without
+      re-encoding so players can seek in it; `<id>-camera.mp4`, the camera, as it is); the
+      app's own copies are then removed, the card log stays in ⚙ → Recordings… (*saved in
+      the Gallery*; Share sends the Gallery's video). **Delete** asks once more; **Later**
+      keeps it in the app, *not saved yet* – ⚙ → Recordings… → **Save…**. No templates
+      (they are for the pipeline). Android 8 and 9 ask for the storage permission once.
+      On: the S3 settings below appear; switching it off only hides them, they stay filled in.
+    - **Upload** (Upload to S3 on): an S3 bucket. Provider **AWS** (region, default
       eu-central-1), **Exoscale** (zone, e.g. `at-vie-1`; the endpoint
       `https://sos-<zone>.exo.io` is filled in) or **Other** (any S3-compatible endpoint,
       path-style addressing). Bucket, folder prefix, access key ID and secret. The secret is
@@ -345,7 +355,7 @@ downgrades), or restore the code from the tag.
       `s3:PutObject`, `s3:AbortMultipartUpload` and `s3:ListMultipartUploadParts` on the
       prefix (and `s3:DeleteObject` to remove the test file), and `s3:GetObject` on
       `<prefix>templates/index.json` (the templates list).
-    - After Stop the app shows the **submit screen**. *Videos to make*: the video templates
+    - With Upload to S3 on, after Stop the app shows the **submit screen**. *Videos to make*: the video templates
       from the pipeline's list `<prefix>templates/index.json` (read from the bucket each time,
       saved on the phone; offline the saved list; without one only *Long Form · Smooth*),
       the default one ticked; tick one or more. Below, the *details* the ticked templates
@@ -367,8 +377,9 @@ downgrades), or restore the code from the tag.
       With *Delete after upload* (on by default) the two videos are removed from the phone
       once everything is up.
     - **⚙ → Recordings…**: every recording with length, cards, hits, size and status
-      (not submitted yet, waiting for Wi-Fi, uploading 62 %, uploaded, failed: reason).
-      **Submit…** (not submitted yet: the submit screen), **Retry**, **Upload
+      (not submitted / not saved yet, saving to the Gallery, saved in the Gallery, waiting
+      for Wi-Fi, uploading 62 %, uploaded, failed: reason). **Submit…** or **Save…** (not
+      sent yet: the submit screen), **Retry**, **Upload
       now** (also over mobile data, this one time), **Share** and **Delete** (stops its
       upload; files already in the bucket stay). If the phone's battery saver may stop
       uploads (Xiaomi HyperOS/MIUI, Samsung), it shows a hint once with buttons to the
