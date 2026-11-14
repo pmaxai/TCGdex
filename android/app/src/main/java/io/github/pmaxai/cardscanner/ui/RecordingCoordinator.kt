@@ -48,6 +48,8 @@ import java.util.Locale
 data class RecInfo(
     val id: String, val date: String, val durationMs: Long, val cards: Int, val hits: Int, val bytes: Long,
     val status: RecStatus, val statusText: String, val error: String?,
+    /** being saved into the Gallery or fetched back from it: no buttons meanwhile */
+    val busy: Boolean = false,
 )
 
 /** What the screens show of recording: the phase, the settings, the list, the last result. */
@@ -242,8 +244,9 @@ class RecordingCoordinator(
             val m = d.meta()
             if (d.status == RecStatus.QUEUED) d.updateMeta { it.put("waiting_wifi", s.wifiOnly && !wifi) }
             RecInfo(d.id, df.format(Date(m.optLong("created", d.dir.lastModified()))), m.optLong("duration_ms"), m.optInt("cards"),
-                m.optInt("hits"), d.shownBytes, d.status, if (d.id in saving) "saving to the Gallery…" else d.statusText(s.uploadS3),
-                m.optString("error").takeIf { it.isNotBlank() })
+                m.optInt("hits"), d.shownBytes, d.status,
+                when (d.id) { in saving -> "saving to the Gallery…"; in fetching -> "getting the videos from the Gallery…"; else -> d.statusText(s.uploadS3) },
+                m.optString("error").takeIf { it.isNotBlank() }, busy = d.id in saving || d.id in fetching)
         }
         val pm = app.getSystemService(PowerManager::class.java)
         val optimized = pm != null && !pm.isIgnoringBatteryOptimizations(app.packageName)
@@ -312,18 +315,38 @@ class RecordingCoordinator(
     fun submit(id: String, templates: List<String>, inputs: JSONObject) {
         val d = store.get(id) ?: return
         val s = prefs.load()
+        // saved in the Gallery before (Upload to S3 was off): its videos come back from there for the upload
+        val fromGallery = d.status == RecStatus.SAVED
+        if (fromGallery && !fetching.add(id)) return
         // answered: the question doesn't come back (a failed write leaves it in the list, not submitted)
         d.updateMeta { it.put("decide", false) }
         publish { it.copy(toDecide = null, toDecideText = null) }
         scope.launch(Dispatchers.IO) {
+            if (fromGallery) {
+                refresh()
+                val m = d.meta()
+                val uris = m.optJSONArray("gallery")?.let { a -> (0 until a.length()).map { android.net.Uri.parse(a.getString(it)) } } ?: emptyList()
+                val hadCamera = runCatching { JSONObject(d.events.readText()).optJSONObject("camera")?.optString("file") == "camera.mp4" }.getOrDefault(false)
+                val back = runCatching { GallerySaver.restore(app, uris, id, d.video, d.camera, hadCamera) }
+                if (back.isFailure) {
+                    Log.w(TAG, "from the Gallery", back.exceptionOrNull())
+                    fetching.remove(id)
+                    message("Could not get the videos from the Gallery: ${back.exceptionOrNull()?.message}")
+                    refresh()
+                    return@launch
+                }
+            }
             val written = runCatching { Submission.write(d.dir, Submission.build(templates, inputs, appVersion())) }
             if (written.isFailure) {
                 Log.w(TAG, "submission.json", written.exceptionOrNull())
+                if (fromGallery) { d.video.delete(); d.camera.delete(); fetching.remove(id) }
                 message("Could not save the submission: ${written.exceptionOrNull()?.message}")
                 refresh()
                 return@launch
             }
-            d.updateMeta { it.put("status", RecStatus.QUEUED.name).put("error", "").put("templates", JSONArray(templates)) }
+            d.updateMeta { it.put("status", RecStatus.QUEUED.name).put("error", "").put("templates", JSONArray(templates))
+                .also { o -> if (fromGallery) o.put("from_gallery", true) } }
+            fetching.remove(id)
             UploadWorker.enqueue(app, id, s.wifiOnly)
             refresh()
             publish { it.copy(lastSummary = d.summary()) }
@@ -466,6 +489,8 @@ class RecordingCoordinator(
     companion object {
         /** recordings being saved into the Gallery now (this process) */
         private val saving: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+        /** saved recordings whose videos are being fetched back from the Gallery for an upload */
+        private val fetching: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
         private const val TAG = "Recording"
         private const val HINT_SEEN = "battery_hint_seen"

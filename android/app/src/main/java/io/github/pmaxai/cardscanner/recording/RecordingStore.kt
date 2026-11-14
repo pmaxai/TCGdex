@@ -73,6 +73,7 @@ class RecordingDir(val dir: File) {
             RecStatus.QUEUED -> if (m.optBoolean("waiting_wifi")) "waiting for Wi-Fi" else "queued"
             RecStatus.LOCAL -> if (uploadS3) "not submitted yet" else "not saved yet"
             RecStatus.SAVED -> "saved in the Gallery (${GallerySaver.place})"
+            RecStatus.UPLOADED -> if (m.optBoolean("from_gallery")) "uploaded · the videos stay in the Gallery" else status.label
             else -> status.label
         }
     }

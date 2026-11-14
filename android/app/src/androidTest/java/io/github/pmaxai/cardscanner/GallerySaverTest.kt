@@ -96,6 +96,39 @@ class GallerySaverTest {
         return counts to at
     }
 
+    /** every sample's time per track ("video/avc" → times in µs, in order) */
+    private fun times(ex: MediaExtractor): Map<String, List<Long>> {
+        val out = HashMap<String, MutableList<Long>>()
+        val mimes = (0 until ex.trackCount).map { ex.getTrackFormat(it).getString(android.media.MediaFormat.KEY_MIME)!! }
+        (0 until ex.trackCount).forEach { ex.selectTrack(it) }
+        while (ex.sampleTrackIndex >= 0) { out.getOrPut(mimes[ex.sampleTrackIndex]) { ArrayList() } += ex.sampleTime; ex.advance() }
+        ex.release()
+        return out.mapValues { (_, v) -> v.sorted() }
+    }
+
+    /**
+     * The card times in events.json count from the video's first frame: in the Gallery's video
+     * every frame keeps its time (and every sound sample), within a tick of the file's clock.
+     */
+    @Test
+    fun everyFrameKeepsItsTime() {
+        val src = File(dir, "video.mp4")
+        record(src)
+        val uri = GallerySaver.save(ctx, src, "test-${System.nanoTime()}.mp4", System.currentTimeMillis(), remux = true).also { made += it }
+        val before = times(MediaExtractor().apply { setDataSource(src.path) })
+        val after = ctx.contentResolver.openFileDescriptor(uri, "r")!!.use { pfd -> times(MediaExtractor().apply { setDataSource(pfd.fileDescriptor) }) }
+        assertEquals("the same tracks", before.keys, after.keys)
+        for ((mime, t0) in before) {
+            val t1 = after.getValue(mime)
+            assertEquals("$mime: every sample", t0.size, t1.size)
+            val worst = t0.indices.maxOf { kotlin.math.abs(t0[it] - t1[it]) }
+            Log.i("GallerySaver", "$mime: ${t0.size} samples, first at ${t0.first()} / ${t1.first()} µs, largest difference $worst µs")
+            assertTrue("$mime: the first sample at ${t1.first()} µs, was ${t0.first()} µs", kotlin.math.abs(t0.first() - t1.first()) <= 100)
+            assertTrue("$mime: each sample at its time (largest difference $worst µs)", worst <= 100)
+        }
+        assertEquals("the video still starts at 0", 0L, after.filterKeys { it.startsWith("video/") }.values.first().first())
+    }
+
     @Test
     fun theScreenVideoLandsInTheGalleryAsAPlainSeekableMp4() {
         val src = File(dir, "video.mp4")
@@ -141,6 +174,29 @@ class GallerySaverTest {
         assertArrayEquals(bytes, ctx.contentResolver.openInputStream(notMp4)!!.use { it.readBytes() })
     }
 
+    /** Back from the Gallery for an upload: byte for byte; a video gone from the Gallery stops it, leaving nothing behind. */
+    @Test
+    fun theVideosComeBackFromTheGallery() {
+        val id = "20261114T210000Z-t${System.nanoTime() % 100_000}"
+        val v = File(dir, "v.mp4"); record(v)
+        val c = File(dir, "c.mp4").apply { writeBytes(ByteArray(80_000) { (it % 7).toByte() }) }
+        val uv = GallerySaver.save(ctx, v, "$id.mp4", System.currentTimeMillis(), remux = true).also { made += it }
+        val uc = GallerySaver.save(ctx, c, "$id-camera.mp4", System.currentTimeMillis(), remux = false).also { made += it }
+        val video = File(dir, "video.mp4"); val camera = File(dir, "camera.mp4")
+        GallerySaver.restore(ctx, listOf(uc, uv), id, video, camera, wantCamera = true)
+        assertArrayEquals(ctx.contentResolver.openInputStream(uv)!!.use { it.readBytes() }, video.readBytes())
+        assertArrayEquals(c.readBytes(), camera.readBytes())
+        video.delete(); camera.delete()
+        // the camera video deleted in the Gallery: no upload with half the files
+        ctx.contentResolver.delete(uc, null, null)
+        val gone = runCatching { GallerySaver.restore(ctx, listOf(uv, uc), id, video, camera, wantCamera = true) }
+        assertTrue("stops: ${gone.exceptionOrNull()?.message}", gone.exceptionOrNull()?.message.orEmpty().contains("isn't in the Gallery"))
+        assertFalse("nothing left behind", video.exists() || camera.exists())
+        // without a camera video in the recording, the screen video alone is fine
+        GallerySaver.restore(ctx, listOf(uv), id, video, camera, wantCamera = false)
+        assertTrue(video.exists()); assertFalse(camera.exists())
+    }
+
     /** Save on a recording (Upload to S3 off): its videos into the Gallery, the app's copies gone, "saved in the Gallery". */
     @Test
     fun saveMovesTheRecordingIntoTheGallery() {
@@ -168,6 +224,32 @@ class GallerySaverTest {
             assertEquals("saved in the Gallery (Movies/Card Scanner)", rec.statusText(uploadS3 = false))
             assertFalse("the question doesn't come back", rec.meta().optBoolean("decide"))
             assertTrue("Share sends the Gallery's video", vm.rec.shareIntent(rec.id) != null)
+
+            // later, with Upload to S3 on: Submit… - the videos come back from the Gallery, and up it goes with everything else
+            rec.events.writeText("""{"camera":{"file":"camera.mp4"},"cards":[]}""")
+            rec.packCsv.writeText("No,Name\r\n")
+            InstrumentationRegistry.getInstrumentation().runOnMainSync { vm.rec.submit(rec.id, listOf("longform-smooth"), org.json.JSONObject()) }
+            val end2 = System.currentTimeMillis() + 30_000
+            while (rec.status == RecStatus.SAVED) { check(System.currentTimeMillis() < end2) { "not submitted: ${rec.meta()}" }; Thread.sleep(200) }
+            Log.i("GallerySaver", "submitted after Save: ${rec.status}, ${rec.uploadFiles().map { "${it.name} ${it.file.length()}" }}")
+            assertTrue("marked as fetched from the Gallery", rec.meta().optBoolean("from_gallery"))
+            assertEquals(listOf("events.json", "pack.csv", "submission.json", "video.mp4", "camera.mp4"), rec.uploadFiles().map { it.name })
+            assertArrayEquals("the screen video as it is in the Gallery",
+                ctx.contentResolver.openInputStream(uris[0])!!.use { it.readBytes() }, rec.video.readBytes())
+            assertEquals("the camera video byte for byte", 50_000L, rec.camera.length())
+            val endpoint = InstrumentationRegistry.getArguments().getString("s3Endpoint").orEmpty()
+            if (endpoint.isNotBlank()) {
+                val cfg = io.github.pmaxai.cardscanner.recording.S3Config(endpoint, "us-east-1", "recordings-test", "gallery-test/", pathStyle = true,
+                    accessKeyId = "minioadmin", secret = "minioadmin", allowHttp = true)
+                val c = io.github.pmaxai.cardscanner.recording.S3Client(cfg)
+                io.github.pmaxai.cardscanner.recording.RecordingUploader(c, rec.id,
+                    io.github.pmaxai.cardscanner.recording.UploadState(File(dir, "upload-state.json")), "ci").run(rec.uploadFiles())
+                val files = org.json.JSONObject(String(c.getObject("gallery-test/recordings/${rec.id}/_complete.json"))).getJSONObject("files")
+                Log.i("GallerySaver", "in the bucket: $files")
+                assertEquals(setOf("events.json", "pack.csv", "submission.json", "video.mp4", "camera.mp4"), files.keys().asSequence().toSet())
+                assertEquals(rec.video.length(), files.getJSONObject("video.mp4").getLong("bytes"))
+                assertEquals(io.github.pmaxai.cardscanner.recording.RecordingUploader.sha256Hex(rec.video), files.getJSONObject("video.mp4").getString("sha256"))
+            }
         } finally {
             rec.dir.deleteRecursively()
         }

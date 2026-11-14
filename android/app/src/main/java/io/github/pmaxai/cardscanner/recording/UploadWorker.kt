@@ -58,7 +58,8 @@ class UploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             try {
                 uploader.run(rec.uploadFiles())
                 rec.updateMeta { it.put("status", RecStatus.UPLOADED.name).put("progress", 100).put("uploaded_at", System.currentTimeMillis()) }
-                if (settings.deleteAfterUpload) { rec.video.delete(); rec.camera.delete() }
+                // fetched back from the Gallery only for this upload: they stay there, the app's copies go
+                if (settings.deleteAfterUpload || rec.meta().optBoolean("from_gallery")) { rec.video.delete(); rec.camera.delete() }
                 return Result.success()
             } catch (e: S3Exception) {
                 if (e.permanent) {

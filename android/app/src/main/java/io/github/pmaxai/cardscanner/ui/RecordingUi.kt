@@ -284,15 +284,18 @@ fun RecordingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) 
                         }, fontSize = 13.sp)
                         Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                             // not sent yet: the submit screen first (templates, inputs; or Save into the Gallery with S3 off)
-                            if (rec.status == RecStatus.LOCAL && !rec.statusText.startsWith("saving"))
+                            if (rec.status == RecStatus.LOCAL && !rec.busy)
                                 TextButton({ submitting = rec }) { Text(if (r.settings.uploadS3) "Submit…" else "Save…") }
+                            // saved in the Gallery while Upload to S3 was off: it can still go up (its videos come back from the Gallery)
+                            if (rec.status == RecStatus.SAVED && r.settings.uploadS3 && !rec.busy)
+                                TextButton({ submitting = rec }) { Text("Submit…") }
                             if (rec.status == RecStatus.FAILED) TextButton({ vm.rec.retry(rec.id) }) { Text("Retry") }
                             if (rec.status == RecStatus.QUEUED || rec.status == RecStatus.FAILED)
                                 TextButton({ askUploadNow = rec }) { Text("Upload now") }
                             if (rec.status != RecStatus.RECORDING && rec.bytes > 0) TextButton({
                                 vm.rec.shareIntent(rec.id)?.let { runCatching { ctx.startActivity(it) } }
                             }) { Text("Share") }
-                            if (rec.status != RecStatus.RECORDING && !rec.statusText.startsWith("saving"))
+                            if (rec.status != RecStatus.RECORDING && !rec.busy)
                                 TextButton({ confirm = rec.id }) { Text("Delete", color = Warn) }
                         }
                     }
@@ -312,7 +315,8 @@ fun RecordingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) 
     submitting?.let { rec ->
         val d = rec.durationMs / 1000
         SubmitDialog(state, vm, rec.id, if (r.settings.uploadS3) "Submit recording" else "Save recording",
-            "%s · %d:%02d · %d cards · %d hits · %s".format(Locale.ROOT, rec.date, d / 60, d % 60, rec.cards, rec.hits, size(rec.bytes)),
+            "%s · %d:%02d · %d cards · %d hits · %s".format(Locale.ROOT, rec.date, d / 60, d % 60, rec.cards, rec.hits, size(rec.bytes)) +
+                (if (rec.status == RecStatus.SAVED && r.settings.uploadS3) " · the videos come from the Gallery" else ""),
             onSubmitted = { submitting = null }, onLeave = { submitting = null }, onDeleted = { submitting = null })
     }
     askUploadNow?.let { rec ->

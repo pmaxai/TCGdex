@@ -78,6 +78,47 @@ object GallerySaver {
         return Uri.fromFile(dst)
     }
 
+    /**
+     * A saved recording's videos back as the app's files, for an upload (Upload to S3 turned on
+     * after Save): from [uris] (what Save put into the Gallery) by their names, `<id>.mp4` into
+     * [video] and `<id>-camera.mp4` into [camera]. [wantCamera]: the recording had a camera
+     * video, so it must be there too. Byte for byte as they are in the Gallery.
+     */
+    fun restore(ctx: Context, uris: List<Uri>, id: String, video: File, camera: File, wantCamera: Boolean) {
+        val byName = uris.mapNotNull { u -> nameOf(ctx, u)?.let { it to u } }.toMap()
+        val v = byName["$id.mp4"] ?: error("the video $id.mp4 isn't in the Gallery any more")
+        val c = byName["$id-camera.mp4"]
+        if (wantCamera && c == null) error("the camera video $id-camera.mp4 isn't in the Gallery any more")
+        val need = sizeOf(ctx, v) + (c?.let { sizeOf(ctx, it) } ?: 0L)
+        val free = android.os.StatFs(video.parentFile!!.path).availableBytes
+        if (free < need + 100_000_000L) error("not enough space on the phone: it needs %.1f GB free".format(java.util.Locale.ROOT, (need + 100_000_000L) / 1e9))
+        try {
+            copyIn(ctx, v, video)
+            c?.let { copyIn(ctx, it, camera) }
+        } catch (e: Exception) {
+            video.delete(); camera.delete(); throw e
+        }
+    }
+
+    /** the name a video has in the Gallery (null: not there any more) */
+    private fun nameOf(ctx: Context, u: Uri): String? =
+        if (u.scheme == "file") File(u.path!!).takeIf { it.exists() }?.name
+        else runCatching {
+            ctx.contentResolver.query(u, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+        }.getOrNull()
+
+    private fun sizeOf(ctx: Context, u: Uri): Long =
+        if (u.scheme == "file") File(u.path!!).length()
+        else ctx.contentResolver.openAssetFileDescriptor(u, "r")!!.use { it.length.coerceAtLeast(0) }
+
+    private fun copyIn(ctx: Context, u: Uri, dst: File) {
+        val tmp = File(dst.path + ".tmp")
+        (if (u.scheme == "file") File(u.path!!).inputStream() else ctx.contentResolver.openInputStream(u)!!).use { input ->
+            tmp.outputStream().use { input.copyTo(it, 1 shl 20) }
+        }
+        check(tmp.renameTo(dst)) { "could not write ${dst.name}" }
+    }
+
     /** The samples of [src] as they are into a plain MP4 (index at the end, seekable). */
     fun remux(src: File, dst: FileDescriptor) {
         val ex = MediaExtractor()

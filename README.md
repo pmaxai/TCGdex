@@ -343,6 +343,11 @@ downgrades), or restore the code from the tag.
       the Gallery*; Share sends the Gallery's video). **Delete** asks once more; **Later**
       keeps it in the app, *not saved yet* – ⚙ → Recordings… → **Save…**. No templates
       (they are for the pipeline). Android 8 and 9 ask for the storage permission once.
+      A recording saved this way can still go up later: with Upload to S3 on, ⚙ →
+      Recordings… → **Submit…** fetches its videos back from the Gallery (they must still be
+      there, unedited – the card times count from the video's first frame) and uploads them
+      with its card log and the chosen templates, the same files as any upload; afterwards
+      the app's copies go again, the videos stay in the Gallery.
       On: the S3 settings below appear; switching it off only hides them, they stay filled in.
     - **Upload** (Upload to S3 on): an S3 bucket. Provider **AWS** (region, default
       eu-central-1), **Exoscale** (zone, e.g. `at-vie-1`; the endpoint
