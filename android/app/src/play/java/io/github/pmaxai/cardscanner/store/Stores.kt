@@ -116,7 +116,7 @@ class PlayBilling(private val ctx: Context) : StoreBilling, PurchasesUpdatedList
 
     override suspend fun buy(activity: Activity, request: BuyRequest): BuyResult {
         if (!ready()) return BuyResult.Failed("Google Play isn't available on this phone.")
-        request.items.map { it.offer.productId }.filter { it !in details }.takeIf { it.isNotEmpty() }?.let { offers(it) }
+        request.items.map { it.offer.productId }.filter { !details.containsKey(it) }.takeIf { it.isNotEmpty() }?.let { offers(it) }
         val items = request.items.map { item ->
             val pd = details[item.offer.productId] ?: return BuyResult.Failed("Google Play doesn't sell ${item.offer.productId}.")
             BillingFlowParams.ProductDetailsParams.newBuilder().setProductDetails(pd).setOfferToken(item.offer.offerToken).apply {
