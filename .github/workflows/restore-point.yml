@@ -84,6 +84,7 @@ jobs:
           cat $f
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git pull --rebase --quiet origin main
+          # commit first: a pull with the file changed but not committed stops ("unstaged changes")
           git commit -am "Version line $next (after release $NAME)"
+          git pull --rebase --quiet origin main
           git push origin HEAD:main
