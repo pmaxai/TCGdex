@@ -408,9 +408,12 @@ private fun PlanCard(plan: io.github.pmaxai.cardscanner.store.PlanOffer, s: Stor
     Column(Modifier.padding(top = 14.dp).widthIn(max = 420.dp).fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(14.dp)) {
         Text(plan.name, color = Gold, fontSize = 19.sp, fontWeight = FontWeight.Bold)
         Text(featureWords(plan.features), color = Muted, fontSize = 13.sp)
-        Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            s.price(plan, "monthly")?.let { o -> Button({ onBuy("monthly") }, enabled = enabled) { Text("${o.price} / month") } }
-            s.price(plan, "yearly")?.let { o -> OutlinedButton({ onBuy("yearly") }, enabled = enabled) { Text("${o.price} / year") } }
+        // one under the other: prices like "€129.60 / year" don't fit two to a row on a phone
+        s.price(plan, "monthly")?.let { o ->
+            Button({ onBuy("monthly") }, enabled = enabled, modifier = Modifier.padding(top = 10.dp).fillMaxWidth()) { Text("${o.price} / month", maxLines = 1) }
+        }
+        s.price(plan, "yearly")?.let { o ->
+            OutlinedButton({ onBuy("yearly") }, enabled = enabled, modifier = Modifier.padding(top = 6.dp).fillMaxWidth()) { Text("${o.price} / year", maxLines = 1) }
         }
     }
 }
