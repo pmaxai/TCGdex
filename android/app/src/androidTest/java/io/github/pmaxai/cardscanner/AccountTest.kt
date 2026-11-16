@@ -238,12 +238,14 @@ class AccountTest {
         pair()
         fake.offline = true
         account.check(force = true, manual = true)
-        waitUntil("checked") { !ui.value.busy }
+        // done once it says it can't reach the server (a check still running from the pairing goes first)
+        waitUntil("checked offline") { !ui.value.busy && ui.value.error != null }
         assertEquals("offline: the saved answer counts", AccountGate.OPEN, ui.value.gate)
         val st = ui.value.status!!
         assertEquals(AccountGate.OPEN, AccountGate.of(true, st, st.validUntil - 1))
         assertEquals(AccountGate.CHECK_ONLINE, AccountGate.of(true, st, st.validUntil + 1))
         // the saved answer has run out (valid_until passed) and the server can't be reached
+        Thread.sleep(300)
         AccountStore(app).saveStatus(TestAccount.statusJson(validDays = -1))
         account.check(force = true, manual = true)
         waitUntil("check online once") { ui.value.gate == AccountGate.CHECK_ONLINE }

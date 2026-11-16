@@ -106,9 +106,7 @@ class WebshopScreenshotTest {
                 sale = ShopSale("Sold 3 cards · 258.50 € – taken out of stock", order))),
         )
         lateinit var vm: ScannerViewModel
-        InstrumentationRegistry.getInstrumentation().runOnMainSync {
-            vm = ScannerViewModel(ApplicationProvider.getApplicationContext<Application>())
-        }
+        vm = TestVm.shared
         var current by mutableStateOf(states.first().second)
         compose.setContent {
             MaterialTheme(colorScheme = darkColorScheme(primary = Gold, onPrimary = Ink, background = Ink, surface = Panel)) {
@@ -134,9 +132,7 @@ class WebshopScreenshotTest {
     @Test
     fun orderDialog() {
         lateinit var vm: ScannerViewModel
-        InstrumentationRegistry.getInstrumentation().runOnMainSync {
-            vm = ScannerViewModel(ApplicationProvider.getApplicationContext<Application>())
-        }
+        vm = TestVm.shared
         val st = UiState(loading = false, settings = Settings(webshop = true), shop = ShopState(configured = true,
             host = "staging.pokemonkarten.at", connectionOk = true, selling = true, order = listOf(
                 ShopOrderLine("sv1-1-DE-NM-N", "Pikachu", "DE · NM · Normal · 1/198", "003", 1, 0.50),

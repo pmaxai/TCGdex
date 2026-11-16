@@ -46,9 +46,7 @@ class RecordingScreenshotTest {
     @Test
     fun dialogs() {
         lateinit var vm: ScannerViewModel
-        InstrumentationRegistry.getInstrumentation().runOnMainSync {
-            vm = ScannerViewModel(ApplicationProvider.getApplicationContext<Application>())
-        }
+        vm = TestVm.shared
         val settings = RecordingSettings(bucket = "my-recordings", accessKeyId = "AKIA…", hasSecret = true, uploadS3 = true)
         val recs = listOf(
             RecInfo("20261109T140322Z-7f3a", "9 Nov 2026, 15:03", 1_834_000, 38, 3, 1_830_000_000, RecStatus.UPLOADING, "uploading 62 %", null),

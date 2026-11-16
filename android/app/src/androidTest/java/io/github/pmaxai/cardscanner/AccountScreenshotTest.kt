@@ -58,7 +58,7 @@ class AccountScreenshotTest {
     @Test
     fun screens() {
         lateinit var vm: ScannerViewModel
-        InstrumentationRegistry.getInstrumentation().runOnMainSync { vm = ScannerViewModel(ApplicationProvider.getApplicationContext<Application>()) }
+        vm = TestVm.shared
         val base = UiState(loading = false)
         val creator = AccountStatus.parse(TestAccount.statusJson())
         val states = listOf(
@@ -95,7 +95,7 @@ class AccountScreenshotTest {
     @Test
     fun modesTheplanLacks() {
         lateinit var vm: ScannerViewModel
-        InstrumentationRegistry.getInstrumentation().runOnMainSync { vm = ScannerViewModel(ApplicationProvider.getApplicationContext<Application>()) }
+        vm = TestVm.shared
         val st = UiState(loading = false, account = TestAccount.ui(TestAccount.ALL - setOf("youtube", "recording", "s3_upload", "pipeline", "webshop"), plan = "collector"))
         compose.setContent {
             MaterialTheme(colorScheme = darkColorScheme(primary = Gold, onPrimary = Ink, background = Ink, surface = Panel)) {
@@ -118,7 +118,7 @@ class AccountScreenshotTest {
         val de = cat.cardExact("sv03.5-199", "de") ?: cat.cardExact("sv03.5-199", "en")
         if (de == null) { Log.w("AccountScreenshot", "card not in this pack"); return }
         lateinit var vm: ScannerViewModel
-        InstrumentationRegistry.getInstrumentation().runOnMainSync { vm = ScannerViewModel(ApplicationProvider.getApplicationContext<Application>()) }
+        vm = TestVm.shared
         val kind = de.printings.firstOrNull { it.kind == Printing.Kind.HOLO }?.kind ?: de.printings.firstOrNull()?.kind
         val s = Shown(group = "sv03.5-199", version = de, english = null, priceCard = de, printing = kind,
             printingByUser = false, foil = null, confidence = Confidence.SURE, alternatives = emptyList(), languages = emptyList(),

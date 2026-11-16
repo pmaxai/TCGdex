@@ -42,9 +42,7 @@ class SettingsScreenshotTest {
     @Test
     fun everyPage() {
         lateinit var vm: ScannerViewModel
-        InstrumentationRegistry.getInstrumentation().runOnMainSync {
-            vm = ScannerViewModel(ApplicationProvider.getApplicationContext<Application>())
-        }
+        vm = TestVm.shared
         val state = UiState(loading = false, packInfo = "21094 card images · data 2026-11-06 · PSA prices",
             hasPsaData = true, hasCategories = true, pricesDate = "2026-11-05T22:54:32Z",
             settings = Settings(threshold = 5.0, trading = true),
