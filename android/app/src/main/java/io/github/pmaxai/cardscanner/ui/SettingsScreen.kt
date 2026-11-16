@@ -175,14 +175,11 @@ private fun ModePage(state: UiState, vm: ScannerViewModel) {
             .border(1.dp, if (selected) Gold else Color.Transparent, RoundedCornerShape(14.dp))
             .clickable { if (included) vm.updateSettings { it.withMode(m) } else openUrl(ctx, state.account.portalUrl) }
             .padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(m.label, color = if (selected) Gold else if (included) Color.White else Muted, fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f))
-                // not in the plan: shown, greyed out, with what it needs
-                if (!included) Text(featureNeeds(vm.featureOf(m)), color = Ink, fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.background(Muted, RoundedCornerShape(8.dp)).padding(horizontal = 8.dp, vertical = 2.dp))
-            }
+            Text(m.label, color = if (selected) Gold else if (included) Color.White else Muted, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             Text(m.about, color = if (included) Muted else Muted.copy(alpha = 0.6f), fontSize = 13.sp)
+            // not in the plan: shown, greyed out, with what it needs
+            if (!included) Text(featureNeeds(vm.featureOf(m)), color = Ink, fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(top = 6.dp).background(Muted, RoundedCornerShape(8.dp)).padding(horizontal = 8.dp, vertical = 2.dp))
         }
     }
 }

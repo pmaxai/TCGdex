@@ -215,8 +215,8 @@ fun AccountPage(state: UiState, vm: ScannerViewModel) {
     Text("Devices: ${st.devicesText}" + (st.deviceName?.let { " · this phone: $it" } ?: ""), color = Color.White, fontSize = 14.sp,
         modifier = Modifier.padding(top = 4.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Last checked ${a.lastCheck?.let(::stamp) ?: "–"}", color = Muted, fontSize = 12.sp)
-        TextButton({ vm.account.check(force = true, manual = true) }, enabled = !a.busy) { Text("Check again") }
+        Text("Last checked ${a.lastCheck?.let(::stamp) ?: "–"}", color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        TextButton({ vm.account.check(force = true, manual = true) }, enabled = !a.busy) { Text("Check again", maxLines = 1) }
     }
     a.error?.let { Text("⚠ $it", color = Warn, fontSize = 13.sp) }
 
