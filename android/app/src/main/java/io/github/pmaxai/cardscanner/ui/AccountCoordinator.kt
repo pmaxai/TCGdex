@@ -339,10 +339,15 @@ class AccountCoordinator(
         }
     }
 
+    /** counts changes made here to the missing cards: a list fetched meanwhile is older than them and not kept */
+    private val wantedEdits = java.util.concurrent.atomic.AtomicInteger()
+
     private fun refreshWanted() {
         val token = store.token ?: return
         try {
-            store.saveWanted(api()!!.wanted(token))
+            val before = wantedEdits.get()
+            val list = api()!!.wanted(token)
+            if (before == wantedEdits.get() && store.queue().none { it.kind.startsWith("wanted") }) store.saveWanted(list)
             publishWanted()
         } catch (e: AccountException) { if (e.lostToken) lost(e) } catch (e: Exception) { }
     }
@@ -444,12 +449,14 @@ class AccountCoordinator(
                 loadCollection(op.cardId, force = true)
             }
             "wanted_add" -> {
+                wantedEdits.incrementAndGet()
                 val o = api.addWanted(token, JSONObject(op.body!!.toString()).put("client_ref", op.clientRef))
                 val list = store.wanted() ?: JSONArray()
                 if ((0 until list.length()).none { list.optJSONObject(it)?.optLong("id") == o.optLong("id") }) list.put(o)
                 store.saveWanted(list)
             }
             "wanted_delete" -> {
+                wantedEdits.incrementAndGet()
                 api.deleteWanted(token, op.wantedId!!)
                 val list = store.wanted() ?: JSONArray()
                 store.saveWanted(JSONArray((0 until list.length()).mapNotNull { list.optJSONObject(it) }.filter { it.optLong("id") != op.wantedId }))
