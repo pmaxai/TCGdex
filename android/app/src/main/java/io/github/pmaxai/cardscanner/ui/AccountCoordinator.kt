@@ -143,8 +143,8 @@ class AccountCoordinator(
             } catch (e: AccountException) {
                 refused = target.code
                 publish { it.copy(busy = false, error = e.friendly) }
-            } catch (e: IOException) {
-                publish { it.copy(busy = false, error = "No connection: connecting needs the internet. Try again when you're online.") }
+            } catch (e: Exception) {
+                publish { it.copy(busy = false, error = offline(e, "connecting needs the internet. Try again when you're online.")) }
             }
         }
     }
@@ -179,9 +179,9 @@ class AccountCoordinator(
                 sync()
             } catch (e: AccountException) {
                 if (e.lostToken) lost(e) else publish { it.copy(busy = false, error = if (manual) e.friendly else null) }
-            } catch (e: IOException) {
+            } catch (e: Exception) {
                 load()      // valid_until may have passed meanwhile
-                publish { it.copy(busy = false, error = if (manual) "No connection to overpricedcardboard.com." else null) }
+                publish { it.copy(busy = false, error = if (manual) offline(e, "the subscription can't be checked now.") else null) }
             } finally {
                 checking = false
             }
@@ -217,7 +217,7 @@ class AccountCoordinator(
             publish { it.copy(s3Note = null) }
         } catch (e: AccountException) {
             publish { it.copy(s3Note = if (e.error == "not_configured") "Overpriced Cardboard is still setting up your storage." else e.friendly) }
-        } catch (e: IOException) { /* next time */ }
+        } catch (e: Exception) { /* next time */ }
     }
 
     /** Uploads failed with an access error: the shop may have changed the key – fetch it again now. */
@@ -241,7 +241,7 @@ class AccountCoordinator(
                         delay(5_000)
                         try { api()?.status(token)?.let { store.saveStatus(it) } }
                         catch (e: AccountException) { if (e.lostToken) { lost(e); message(store.notice ?: "Moved"); break } }
-                        catch (e: IOException) { }
+                        catch (e: Exception) { }
                         val exp = current().transfer?.code?.expiresAt
                         if (exp != null && System.currentTimeMillis() > exp) {
                             publish { it.copy(transfer = TransferUi(error = "The code has expired. Show a new one.")) }
@@ -251,8 +251,8 @@ class AccountCoordinator(
                 }
             } catch (e: AccountException) {
                 if (e.lostToken) lost(e) else publish { it.copy(transfer = TransferUi(error = e.friendly)) }
-            } catch (e: IOException) {
-                publish { it.copy(transfer = TransferUi(error = "No connection: moving needs the internet.")) }
+            } catch (e: Exception) {
+                publish { it.copy(transfer = TransferUi(error = offline(e, "moving needs the internet."))) }
             }
         }
     }
@@ -275,8 +275,8 @@ class AccountCoordinator(
                 onS3(null)
             } catch (e: AccountException) {
                 if (e.lostToken) lost(e) else publish { it.copy(busy = false, error = e.friendly) }
-            } catch (e: IOException) {
-                publish { it.copy(busy = false, error = "No connection: disconnecting needs the internet.") }
+            } catch (e: Exception) {
+                publish { it.copy(busy = false, error = offline(e, "disconnecting needs the internet.")) }
             }
         }
     }
@@ -297,7 +297,7 @@ class AccountCoordinator(
                 publish { it.copy(collection = it.collection + (cardId to lines)) }
             } catch (e: AccountException) {
                 if (e.lostToken) lost(e)
-            } catch (e: IOException) { }
+            } catch (e: Exception) { }
         }
     }
 
@@ -334,7 +334,7 @@ class AccountCoordinator(
         try {
             store.saveWanted(api()!!.wanted(token))
             publishWanted()
-        } catch (e: AccountException) { if (e.lostToken) lost(e) } catch (e: IOException) { }
+        } catch (e: AccountException) { if (e.lostToken) lost(e) } catch (e: Exception) { }
     }
 
     /** the list as the server has it, plus what waits to be sent (adds shown, removes left out) */
@@ -404,7 +404,8 @@ class AccountCoordinator(
                             else -> stuck = true
                         }
                         if (stuck) break
-                    } catch (e: IOException) {
+                    } catch (e: Exception) {
+                        // no connection, the server's trouble, an answer it couldn't read: try again later
                         stuck = true; break
                     }
                 }
@@ -441,6 +442,13 @@ class AccountCoordinator(
     }
 
     private fun done(op: PendingOp) = store.saveQueue(store.queue().filter { it.clientRef != op.clientRef })
+
+    /** "No connection: …" – or, when the server is there but not answering as the API, that. */
+    private fun offline(e: Exception, what: String): String = when (e) {
+        is io.github.pmaxai.cardscanner.account.ServerUnavailable ->
+            "overpricedcardboard.com isn't answering as expected right now (HTTP ${e.code}) – try again later."
+        else -> "No connection: $what"
+    }
 
     companion object {
         const val HOUR = 60 * 60 * 1000L

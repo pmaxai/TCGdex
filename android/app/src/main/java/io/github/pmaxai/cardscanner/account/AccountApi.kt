@@ -11,6 +11,9 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
+/** The account server is there but doesn't answer as the API does (down, not deployed, a proxy's page). Counts as offline. */
+class ServerUnavailable(val code: Int, message: String) : IOException(message)
+
 /** Pairing's answer: the device token (secret) and the status. */
 class Paired(val token: String, val status: JSONObject)
 
@@ -29,37 +32,40 @@ class AccountApi(baseUrl: String, private val appVersion: String?, http: OkHttpC
         .build()
 
     fun pair(code: String, deviceId: String, deviceName: String?, platform: String = "android"): Paired {
-        val o = call("POST", url("pair"), null, JSONObject().put("code", code).put("device_id", deviceId)
-            .put("device_name", deviceName?.take(80)).put("platform", platform).put("app_version", appVersion?.take(40)))!!
+        val o = need(call("POST", url("pair"), null, JSONObject().put("code", code).put("device_id", deviceId)
+            .put("device_name", deviceName?.take(80)).put("platform", platform).put("app_version", appVersion?.take(40))))
         return Paired(o.getString("token"), o.optJSONObject("status") ?: JSONObject())
     }
 
-    fun status(token: String): JSONObject = call("GET", url("status"), token)!!
+    fun status(token: String): JSONObject = need(call("GET", url("status"), token))
 
     fun transfer(token: String): TransferCode {
-        val o = call("POST", url("transfer"), token, JSONObject())!!
+        val o = need(call("POST", url("transfer"), token, JSONObject()))
         return TransferCode(o.getString("code"), o.getString("url"), AccountStatus.time(o, "expires_at"))
     }
 
     /** Disconnects this device (its slot is free again; the token stops working). */
     fun disconnect(token: String) { call("DELETE", url("device"), token) }
 
-    fun s3(token: String): JSONObject = call("GET", url("services", "s3"), token)!!
+    fun s3(token: String): JSONObject = need(call("GET", url("services", "s3"), token))
 
     // ---------------------------------------------------------------- collection
     fun collectionCard(token: String, cardId: String): JSONArray =
-        call("GET", url("collection", "cards", cardId), token)!!.optJSONArray("items") ?: JSONArray()
+        need(call("GET", url("collection", "cards", cardId), token)).optJSONArray("items") ?: JSONArray()
 
-    fun addToCollection(token: String, body: JSONObject): JSONObject = call("POST", url("collection", "items"), token, body)!!
+    fun addToCollection(token: String, body: JSONObject): JSONObject = need(call("POST", url("collection", "items"), token, body))
 
-    fun binders(token: String): JSONArray = call("GET", url("collection", "binders"), token)!!.optJSONArray("binders") ?: JSONArray()
+    fun binders(token: String): JSONArray = need(call("GET", url("collection", "binders"), token)).optJSONArray("binders") ?: JSONArray()
 
     // ---------------------------------------------------------------- missing cards
-    fun wanted(token: String): JSONArray = call("GET", url("wanted"), token)!!.optJSONArray("items") ?: JSONArray()
+    fun wanted(token: String): JSONArray = need(call("GET", url("wanted"), token)).optJSONArray("items") ?: JSONArray()
 
-    fun addWanted(token: String, body: JSONObject): JSONObject = call("POST", url("wanted"), token, body)!!
+    fun addWanted(token: String, body: JSONObject): JSONObject = need(call("POST", url("wanted"), token, body))
 
     fun deleteWanted(token: String, id: Long) { call("DELETE", url("wanted", id.toString()), token) }
+
+    /** an answer that must have a JSON body */
+    private fun need(o: JSONObject?): JSONObject = o ?: throw ServerUnavailable(200, "account server: an empty answer")
 
     private fun url(vararg segments: String): HttpUrl {
         val b = base.toHttpUrl().newBuilder().addPathSegments("api/app/v1")
@@ -84,11 +90,11 @@ class AccountApi(baseUrl: String, private val appVersion: String?, http: OkHttpC
             if (!res.isSuccessful) {
                 val error = json?.let { AccountStatus.str(it, "error") }
                 // a proxy's page instead of the API's answer: no connection to the API
-                if (error == null && (res.code >= 500 || res.code == 404 && json == null)) throw IOException("account server: HTTP ${res.code}")
+                if (error == null && (res.code >= 500 || res.code == 404 && json == null)) throw ServerUnavailable(res.code, "account server: HTTP ${res.code}")
                 throw AccountException(res.code, error ?: "http_${res.code}", json?.let { AccountStatus.str(it, "message") }, json)
             }
             if (res.code == 204 || text.isBlank()) return null
-            return json ?: throw IOException("account server: not JSON")
+            return json ?: throw ServerUnavailable(res.code, "account server: not JSON")
         }
     }
 }

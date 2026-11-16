@@ -61,6 +61,7 @@ class AccountTest {
         @Volatile var active = true
         @Volatile var plan = "creator"
         @Volatile var offline = false
+        @Volatile var notTheApi = false
         /** client_refs whose first answer comes too late (the app's call times out; the item is made anyway) */
         val slowOnce = ConcurrentHashMap.newKeySet<String>()
         val items = ConcurrentHashMap<String, JSONObject>()      // client_ref → item
@@ -76,6 +77,8 @@ class AccountTest {
 
         override fun dispatch(request: RecordedRequest): MockResponse {
             if (offline) return MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START)
+            // the server is there but not the API (not deployed, a proxy's page)
+            if (notTheApi) return MockResponse().setResponseCode(404).setHeader("Content-Type", "text/html").setBody("<html>Not found</html>")
             val path = request.requestUrl!!.encodedPath.removePrefix("/api/app/v1")
             val body = request.body.readUtf8().let { if (it.isBlank()) JSONObject() else JSONObject(it) }
             if (request.method == "POST" && path == "/pair") {
@@ -318,6 +321,18 @@ class AccountTest {
         waitUntil("disconnected") { ui.value.gate == AccountGate.CONNECT }
         assertNull(AccountStore(app).token)
         assertTrue(fake.tokens.isEmpty())
+    }
+
+    /** The server answers, but not as the API (HTML 404): like offline – the saved answer counts, the message says so. */
+    @Test
+    fun aServerWithoutTheApiCountsAsOffline() {
+        pair()
+        fake.notTheApi = true
+        account.check(force = true, manual = true)
+        waitUntil("checked") { !ui.value.busy && ui.value.error != null }
+        assertEquals(AccountGate.OPEN, ui.value.gate)
+        assertTrue(ui.value.error!!, ui.value.error!!.contains("HTTP 404"))
+        assertTrue("the token stays", AccountStore(app).connected)
     }
 
     /** Pairing errors in words: an unknown code, a full subscription. */
