@@ -80,7 +80,12 @@ The Play edition sells the subscription with Play Billing (app-account-api.md in
   it. A report that doesn't get through waits and is sent again. **Restore purchases** sends
   everything Google Play holds again.
 - **Extra devices** (⚙ → Account): up to 4 as add-ons of the running purchase (`+ Add a device`,
-  `Remove one`); **Switch to …** changes the plan and moves the extra devices with it.
+  `Remove one`), in the subscription's billing period (`subscription.base_plan` from the server);
+  **Switch to …** changes the plan and moves the extra devices with it.
+- **Creator codes (affiliates):** a code in the Play install referrer (`aff=MISTY`, from the
+  website's Play links) goes with the first sign-in or pairing; on the plans, **Have a creator
+  code?** registers one by hand. With a code the plans show and sell its Play offer (e.g. 20 % off
+  for 3 months) instead of the base price.
 - **Prices every night:** the app downloads the newest data pack from the shop (`GET /pack`;
   only changed files, resumed, checked) and uses it from its next start.
 - **Delete account** and the **privacy policy** are in ⚙ → Account (both editions). The Play

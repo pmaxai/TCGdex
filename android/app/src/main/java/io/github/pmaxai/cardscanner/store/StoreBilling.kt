@@ -15,8 +15,15 @@ interface StoreBilling {
     /** Continue with Google: an ID token for [serverClientId]; null when the person cancelled */
     suspend fun googleIdToken(activity: Activity, serverClientId: String): String?
 
-    /** what the store sells of these products: product id → base plan id → its offer */
+    /**
+     * What the store sells of these products: product id → offer key → offer. The key is the
+     * base plan id for the base price, and "basePlanId:offerId" for a special offer (a creator
+     * code's discount).
+     */
     suspend fun offers(productIds: List<String>): Map<String, Map<String, StoreOffer>>
+
+    /** the install referrer Play kept for this install ("aff=MISTY"), null without one */
+    suspend fun installReferrer(): String? = null
 
     /** the subscriptions the store knows for this phone's store account (running or pending) */
     suspend fun purchases(): List<StorePurchase>
@@ -28,8 +35,47 @@ interface StoreBilling {
     var onLatePurchases: ((List<StorePurchase>) -> Unit)?
 }
 
-/** A base plan (monthly, yearly) of a product as the store sells it: the price and what buys it. */
-data class StoreOffer(val productId: String, val basePlanId: String, val price: String, val offerToken: String)
+/**
+ * A base plan (monthly, yearly) of a product as the store sells it: the price and what buys it.
+ * A special offer ([offerId]) may start with a lower price ([introPrice], for [introCycles]
+ * billing periods) before the base price.
+ */
+data class StoreOffer(val productId: String, val basePlanId: String, val price: String, val offerToken: String,
+                      val offerId: String? = null, val introPrice: String? = null, val introCycles: Int = 0) {
+    companion object {
+        /** the key of an offer in [StoreBilling.offers] */
+        fun key(basePlanId: String, offerId: String?) = if (offerId == null) basePlanId else "$basePlanId:$offerId"
+    }
+}
+
+/** A creator code (affiliate) the account is registered for, with its discount on the first subscription. */
+data class Affiliate(val code: String, val discountPercent: Int?, val discountMonths: Int?, val googleOfferId: String?) {
+    /** "20 % off for 3 months", "20 % off" */
+    val discountText: String? get() = discountPercent?.takeIf { it > 0 }?.let { p ->
+        "$p % off" + (discountMonths?.let { m -> " for " + if (m == 1) "1 month" else "$m months" } ?: "")
+    }
+
+    companion object {
+        fun parse(o: org.json.JSONObject?): Affiliate? = o?.takeIf { it.optString("code").isNotBlank() }?.let {
+            Affiliate(it.optString("code"), if (it.isNull("discount_percent")) null else it.optInt("discount_percent"),
+                if (it.isNull("discount_months")) null else it.optInt("discount_months"),
+                if (it.isNull("google_offer_id")) null else it.optString("google_offer_id").takeIf { s -> s.isNotBlank() })
+        }
+
+        /**
+         * The creator code in an install referrer: `aff=MISTY` among its parameters (the website
+         * links to Play with `referrer=aff%3DMISTY`); also once more URL-encoded. Null without one.
+         */
+        fun fromReferrer(referrer: String?): String? {
+            var r = referrer?.trim().orEmpty()
+            if (r.isEmpty()) return null
+            if (!r.contains('=') && r.contains("%3D", ignoreCase = true)) r = java.net.URLDecoder.decode(r, "UTF-8")
+            val code = r.split('&').map { it.split('=', limit = 2) }.firstOrNull { it.size == 2 && it[0].trim() == "aff" }?.get(1)
+                ?.let { java.net.URLDecoder.decode(it, "UTF-8").trim() }
+            return code?.takeIf { it.isNotEmpty() && it.length <= 40 && it.all { c -> c.isLetterOrDigit() || c == '-' || c == '_' } }
+        }
+    }
+}
 
 /** A subscription purchase: one token for the plan and its add-ons. */
 data class StorePurchase(
@@ -70,6 +116,8 @@ data class PlanOffer(
     val basePlans: Map<String, String>,
     /** extra devices: one product per device, sold in this order */
     val deviceProductIds: List<String>,
+    /** a creator code's discount: buy the base plan with this Play offer */
+    val offerId: String? = null,
 ) {
     companion object {
         fun parse(a: JSONArray): List<PlanOffer> = (0 until a.length()).mapNotNull { i -> a.optJSONObject(i) }.map { o ->
@@ -83,6 +131,7 @@ data class PlanOffer(
                 productId = g?.optString("product_id")?.takeIf { it.isNotBlank() },
                 basePlans = bp?.let { b -> b.keys().asSequence().associateWith { b.optString(it) } }.orEmpty(),
                 deviceProductIds = (0 until (dev?.length() ?: 0)).map { dev!!.optString(it) }.filter { it.isNotBlank() },
+                offerId = g?.takeIf { !it.isNull("offer_id") }?.optString("offer_id")?.takeIf { it.isNotBlank() },
             )
         }
     }

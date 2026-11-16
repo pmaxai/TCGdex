@@ -90,6 +90,16 @@ class AccountStore(private val ctx: Context) {
         wantedFile.delete()
     }
 
+    /** a creator code from the install (Play install referrer), sent with the first pairing or sign-in */
+    var pendingAffiliate: String?
+        get() = prefs.getString("affiliate_code", null)
+        set(v) { prefs.edit().apply { if (v == null) remove("affiliate_code") else putString("affiliate_code", v) }.commit() }
+
+    /** the install referrer has been read (once, at the first start) */
+    var referrerRead: Boolean
+        get() = prefs.getBoolean("referrer_read", false)
+        set(v) { prefs.edit().putBoolean("referrer_read", v).apply() }
+
     /** updated_at of the S3 settings the shop set up (fetched again when it changes) */
     var s3UpdatedAt: String?
         get() = prefs.getString("s3_updated_at", null)

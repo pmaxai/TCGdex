@@ -144,7 +144,8 @@ class AccountCoordinator(
         publish { it.copy(busy = true, error = null) }
         scope.launch(Dispatchers.IO) {
             try {
-                val p = AccountApi(target.base, BuildConfig.VERSION_NAME, http).pair(target.code, store.deviceId, AccountStore.deviceName())
+                val p = AccountApi(target.base, BuildConfig.VERSION_NAME, http).pair(target.code, store.deviceId, AccountStore.deviceName(),
+                    affiliateCode = store.pendingAffiliate)
                 refused = null
                 connectedWith(target.base, p)
             } catch (e: AccountException) {
@@ -160,6 +161,9 @@ class AccountCoordinator(
     /** paired or signed in: keep the token, show who (a new account without a plan goes straight to the plans) */
     private fun connectedWith(base: String, p: Paired) {
         store.connected(base, p.token, p.status)
+        // the install's creator code went with it: once is enough, whatever became of it
+        if (p.affiliateResult != null) store.pendingAffiliate = null
+        onAffiliate?.invoke(p.affiliateResult, p.affiliate)
         // said before the gate opens (load), so whoever sees it open sees "Connected" too
         val active = runCatching { AccountStatus.parse(p.status).active }.getOrDefault(false)
         publish { it.copy(busy = false, error = null, justConnected = active, emailSentTo = null) }
@@ -174,13 +178,16 @@ class AccountCoordinator(
     /** the store's part (Play edition): after connecting, look at the store's purchases */
     @Volatile var onConnected: (() -> Unit)? = null
 
+    /** the store's part: what became of the install's creator code, and the account's code */
+    @Volatile var onAffiliate: ((String?, JSONObject?) -> Unit)? = null
+
     // ---------------------------------------------------------------- sign-in (store editions)
     /** the build's own server: sign-ins go there (a QR code names its own); tests: a stand-in */
     @Volatile var home: String = BuildConfig.ACCOUNT_URL.trimEnd('/')
 
     /** Continue with Google: the ID token the phone's Google account gave */
     fun signInGoogle(idToken: String) = signIn("signing in needs the internet.") {
-        it.loginGoogle(idToken, store.deviceId, AccountStore.deviceName())
+        it.loginGoogle(idToken, store.deviceId, AccountStore.deviceName(), affiliateCode = store.pendingAffiliate)
     }
 
     /** Use another email: the code is emailed */
@@ -203,7 +210,9 @@ class AccountCoordinator(
     /** the code from the email */
     fun emailVerify(code: String) {
         val email = current().emailSentTo ?: return
-        signIn("signing in needs the internet.") { it.loginEmailVerify(email, code.filter(Char::isDigit), store.deviceId, AccountStore.deviceName()) }
+        signIn("signing in needs the internet.") {
+            it.loginEmailVerify(email, code.filter(Char::isDigit), store.deviceId, AccountStore.deviceName(), affiliateCode = store.pendingAffiliate)
+        }
     }
 
     /** another address (back from the code) */

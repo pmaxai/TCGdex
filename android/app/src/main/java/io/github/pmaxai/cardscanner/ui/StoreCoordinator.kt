@@ -7,6 +7,7 @@ import android.util.Log
 import io.github.pmaxai.cardscanner.BuildConfig
 import io.github.pmaxai.cardscanner.account.AccountException
 import io.github.pmaxai.cardscanner.account.AccountStatus
+import io.github.pmaxai.cardscanner.store.Affiliate
 import io.github.pmaxai.cardscanner.store.BuyItem
 import io.github.pmaxai.cardscanner.store.BuyRequest
 import io.github.pmaxai.cardscanner.store.BuyResult
@@ -40,10 +41,19 @@ data class StoreUi(
     val note: String? = null,
     /** purchases waiting to be reported */
     val waiting: Int = 0,
+    /** the account's creator code with its discount on the first subscription */
+    val affiliate: Affiliate? = null,
 ) {
     /** a plan's price for a period ("monthly"), null when the store doesn't sell it */
     fun price(offer: PlanOffer, period: String): StoreOffer? =
         offer.productId?.let { p -> offer.basePlans[period]?.let { prices[p]?.get(it) } }
+
+    /** the creator code's discount for this plan and period (Play's special offer), null without one */
+    fun discounted(offer: PlanOffer, period: String): StoreOffer? {
+        val id = offer.offerId ?: return null
+        val p = offer.productId ?: return null
+        return offer.basePlans[period]?.let { prices[p]?.get(StoreOffer.key(it, id)) }
+    }
 
     /** the plans the store really sells (both the shop's product ids and Play's answer) */
     val onSale: List<PlanOffer> get() = offers.filter { o -> o.productId != null && prices[o.productId]?.isNotEmpty() == true }
@@ -95,10 +105,12 @@ class StoreCoordinator(
         val token = account.store.token ?: return false
         publish { it.copy(loading = true, error = null) }
         return try {
-            val offers = PlanOffer.parse(account.api()!!.offers(token))
-            val ids = offers.flatMap { o -> listOfNotNull(o.productId) + o.deviceProductIds }
+            val o = account.api()!!.offers(token)
+            val offers = PlanOffer.parse(o.optJSONArray("offers") ?: org.json.JSONArray())
+            val ids = offers.flatMap { p -> listOfNotNull(p.productId) + p.deviceProductIds }
             val prices = billing.offers(ids)
-            publish { it.copy(offers = offers, prices = prices, loading = false) }
+            val aff = Affiliate.parse(o.optJSONObject("affiliate"))
+            publish { it.copy(offers = offers, prices = prices, affiliate = aff, loading = false) }
             true
         } catch (e: AccountException) {
             publish { it.copy(loading = false, error = e.friendly) }
@@ -136,8 +148,56 @@ class StoreCoordinator(
         val st = status() ?: return
         val ref = st.storeRef ?: return publish { it.copy(error = "The account has no store reference yet. Check again.") }
         if (st.active) return publish { it.copy(error = "This account already has a subscription.") }
-        val o = current().price(offer, period) ?: return publish { it.copy(error = "Google Play doesn't sell this plan right now.") }
+        // with a creator code: its discount (a Play offer of the base plan)
+        val o = current().discounted(offer, period) ?: current().price(offer, period)
+            ?: return publish { it.copy(error = "Google Play doesn't sell this plan right now.") }
         launchFlow(activity, BuyRequest(listOf(BuyItem(o)), ref), offer.productId!!, period)
+    }
+
+    // ---------------------------------------------------------------- creator codes (affiliates)
+    /**
+     * At the first start: the creator code in the install referrer (the website's Play links
+     * carry `aff=MISTY`). It goes with the first pairing or sign-in.
+     */
+    fun readReferrer() {
+        if (!sells || account.store.referrerRead) return
+        scope.launch(Dispatchers.IO) {
+            val r = runCatching { billing.installReferrer() }.getOrNull() ?: return@launch     // no answer: next start
+            Affiliate.fromReferrer(r)?.let { code ->
+                if (account.store.token == null) account.store.pendingAffiliate = code
+                Log.i(TAG, "creator code from the install: $code")
+            }
+            account.store.referrerRead = true
+        }
+    }
+
+    /** "Have a creator code?" on the plans: the account is registered for it, the plans get its discount. */
+    fun applyCode(code: String) {
+        val token = account.store.token ?: return
+        val c = code.trim()
+        if (c.isEmpty() || current().busy) return
+        publish { it.copy(busy = true, error = null, note = null) }
+        scope.launch(Dispatchers.IO) {
+            try {
+                val aff = Affiliate.parse(account.api()!!.affiliate(token, c).optJSONObject("affiliate"))
+                publish { it.copy(affiliate = aff) }
+                loadOffers()
+                publish { it.copy(busy = false, note = aff?.let { a -> "Creator code ${a.code}" + (a.discountText?.let { d -> ": $d" } ?: "") + "." }) }
+            } catch (e: AccountException) {
+                val why = if (e.error == "unknown_code") "There's no creator code \"$c\"." else e.friendly
+                Affiliate.parse(e.json?.optJSONObject("affiliate"))?.let { a -> publish { it.copy(affiliate = a) } }
+                publish { it.copy(busy = false, error = why) }
+            } catch (e: Exception) {
+                publish { it.copy(busy = false, error = "No connection: try the code again when you're online.") }
+            }
+        }
+    }
+
+    /** what the first sign-in said about the install's creator code */
+    fun signedInWithCode(result: String?, affiliate: org.json.JSONObject?) {
+        Affiliate.parse(affiliate)?.let { a ->
+            publish { it.copy(affiliate = a, note = if (result == "applied") "Creator code ${a.code}" + (a.discountText?.let { d -> ": $d" } ?: "") + "." else it.note) }
+        }
     }
 
     /** One more device on the running Play subscription (an add-on), up to what the plan sells. */
@@ -197,9 +257,7 @@ class StoreCoordinator(
      */
     private fun periodOf(p: StorePurchase): String? {
         val st = status()
-        st?.json?.optJSONObject("subscription")?.optString("base_plan")?.takeIf { it.isNotBlank() }?.let { bp ->
-            current().offers.firstOrNull()?.basePlans?.entries?.firstOrNull { it.value == bp }?.let { return it.key }
-        }
+        st?.basePlan?.takeIf { it == "monthly" || it == "yearly" }?.let { return it }
         prefs.getString("period:" + p.token, null)?.let { return it }
         val renews = st?.renewsAt ?: st?.endsAt ?: return "monthly"
         return if (renews - System.currentTimeMillis() > 32 * 86_400_000L) "yearly" else "monthly"

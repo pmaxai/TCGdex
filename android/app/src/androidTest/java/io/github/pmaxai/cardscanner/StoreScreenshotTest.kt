@@ -18,6 +18,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.pmaxai.cardscanner.account.AccountGate
 import io.github.pmaxai.cardscanner.account.AccountStatus
 import io.github.pmaxai.cardscanner.account.storeEditionForTests
+import io.github.pmaxai.cardscanner.store.Affiliate
 import io.github.pmaxai.cardscanner.store.PlanOffer
 import io.github.pmaxai.cardscanner.store.StoreOffer
 import io.github.pmaxai.cardscanner.store.StorePurchase
@@ -48,15 +49,27 @@ class StoreScreenshotTest {
         .put(offer("collector", "Collector", listOf("scanner", "trading", "collection", "wanted"), 4))
         .put(offer("creator", "Creator", listOf("scanner", "trading", "youtube", "recording", "collection", "wanted"), 2)))
 
-    private fun offer(plan: String, name: String, f: List<String>, devices: Int) = JSONObject().put("plan", plan).put("name", name)
+    private val withCode = PlanOffer.parse(JSONArray()
+        .put(offer("collector", "Collector", listOf("scanner", "trading", "collection", "wanted"), 4, "creator-20-3m"))
+        .put(offer("creator", "Creator", listOf("scanner", "trading", "youtube", "recording", "collection", "wanted"), 2, "creator-20-3m")))
+
+    private fun offer(plan: String, name: String, f: List<String>, devices: Int, offerId: String? = null) = JSONObject().put("plan", plan).put("name", name)
         .put("features", JSONArray(f)).put("google", JSONObject().put("product_id", "oc_$plan")
             .put("base_plans", JSONObject().put("monthly", "monthly").put("yearly", "yearly"))
-            .put("device_product_ids", JSONArray((1..devices).map { "oc_${plan}_device_$it" })))
+            .put("device_product_ids", JSONArray((1..devices).map { "oc_${plan}_device_$it" }))
+            .put("offer_id", offerId ?: JSONObject.NULL))
 
     private fun prices(): Map<String, Map<String, StoreOffer>> {
         val m = HashMap<String, Map<String, StoreOffer>>()
         fun put(id: String, month: String, year: String) { m[id] = mapOf("monthly" to StoreOffer(id, "monthly", month, "t"), "yearly" to StoreOffer(id, "yearly", year, "t")) }
         put("oc_collector", "€7.00", "€75.60"); put("oc_creator", "€12.00", "€129.60")
+        // a creator code's offer: 20 % off the first 3 months (the first year)
+        m["oc_collector"] = m.getValue("oc_collector") + mapOf(
+            "monthly:creator-20-3m" to StoreOffer("oc_collector", "monthly", "€7.00", "t", "creator-20-3m", "€5.60", 3),
+            "yearly:creator-20-3m" to StoreOffer("oc_collector", "yearly", "€75.60", "t", "creator-20-3m", "€60.48", 1))
+        m["oc_creator"] = m.getValue("oc_creator") + mapOf(
+            "monthly:creator-20-3m" to StoreOffer("oc_creator", "monthly", "€12.00", "t", "creator-20-3m", "€9.60", 3),
+            "yearly:creator-20-3m" to StoreOffer("oc_creator", "yearly", "€129.60", "t", "creator-20-3m", "€103.68", 1))
         (1..4).forEach { put("oc_collector_device_$it", "€4.00", "€43.20") }
         (1..2).forEach { put("oc_creator_device_$it", "€7.00", "€75.60") }
         return m
@@ -75,6 +88,8 @@ class StoreScreenshotTest {
                 resendAt = Long.MAX_VALUE)),
             "plans" to base.copy(account = AccountUi(required = true, gate = AccountGate.ENDED, status = none,
                 store = StoreUi(offers = offers, prices = prices()))),
+            "plans-code" to base.copy(account = AccountUi(required = true, gate = AccountGate.ENDED, status = none,
+                store = StoreUi(offers = withCode, prices = prices(), affiliate = Affiliate("MISTY", 20, 3, "creator-20-3m")))),
         )
         var shown by mutableStateOf(states.first().second)
         compose.setContent {
@@ -89,7 +104,10 @@ class StoreScreenshotTest {
             when (name) {
                 "signin" -> compose.onNodeWithText("Sign in to choose a plan, or to use the one you have.").assertExists()
                 "code" -> compose.onNodeWithText("We sent a 6-digit code to anna@example.com.").assertExists()
-                "plans" -> { compose.onNodeWithText("Choose your plan").assertExists(); compose.onNodeWithText("€12.00 / month").assertExists() }
+                "plans" -> { compose.onNodeWithText("Choose your plan").assertExists(); compose.onNodeWithText("€12.00 / month").assertExists()
+                    compose.onNodeWithText("Have a creator code?").assertExists() }
+                "plans-code" -> { compose.onNodeWithText("Creator code MISTY · 20 % off for 3 months").assertExists()
+                    compose.onNodeWithText("€9.60 / month for 3 months, then €12.00").assertExists() }
             }
             Screenshots.save(compose, "store-$name.png")
         }

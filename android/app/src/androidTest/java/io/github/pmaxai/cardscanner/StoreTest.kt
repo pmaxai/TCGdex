@@ -8,6 +8,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.pmaxai.cardscanner.account.AccountGate
 import io.github.pmaxai.cardscanner.account.AccountStore
+import io.github.pmaxai.cardscanner.store.Affiliate
 import io.github.pmaxai.cardscanner.store.BuyRequest
 import io.github.pmaxai.cardscanner.store.BuyResult
 import io.github.pmaxai.cardscanner.store.Replace
@@ -73,6 +74,12 @@ class StoreTest {
         @Volatile var busyOnce = false
         @Volatile var refuse: String? = null
         @Volatile var deleted = false
+        /** how the running subscription is billed (status.subscription.base_plan) */
+        @Volatile var basePlan: String? = null
+        /** the creator code the account is registered for */
+        @Volatile var affiliate: String? = null
+        /** creator codes that came with a sign-in */
+        val signInCodes = CopyOnWriteArrayList<String>()
         val reports = CopyOnWriteArrayList<Pair<String, String>>()
         val deleteBodies = CopyOnWriteArrayList<JSONObject>()
 
@@ -89,6 +96,7 @@ class StoreTest {
                 .put("subscription", JSONObject().put("plan", plan ?: JSONObject.NULL).put("state", if (active) "active" else "none")
                     .put("source", source ?: JSONObject.NULL).put("manage_url", "https://play.google.com/store/account/subscriptions")
                     .put("renews_at", if (active) iso(now + 29 * 86_400_000L) else JSONObject.NULL).put("ends_at", JSONObject.NULL)
+                    .put("base_plan", if (active) basePlan ?: JSONObject.NULL else JSONObject.NULL)
                     .put("devices", JSONObject().put("included", 1).put("extra", inStore).put("in_store", inStore).put("on_web", 0).put("in_use", 1)))
                 .put("features", f).put("webshop", JSONObject.NULL)
                 .put("services", JSONObject().put("s3", JSONObject().put("enabled", false)))
@@ -107,7 +115,13 @@ class StoreTest {
                 request.method == "POST" && path == "/login/email/verify" -> {
                     if (body.optString("code") != "000000") return err(400, "wrong_code", JSONObject().put("tries_left", 4))
                     val t = "tok_store_" + "y".repeat(34); token = t
-                    return json(200, JSONObject().put("token", t).put("created", true).put("status", status()))
+                    val answer = JSONObject().put("token", t).put("created", true).put("status", status())
+                    body.optString("affiliate_code").takeIf { it.isNotBlank() }?.let { c ->
+                        signInCodes += c
+                        if (c.equals("MISTY", true)) { affiliate = "MISTY"; answer.put("affiliate_code", "applied").put("affiliate", affiliateJson()) }
+                        else answer.put("affiliate_code", "unknown_code").put("affiliate", JSONObject.NULL)
+                    }
+                    return json(200, answer)
                 }
             }
             val auth = request.getHeader("Authorization")?.removePrefix("Bearer ")
@@ -116,7 +130,17 @@ class StoreTest {
             return when {
                 request.method == "GET" && path == "/status" -> json(200, status())
                 request.method == "GET" && path == "/store/offers" -> json(200, JSONObject().put("offers", JSONArray()
-                    .put(offer("collector", "Collector", 4)).put(offer("creator", "Creator", 2))))
+                    .put(offer("collector", "Collector", 4)).put(offer("creator", "Creator", 2)))
+                    .put("affiliate", if (affiliate != null && plan == null) affiliateJson() else JSONObject.NULL))
+                request.method == "POST" && path == "/affiliate" -> {
+                    val c = body.optString("code").uppercase()
+                    when {
+                        plan != null -> err(409, "already_customer")
+                        affiliate != null && affiliate != c -> err(409, "already_registered", JSONObject().put("affiliate", affiliateJson()))
+                        c != "MISTY" -> err(404, "unknown_code")
+                        else -> { affiliate = c; json(200, JSONObject().put("affiliate", affiliateJson())) }
+                    }
+                }
                 request.method == "POST" && path == "/store/google" -> {
                     if (busyOnce) { busyOnce = false; return err(503, "store_unavailable") }
                     refuse?.let { return err(409, it, JSONObject().put("source", "web")) }
@@ -136,11 +160,15 @@ class StoreTest {
             }
         }
 
+        fun affiliateJson(): JSONObject = JSONObject().put("code", affiliate).put("discount_percent", 20).put("discount_months", 3)
+            .put("google_offer_id", "creator-20-3m")
+
         private fun offer(plan: String, name: String, devices: Int) = JSONObject().put("plan", plan).put("name", name)
             .put("features", JSONArray(listOf("scanner", "trading")))
             .put("google", JSONObject().put("product_id", "oc_$plan")
                 .put("base_plans", JSONObject().put("monthly", "monthly").put("yearly", "yearly"))
-                .put("device_product_ids", JSONArray((1..devices).map { "oc_${plan}_device_$it" })))
+                .put("device_product_ids", JSONArray((1..devices).map { "oc_${plan}_device_$it" }))
+                .put("offer_id", if (affiliate != null && this.plan == null) "creator-20-3m" else JSONObject.NULL))
             .put("apple", JSONObject.NULL)
     }
 
@@ -155,9 +183,19 @@ class StoreTest {
 
         override suspend fun googleIdToken(activity: Activity, serverClientId: String): String? = null
 
+        /** the install referrer Play kept */
+        @Volatile var referrer: String? = null
+        override suspend fun installReferrer(): String? = referrer
+
         override suspend fun offers(productIds: List<String>) = productIds.associateWith { id ->
-            mapOf("monthly" to StoreOffer(id, "monthly", if ("device" in id) "€4.00" else "€7.00", "$id:monthly"),
+            val m = mutableMapOf("monthly" to StoreOffer(id, "monthly", if ("device" in id) "€4.00" else "€7.00", "$id:monthly"),
                 "yearly" to StoreOffer(id, "yearly", if ("device" in id) "€43.20" else "€75.60", "$id:yearly"))
+            // the creator codes' offer under every base plan of the plans
+            if ("device" !in id) {
+                m["monthly:creator-20-3m"] = StoreOffer(id, "monthly", "€7.00", "$id:monthly:creator-20-3m", "creator-20-3m", "€5.60", 3)
+                m["yearly:creator-20-3m"] = StoreOffer(id, "yearly", "€75.60", "$id:yearly:creator-20-3m", "creator-20-3m", "€60.48", 1)
+            }
+            m.toMap()
         }
 
         override suspend fun purchases(): List<StorePurchase> = held.toList()
@@ -172,6 +210,8 @@ class StoreTest {
     }
 
     @Before fun setUp() {
+        AccountStore(app).pendingAffiliate = null
+        AccountStore(app).referrerRead = true
         shop = StoreShop()
         server = MockWebServer().apply { dispatcher = shop; start() }
         AccountStore(app).forget(null)
@@ -204,6 +244,7 @@ class StoreTest {
     private fun signIn() {
         account.home = base()
         account.onConnected = { store.start() }
+        account.onAffiliate = { r, a -> store.signedInWithCode(r, a) }
         account.emailCode("anna@test.overpricedcardboard.com")
         waitUntil("the code is sent") { ui.value.emailSentTo != null && !ui.value.busy }
         account.emailVerify("000000")
@@ -334,6 +375,63 @@ class StoreTest {
         waitUntil("said") { ui.value.store.error != null }
         assertEquals("This account already has a subscription from the website. Nothing new was bought.", ui.value.store.error)
         assertEquals(0, ui.value.store.waiting)
+    }
+
+    @Test
+    fun theInstallsCreatorCodeGoesWithTheSignIn() {
+        billing.referrer = "utm_source=website&aff=MISTY"
+        AccountStore(app).referrerRead = false
+        store.readReferrer()
+        waitUntil("the referrer read") { AccountStore(app).pendingAffiliate == "MISTY" }
+        signIn()
+        assertEquals("sent with the first sign-in", listOf("MISTY"), shop.signInCodes.toList())
+        assertNull("once is enough", AccountStore(app).pendingAffiliate)
+        waitUntil("the code's discount on the plans") { ui.value.store.affiliate?.code == "MISTY" && ui.value.store.offers.any { it.offerId != null } }
+        assertEquals("20 % off for 3 months", ui.value.store.affiliate!!.discountText)
+        val creator = ui.value.store.onSale.first { it.plan == "creator" }
+        assertEquals("€5.60", ui.value.store.discounted(creator, "monthly")!!.introPrice)
+        store.buy(activity, creator, "monthly")
+        waitUntil("bought") { ui.value.gate == AccountGate.OPEN }
+        assertEquals("bought with the code's Play offer", "oc_creator:monthly:creator-20-3m", billing.asked.last().items.single().offer.offerToken)
+    }
+
+    @Test
+    fun aTypedCreatorCode() {
+        signIn()
+        assertNull(ui.value.store.affiliate)
+        store.applyCode("nope")
+        waitUntil("said") { ui.value.store.error != null && !ui.value.store.busy }
+        assertEquals("There's no creator code \"nope\".", ui.value.store.error)
+        store.applyCode("misty")
+        waitUntil("applied") { ui.value.store.affiliate != null && !ui.value.store.busy }
+        assertEquals("Creator code MISTY: 20 % off for 3 months.", ui.value.store.note)
+        val collector = ui.value.store.onSale.first { it.plan == "collector" }
+        assertEquals("the yearly offer too", "€60.48", ui.value.store.discounted(collector, "yearly")!!.introPrice)
+    }
+
+    @Test
+    fun referrers() {
+        assertEquals("MISTY", Affiliate.fromReferrer("aff=MISTY"))
+        assertEquals("MISTY", Affiliate.fromReferrer("utm_source=google-play&aff=MISTY&utm_medium=x"))
+        assertEquals("MISTY", Affiliate.fromReferrer("aff%3DMISTY"))
+        assertNull(Affiliate.fromReferrer("utm_source=google-play&utm_medium=organic"))
+        assertNull(Affiliate.fromReferrer(""))
+        assertNull("not a code", Affiliate.fromReferrer("aff=<script>"))
+    }
+
+    /** extra devices take the subscription's billing period from the server, also on a phone that didn't buy it */
+    @Test
+    fun extraDevicesFollowTheServersBillingPeriod() {
+        signIn()
+        shop.basePlan = "yearly"
+        billing.held += StorePurchase("gp-other-phone", listOf("oc_collector"), true, shop.storeRef)
+        store.restore()
+        waitUntil("restored") { ui.value.gate == AccountGate.OPEN && ui.value.store.purchase != null && !ui.value.store.busy }
+        assertEquals("yearly", ui.value.status!!.basePlan)
+        billing.next = "gp-2-d1"
+        store.addDevice(activity)
+        waitUntil("one device") { ui.value.status!!.devicesInStore == 1 && !ui.value.store.busy }
+        assertEquals(listOf("oc_collector:yearly", "oc_collector_device_1:yearly"), billing.asked.last().items.map { it.offer.offerToken })
     }
 
     @Test

@@ -380,6 +380,7 @@ private fun OffersPanel(state: UiState, vm: ScannerViewModel) {
     if (st != null && !st.emailVerified) Text("Confirm your email: open the link we sent you.", color = Gold, fontSize = 13.sp,
         textAlign = TextAlign.Center, modifier = Modifier.padding(top = 4.dp))
     if (s.loading) CircularProgressIndicator(Modifier.padding(top = 16.dp).size(28.dp), strokeWidth = 2.dp)
+    CreatorCode(s, vm)
     s.onSale.forEach { plan -> PlanCard(plan, s, enabled = !s.busy && !a.busy) { period -> ctx.activity()?.let { vm.store.buy(it, plan, period) } } }
     if (!s.loading && s.onSale.isEmpty() && s.error == null)
         Text("The plans aren't on sale in Google Play yet.", color = Muted, fontSize = 14.sp, modifier = Modifier.padding(top = 16.dp))
@@ -402,18 +403,52 @@ private fun StoreLines(s: StoreUi) {
         fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
 }
 
-/** a plan: what it unlocks, and a button per period with Google Play's price */
+/** The creator code: the account's (with its discount), or a field to type one in. */
+@Composable
+private fun CreatorCode(s: StoreUi, vm: ScannerViewModel) {
+    val aff = s.affiliate
+    if (aff != null) {
+        Text("Creator code ${aff.code}" + (aff.discountText?.let { " · $it" } ?: ""), color = Sure, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center, modifier = Modifier.padding(top = 12.dp))
+        return
+    }
+    var open by rememberSaveable { mutableStateOf(false) }
+    var code by rememberSaveable { mutableStateOf("") }
+    if (!open) {
+        TextButton({ open = true }, modifier = Modifier.padding(top = 6.dp)) { Text("Have a creator code?") }
+        return
+    }
+    Row(Modifier.padding(top = 8.dp).widthIn(max = 420.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(code, { code = it.trim().take(40) }, label = { Text("Creator code") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, autoCorrectEnabled = false),
+            modifier = Modifier.weight(1f))
+        Button({ vm.store.applyCode(code) }, enabled = !s.busy && code.isNotBlank(), modifier = Modifier.padding(start = 8.dp)) { Text("Apply") }
+    }
+}
+
+/** "€5.60 / month for 3 months, then €7.00" */
+private fun offerText(o: io.github.pmaxai.cardscanner.store.StoreOffer, unit: String): String {
+    val n = o.introCycles
+    return if (o.introPrice != null && n > 0) "${o.introPrice} / $unit for " + (if (n == 1) "1 $unit" else "$n ${unit}s") + ", then ${o.price}"
+    else "${o.price} / $unit"
+}
+
+/** a plan: what it unlocks, and a button per period with Google Play's price (a creator code's discount when there is one) */
 @Composable
 private fun PlanCard(plan: io.github.pmaxai.cardscanner.store.PlanOffer, s: StoreUi, enabled: Boolean, onBuy: (String) -> Unit) {
     Column(Modifier.padding(top = 14.dp).widthIn(max = 420.dp).fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(14.dp)) {
         Text(plan.name, color = Gold, fontSize = 19.sp, fontWeight = FontWeight.Bold)
         Text(featureWords(plan.features), color = Muted, fontSize = 13.sp)
         // one under the other: prices like "€129.60 / year" don't fit two to a row on a phone
-        s.price(plan, "monthly")?.let { o ->
-            Button({ onBuy("monthly") }, enabled = enabled, modifier = Modifier.padding(top = 10.dp).fillMaxWidth()) { Text("${o.price} / month", maxLines = 1) }
+        (s.discounted(plan, "monthly") ?: s.price(plan, "monthly"))?.let { o ->
+            Button({ onBuy("monthly") }, enabled = enabled, modifier = Modifier.padding(top = 10.dp).fillMaxWidth()) {
+                Text(offerText(o, "month"), textAlign = TextAlign.Center)
+            }
         }
-        s.price(plan, "yearly")?.let { o ->
-            OutlinedButton({ onBuy("yearly") }, enabled = enabled, modifier = Modifier.padding(top = 6.dp).fillMaxWidth()) { Text("${o.price} / year", maxLines = 1) }
+        (s.discounted(plan, "yearly") ?: s.price(plan, "yearly"))?.let { o ->
+            OutlinedButton({ onBuy("yearly") }, enabled = enabled, modifier = Modifier.padding(top = 6.dp).fillMaxWidth()) {
+                Text(offerText(o, "year"), textAlign = TextAlign.Center)
+            }
         }
     }
 }
@@ -443,7 +478,8 @@ private fun StorePart(state: UiState, vm: ScannerViewModel, st: AccountStatus) {
             val (have, max) = dev
             val plan = s.offers.firstOrNull { it.plan == st.plan }
             val next = plan?.deviceProductIds?.firstOrNull { it !in (s.purchase?.products ?: emptyList()) }
-            val nextPrice = next?.let { id -> s.prices[id]?.values?.firstOrNull()?.price }
+            val period = st.basePlan ?: "monthly"
+            val nextPrice = next?.let { id -> plan?.basePlans?.get(period)?.let { s.prices[id]?.get(it)?.price } }
             Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton({ ctx.activity()?.let { vm.store.addDevice(it) } }, enabled = !s.busy && have < max) {
                     Text("+ Add a device" + (nextPrice?.let { " · $it" } ?: ""))

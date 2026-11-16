@@ -20,6 +20,8 @@ import com.android.billingclient.api.Purchase
 import com.android.billingclient.api.PurchasesUpdatedListener
 import com.android.billingclient.api.QueryProductDetailsParams
 import com.android.billingclient.api.QueryPurchasesParams
+import com.android.installreferrer.api.InstallReferrerClient
+import com.android.installreferrer.api.InstallReferrerStateListener
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import kotlinx.coroutines.CompletableDeferred
@@ -96,11 +98,31 @@ class PlayBilling(private val ctx: Context) : StoreBilling, PurchasesUpdatedList
             }
         }
         list.forEach { details[it.productId] = it }
-        // the base plans themselves (no special offers): their recurring price
+        // the base plans (their recurring price) and the special offers (a creator code's discount: its first phase too)
         return list.associate { pd ->
-            pd.productId to pd.subscriptionOfferDetails.orEmpty().filter { it.offerId == null }.associate { o ->
-                o.basePlanId to StoreOffer(pd.productId, o.basePlanId, o.pricingPhases.pricingPhaseList.lastOrNull()?.formattedPrice.orEmpty(), o.offerToken)
+            pd.productId to pd.subscriptionOfferDetails.orEmpty().associate { o ->
+                val phases = o.pricingPhases.pricingPhaseList
+                val intro = phases.takeIf { it.size > 1 }?.first()
+                StoreOffer.key(o.basePlanId, o.offerId) to StoreOffer(pd.productId, o.basePlanId, phases.lastOrNull()?.formattedPrice.orEmpty(),
+                    o.offerToken, o.offerId, intro?.formattedPrice, intro?.billingCycleCount ?: 0)
             }
+        }
+    }
+
+    override suspend fun installReferrer(): String? = suspendCancellableCoroutine<String?> { c ->
+        val client = InstallReferrerClient.newBuilder(ctx).build()
+        try {
+            client.startConnection(object : InstallReferrerStateListener {
+                override fun onInstallReferrerSetupFinished(code: Int) {
+                    val r = if (code == InstallReferrerClient.InstallReferrerResponse.OK) runCatching { client.installReferrer.installReferrer }.getOrNull() else null
+                    runCatching { client.endConnection() }
+                    if (c.isActive) c.resume(r)
+                }
+                override fun onInstallReferrerServiceDisconnected() { if (c.isActive) c.resume(null) }
+            })
+        } catch (e: Exception) {
+            Log.w(TAG, "install referrer: ${e.message}")
+            if (c.isActive) c.resume(null)
         }
     }
 

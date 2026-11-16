@@ -14,8 +14,13 @@ import java.util.concurrent.TimeUnit
 /** The account server is there but doesn't answer as the API does (down, not deployed, a proxy's page). Counts as offline. */
 class ServerUnavailable(val code: Int, message: String) : IOException(message)
 
-/** Pairing's (or a sign-in's) answer: the device token (secret) and the status; [created]: a new account. */
-class Paired(val token: String, val status: JSONObject, val created: Boolean = false)
+/**
+ * Pairing's (or a sign-in's) answer: the device token (secret) and the status; [created]: a new
+ * account; [affiliateResult]: what became of a creator code sent with it (applied, unknown_code,
+ * already_registered, already_customer) and [affiliate] the account's code with its discount.
+ */
+class Paired(val token: String, val status: JSONObject, val created: Boolean = false,
+             val affiliateResult: String? = null, val affiliate: JSONObject? = null)
 
 /** Move to a new phone: the code the new phone scans (as a QR code of [url]). */
 data class TransferCode(val code: String, val url: String, val expiresAt: Long?)
@@ -31,36 +36,41 @@ class AccountApi(baseUrl: String, private val appVersion: String?, http: OkHttpC
         .connectTimeout(10, TimeUnit.SECONDS).readTimeout(15, TimeUnit.SECONDS).callTimeout(25, TimeUnit.SECONDS)
         .build()
 
-    fun pair(code: String, deviceId: String, deviceName: String?, platform: String = "android"): Paired {
-        val o = need(call("POST", url("pair"), null, JSONObject().put("code", code).put("device_id", deviceId)
-            .put("device_name", deviceName?.take(80)).put("platform", platform).put("app_version", appVersion?.take(40))))
-        return Paired(o.getString("token"), o.optJSONObject("status") ?: JSONObject())
-    }
+    /** [affiliateCode]: a creator code that came with the install (sent with the first pairing or sign-in) */
+    fun pair(code: String, deviceId: String, deviceName: String?, platform: String = "android", affiliateCode: String? = null): Paired =
+        signedIn(call("POST", url("pair"), null, device(deviceId, deviceName, platform, affiliateCode).put("code", code)))
 
     fun status(token: String): JSONObject = need(call("GET", url("status"), token))
 
     // ---------------------------------------------------------------- sign-in (store editions)
     /** Continue with Google: the ID token from Credential Manager. Works without a subscription. */
-    fun loginGoogle(idToken: String, deviceId: String, deviceName: String?, platform: String = "android"): Paired =
-        signedIn(call("POST", url("login", "google"), null, device(deviceId, deviceName, platform).put("id_token", idToken)))
+    fun loginGoogle(idToken: String, deviceId: String, deviceName: String?, platform: String = "android", affiliateCode: String? = null): Paired =
+        signedIn(call("POST", url("login", "google"), null, device(deviceId, deviceName, platform, affiliateCode).put("id_token", idToken)))
 
     /** Use another email: a 6-digit code is emailed. Returns the seconds until another may be asked for. */
     fun loginEmail(email: String): Int = need(call("POST", url("login", "email"), null, JSONObject().put("email", email))).optInt("resend_after", 60)
 
-    fun loginEmailVerify(email: String, code: String, deviceId: String, deviceName: String?, platform: String = "android"): Paired =
-        signedIn(call("POST", url("login", "email", "verify"), null, device(deviceId, deviceName, platform).put("email", email).put("code", code)))
+    fun loginEmailVerify(email: String, code: String, deviceId: String, deviceName: String?, platform: String = "android",
+                         affiliateCode: String? = null): Paired =
+        signedIn(call("POST", url("login", "email", "verify"), null, device(deviceId, deviceName, platform, affiliateCode).put("email", email).put("code", code)))
 
-    private fun device(deviceId: String, deviceName: String?, platform: String) = JSONObject().put("device_id", deviceId)
+    private fun device(deviceId: String, deviceName: String?, platform: String, affiliateCode: String?) = JSONObject().put("device_id", deviceId)
         .put("device_name", deviceName?.take(80)).put("platform", platform).put("app_version", appVersion?.take(40))
+        .apply { affiliateCode?.let { put("affiliate_code", it) } }
 
     private fun signedIn(answer: JSONObject?): Paired {
         val o = need(answer)
-        return Paired(o.getString("token"), o.optJSONObject("status") ?: JSONObject(), o.optBoolean("created"))
+        return Paired(o.getString("token"), o.optJSONObject("status") ?: JSONObject(), o.optBoolean("created"),
+            AccountStatus.str(o, "affiliate_code"), o.optJSONObject("affiliate"))
     }
 
+    // ---------------------------------------------------------------- creator codes (affiliates)
+    /** A creator code typed on the paywall: `{ "affiliate": … }` (404 unknown_code, 409 already_registered / already_customer) */
+    fun affiliate(token: String, code: String): JSONObject = need(call("POST", url("affiliate"), token, JSONObject().put("code", code)))
+
     // ---------------------------------------------------------------- buying in Google Play
-    /** the plans on sale and their store product ids (`offers`) */
-    fun offers(token: String): JSONArray = need(call("GET", url("store", "offers"), token)).optJSONArray("offers") ?: JSONArray()
+    /** the plans on sale with their store product ids (`offers`), and the account's creator code (`affiliate`) */
+    fun offers(token: String): JSONObject = need(call("GET", url("store", "offers"), token))
 
     /** reports a Play purchase (the plan's product id); answers the status */
     fun storeGoogle(token: String, productId: String, purchaseToken: String): JSONObject =

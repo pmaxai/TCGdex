@@ -194,6 +194,8 @@ dependencies {
     // Google Play edition: the subscription and extra devices (add-ons) with Play Billing,
     // Continue with Google (Credential Manager)
     "playImplementation"("com.android.billingclient:billing:8.3.0")
+    // creator codes: the code in the Play install referrer (aff=MISTY)
+    "playImplementation"("com.android.installreferrer:installreferrer:2.2")
     "playImplementation"("androidx.credentials:credentials:1.5.0")
     "playImplementation"("androidx.credentials:credentials-play-services-auth:1.5.0")
     "playImplementation"("com.google.android.libraries.identity.googleid:googleid:1.1.1")

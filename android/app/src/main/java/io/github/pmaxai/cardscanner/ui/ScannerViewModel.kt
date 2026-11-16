@@ -480,6 +480,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         // uploads need the account's S3 storage and Automatic Content Processing
         rec.uploadAllowed = { _state.value.account.let { a -> a.has("s3_upload") && a.has("pipeline") } }
         account.onConnected = { store.start(); io.github.pmaxai.cardscanner.data.PackUpdate.schedule(app) }
+        account.onAffiliate = { result, aff -> store.signedInWithCode(result, aff) }
+        store.readReferrer()
         account.start()
         if (account.store.connected) { store.start(); io.github.pmaxai.cardscanner.data.PackUpdate.schedule(app) }
         viewModelScope.launch { account.hourly() }

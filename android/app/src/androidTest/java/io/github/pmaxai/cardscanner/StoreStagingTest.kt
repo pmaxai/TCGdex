@@ -42,23 +42,26 @@ class StoreStagingTest {
         assumeTrue("no staging access secret", access.isNotBlank())
         val api = AccountApi(base, "store-test", http)
         val email = "store-${UUID.randomUUID().toString().take(8)}@test.overpricedcardboard.com"
-        val p = try { api.loginGoogle("test_google:$email", UUID.randomUUID().toString(), "CI emulator") }
+        // a creator code nobody has: the sign-in still works, the answer says so
+        val p = try { api.loginGoogle("test_google:$email", UUID.randomUUID().toString(), "CI emulator", affiliateCode = "NOSUCHCODE42") }
             catch (e: AccountException) { Log.w("ShopStaging", "store sign-in: ${e.status} ${e.error}"); assumeTrue("staging refused: ${e.error}", false); return }
         Log.i("ShopStaging", "store sign-in: created=${p.created}")
         assertTrue("a new account", p.created)
+        Log.i("ShopStaging", "creator code with the sign-in: ${p.affiliateResult}")
+        assertEquals("unknown_code", p.affiliateResult)
         val none = AccountStatus.parse(p.status)
         assertTrue("no plan yet: status none", none.none)
         assertFalse(none.active)
         val ref = none.storeRef
         assertNotNull("store_ref", ref)
 
-        val offers = PlanOffer.parse(api.offers(p.token))
+        val offers = PlanOffer.parse(api.offers(p.token).optJSONArray("offers") ?: org.json.JSONArray())
         Log.i("ShopStaging", "offers: ${offers.map { "${it.plan} ${it.productId} ${it.deviceProductIds}" }}")
         assertTrue("Collector and Creator are offered", offers.map { it.plan }.containsAll(listOf("collector", "creator")))
         val product = offers.first { it.plan == "collector" }.productId ?: "oc_collector"
 
         val bought = AccountStatus.parse(api.storeGoogle(p.token, product, "test_active-d2-${UUID.randomUUID().toString().take(6)}"))
-        Log.i("ShopStaging", "bought: ${bought.state} ${bought.source} in_store=${bought.devicesInStore}")
+        Log.i("ShopStaging", "bought: ${bought.state} ${bought.source} in_store=${bought.devicesInStore} base_plan=${bought.basePlan}")
         assertTrue("active", bought.active)
         assertEquals("google_play", bought.source)
         assertEquals("two extra devices from the app", 2, bought.devicesInStore)

@@ -86,6 +86,8 @@ data class AccountStatus(
     /** extra devices bought in the app (Play add-ons) and on the website */
     val devicesInStore: Int = 0,
     val devicesOnWeb: Int = 0,
+    /** how it is billed: monthly or yearly (null: not known, or given by the shop) */
+    val basePlan: String? = null,
 ) {
     /** a feature the server unlocked (an inactive answer unlocks nothing) */
     fun has(feature: String): Boolean = active && features[feature] == true
@@ -137,6 +139,7 @@ data class AccountStatus(
                 manageUrl = str(sub, "manage_url"),
                 devicesInStore = dev.optInt("in_store", 0),
                 devicesOnWeb = dev.optInt("on_web", 0),
+                basePlan = str(sub, "base_plan"),
             )
         }
 
@@ -204,6 +207,9 @@ class AccountException(val status: Int, val error: String, message: String?, val
         "linked_elsewhere" -> "This purchase belongs to another account" + (json?.optString("owner")?.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: "") + "."
         "invalid_purchase" -> "Google Play doesn't know this purchase."
         "store_unavailable" -> "Google didn't answer just now. The purchase is kept and sent again."
+        "already_registered" -> "Your account already has the creator code" +
+            (json?.optJSONObject("affiliate")?.optString("code")?.takeIf { it.isNotBlank() }?.let { " $it" } ?: "") + "."
+        "already_customer" -> "Creator codes are only for the first subscription."
         "rate_limited" -> "Too many tries – please wait a few minutes."
         "feature_not_included" -> "Your plan doesn't include this."
         else -> message?.takeIf { it.isNotBlank() && it != error } ?: "The server answered $status ($error)."
