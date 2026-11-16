@@ -53,6 +53,8 @@ data class RecordingSettings(
     val showTimer: Boolean = true,
     /** recordings go to the S3 bucket; off (the default): saved on this phone, in the Gallery. The S3 fields stay either way. */
     val uploadS3: Boolean = false,
+    /** the S3 settings were set up by Overpriced Cardboard (the account's storage): shown, not edited */
+    val managed: Boolean = false,
 ) {
     /** everything the upload needs is filled in */
     val uploadReady: Boolean get() = endpoint.isNotBlank() && region.isNotBlank() && bucket.isNotBlank() && accessKeyId.isNotBlank() && hasSecret
@@ -88,6 +90,7 @@ class RecordingPrefs(ctx: Context) {
         mic = prefs.getBoolean("mic", false),
         showTimer = prefs.getBoolean("timer", true),
         uploadS3 = prefs.getBoolean("upload_s3", false),
+        managed = prefs.getBoolean("s3_managed", false),
     )
 
     /** Saves the settings; [secret] null keeps the stored one. */
@@ -98,8 +101,25 @@ class RecordingPrefs(ctx: Context) {
             .putBoolean("wifi_only", s.wifiOnly).putBoolean("delete_after", s.deleteAfterUpload).putBoolean("hd", s.hd)
             .putInt("bitrate", s.bitrateMbps).putBoolean("camera", s.recordCamera).putBoolean("fit169", s.fit169)
             .putBoolean("mic", s.mic).putBoolean("timer", s.showTimer).putBoolean("upload_s3", s.uploadS3)
+            .putBoolean("s3_managed", s.managed)
         if (!secret.isNullOrBlank()) e.putString("secret", encrypt(secret.trim()))
-        e.apply()
+        e.commit()
+    }
+
+    /** The S3 settings Overpriced Cardboard set up for the account (GET /api/app/v1/services/s3). */
+    fun saveManaged(o: org.json.JSONObject) {
+        val cur = load()
+        val provider = when (o.optString("provider")) { "aws" -> S3Provider.AWS; "exoscale" -> S3Provider.EXOSCALE; else -> S3Provider.OTHER }
+        fun str(k: String) = if (o.isNull(k)) "" else o.optString(k)
+        save(cur.copy(provider = provider, endpoint = str("endpoint"), region = str("region"), bucket = str("bucket"),
+            prefix = str("prefix"), accessKeyId = str("access_key_id"), pathStyle = provider == S3Provider.OTHER && cur.pathStyle,
+            allowHttp = false, managed = true), str("secret_access_key").takeIf { it.isNotBlank() })
+    }
+
+    /** The account's storage is gone (service off, disconnected): its bucket and key leave the phone. */
+    fun clearManaged() {
+        if (!prefs.getBoolean("s3_managed", false)) return
+        prefs.edit().remove("bucket").remove("access_key").remove("secret").remove("prefix").putBoolean("s3_managed", false).commit()
     }
 
     /** The bucket connection, or null when something is missing. */

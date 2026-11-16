@@ -9,8 +9,6 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import io.github.pmaxai.cardscanner.license.Activated
-import io.github.pmaxai.cardscanner.license.LicenceStore
 import io.github.pmaxai.cardscanner.recording.CameraRecording
 import io.github.pmaxai.cardscanner.ui.AppMode
 import io.github.pmaxai.cardscanner.ui.ScannerViewModel
@@ -71,7 +69,7 @@ class CameraZoomTest {
     fun theZoomStaysWhenTheCameraIsBoundAgain() {
         val pkg = ctx.packageName
         shell("pm grant $pkg android.permission.CAMERA")
-        LicenceStore(ctx).activated("CS-E2ETE-STE2E-TESTE-2ETES", Activated("e2e", "e2e-token", System.currentTimeMillis()))
+        TestAccount.connect(ctx)
         val scenario = ActivityScenario.launch(MainActivity::class.java)
         lateinit var vm: ScannerViewModel
         var modeBefore: io.github.pmaxai.cardscanner.ui.Settings? = null
@@ -83,7 +81,7 @@ class CameraZoomTest {
             assumeTrue("the app couldn't start in this test process: ${vm.state.value.error}", vm.state.value.error == null)
             modeBefore = vm.state.value.settings
             scenario.onActivity { vm.updateSettings { it.withMode(AppMode.YOUTUBE) } }
-            waitUntil(10_000, "YouTube mode") { vm.state.value.settings.youtube && !vm.state.value.licence.locked }
+            waitUntil(10_000, "YouTube mode") { vm.state.value.settings.youtube && !vm.state.value.account.locked }
             waitUntil(15_000, "the camera's zoom range") { cameraZoom(scenario) != null }
             val max = cameraZoom(scenario)!!.second
             Log.i("ZoomKept", "camera zoom range 1-$max")
@@ -128,7 +126,7 @@ class CameraZoomTest {
             Thread.sleep(800)           // the zoom is saved when it rests
             modeBefore?.let { m -> runCatching { scenario.onActivity { vm.updateSettings { it.copy(youtube = m.youtube, trading = m.trading, webshop = m.webshop) } } } }
             scenario.close()
-            ctx.getSharedPreferences("licence", 0).edit().clear().commit()
+            TestAccount.disconnect(ctx)
             dir.deleteRecursively()
         }
     }

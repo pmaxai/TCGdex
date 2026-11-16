@@ -74,7 +74,8 @@ fun PickList(picks: List<Candidate>, shown: Shown?, onPick: (Candidate) -> Unit,
 
 /** One card in a list: picture, name, set · number · language · year, price; [rank] and [rel] (bar) optional. */
 @Composable
-fun CardRow(c: Candidate, rank: Int? = null, current: Boolean = false, rel: Float? = null, onClick: () -> Unit) {
+fun CardRow(c: Candidate, rank: Int? = null, current: Boolean = false, rel: Float? = null,
+            trailing: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
     val blank = ColorPainter(Color(0xFF2A2D34))
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick)
         .background(if (current) Gold.copy(alpha = 0.14f) else Color.Transparent)
@@ -98,5 +99,6 @@ fun CardRow(c: Candidate, rank: Int? = null, current: Boolean = false, rel: Floa
         }
         Spacer(Modifier.width(8.dp))
         Text(eur(c.info.bestValue), color = Gold, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        trailing?.invoke()
     }
 }

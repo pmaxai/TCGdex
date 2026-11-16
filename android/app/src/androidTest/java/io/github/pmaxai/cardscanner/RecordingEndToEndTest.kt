@@ -14,8 +14,6 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
-import io.github.pmaxai.cardscanner.license.Activated
-import io.github.pmaxai.cardscanner.license.LicenceStore
 import io.github.pmaxai.cardscanner.recording.RecordingController
 import io.github.pmaxai.cardscanner.recording.RecordingPrefs
 import io.github.pmaxai.cardscanner.recording.RecordingSettings
@@ -105,8 +103,8 @@ class RecordingEndToEndTest {
         shell("pm grant $pkg android.permission.POST_NOTIFICATIONS")
         shell("pm grant $pkg android.permission.CAMERA") // else the app's camera question covers the screen
         RecordingPrefs(ctx).save(RecordingSettings(recordCamera = false, uploadAuto = false, mic = false, fit169 = true))
-        // a licence on this phone (the service doesn't know its token; offline answers keep it), so YouTube mode is on screen
-        LicenceStore(ctx).activated("CS-E2ETE-STE2E-TESTE-2ETES", Activated("e2e", "e2e-token", System.currentTimeMillis()))
+        // connected to an account (its server unreachable, so the saved answer counts), so YouTube mode is on screen
+        TestAccount.connect(ctx)
         val scenario = ActivityScenario.launch(MainActivity::class.java)
         var modeBefore: io.github.pmaxai.cardscanner.ui.Settings? = null
         lateinit var vm: ScannerViewModel
@@ -115,7 +113,7 @@ class RecordingEndToEndTest {
             waitUntil(180_000, "card data loaded") { !vm.state.value.loading }
             modeBefore = vm.state.value.settings
             scenario.onActivity { vm.updateSettings { it.withMode(AppMode.YOUTUBE) } }
-            waitUntil(10_000, "YouTube mode") { vm.state.value.settings.youtube && !vm.state.value.licence.locked }
+            waitUntil(10_000, "YouTube mode") { vm.state.value.settings.youtube && !vm.state.value.account.locked }
 
             val result = CompletableFuture<ActivityResult>()
             scenario.onActivity { a ->
@@ -262,7 +260,7 @@ class RecordingEndToEndTest {
         } finally {
             modeBefore?.let { m -> runCatching { scenario.onActivity { vm.updateSettings { it.copy(youtube = m.youtube, trading = m.trading, webshop = m.webshop) } } } }
             scenario.close()
-            ctx.getSharedPreferences("licence", 0).edit().clear().commit()
+            TestAccount.disconnect(ctx)
             shell("appops reset $pkg")
         }
     }

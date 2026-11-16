@@ -85,17 +85,34 @@ class RecordingCoordinator(
 ) {
     private val prefs = RecordingPrefs(app)
     val store = RecordingStore(app)
+    /**
+     * Uploading is possible at all (the account's S3 storage and Automatic Content Processing);
+     * without it Upload to S3 counts as off: recordings are saved in the Gallery.
+     */
+    @Volatile var uploadAllowed: () -> Boolean = { true }
+
+    /** the settings as they count now (Upload to S3 only where it is allowed) */
+    private fun loadSettings(): RecordingSettings = prefs.load().let { if (it.uploadS3 && !uploadAllowed()) it.copy(uploadS3 = false) else it }
+
+    /** The account changed what is allowed: the settings shown again. */
+    fun reload() = publish { it.copy(settings = loadSettings()) }
+
+    /** The S3 settings Overpriced Cardboard set up for the account (null: none, or gone). */
+    fun applyManagedS3(o: org.json.JSONObject?) {
+        if (o == null) prefs.clearManaged() else prefs.saveManaged(o)
+        reload()
+    }
     /** the Fit to 16:9 area on the screen (pixels) while recording; null: the whole screen */
     @Volatile var contentRect: Rect? = null
 
     init {
-        publish { it.copy(settings = prefs.load()) }
+        publish { it.copy(settings = loadSettings()) }
         RecordingController.onFinished = { f -> scope.launch { finish(f) } }
         scope.launch { RecordingController.phase.collect { p -> publish { it.copy(phase = p) } } }
         scope.launch(Dispatchers.IO) { recover(); refresh() }
     }
 
-    fun settings(): RecordingSettings = prefs.load()
+    fun settings(): RecordingSettings = loadSettings()
 
     // ------------------------------------------------------------------ start and stop
     /** After Android's consent: a new folder, the header, the log; the service starts capturing. */
@@ -104,7 +121,7 @@ class RecordingCoordinator(
 
     fun start(resultCode: Int, consent: Intent, landscape: Boolean) {
         if (RecordingController.recording || starting) return
-        val s = prefs.load()
+        val s = loadSettings()
         val dir = store.create()
         val st = state()
         val header = JSONObject()
@@ -157,7 +174,7 @@ class RecordingCoordinator(
         RecordingController.log = null
         RecordingController.onFirstFrame = null
         val dir = f.dir
-        val s0 = prefs.load()
+        val s0 = loadSettings()
         withContext(Dispatchers.IO) { CameraRecording.stop() }
         if (log == null || f.durationMs <= 0) {
             withContext(Dispatchers.IO) { dir.dir.deleteRecursively() }
@@ -191,7 +208,7 @@ class RecordingCoordinator(
 
     /** The 16:9 area in video pixels (the whole frame when Fit to 16:9 is off). */
     private fun contentRectJson(f: Finished): JSONObject {
-        val r = contentRect.takeIf { prefs.load().fit169 }
+        val r = contentRect.takeIf { loadSettings().fit169 }
         contentRect = null
         val sx = f.width.toDouble() / f.screenWidth.coerceAtLeast(1)
         val sy = f.height.toDouble() / f.screenHeight.coerceAtLeast(1)
@@ -239,7 +256,7 @@ class RecordingCoordinator(
     fun refresh() {
         val df = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
         val wifi = onUnmetered()
-        val s = prefs.load()
+        val s = loadSettings()
         val list = store.list().filter { it.status != RecStatus.RECORDING || RecordingController.recording }.map { d ->
             val m = d.meta()
             if (d.status == RecStatus.QUEUED) d.updateMeta { it.put("waiting_wifi", s.wifiOnly && !wifi) }
@@ -314,7 +331,7 @@ class RecordingCoordinator(
      */
     fun submit(id: String, templates: List<String>, inputs: JSONObject) {
         val d = store.get(id) ?: return
-        val s = prefs.load()
+        val s = loadSettings()
         // saved in the Gallery before (Upload to S3 was off): its videos come back from there for the upload
         val fromGallery = d.status == RecStatus.SAVED
         if (fromGallery && !fetching.add(id)) return
@@ -415,7 +432,7 @@ class RecordingCoordinator(
     fun retry(id: String) {
         val d = store.get(id) ?: return
         d.updateMeta { it.put("status", RecStatus.QUEUED.name).put("error", "") }
-        UploadWorker.enqueue(app, id, prefs.load().wifiOnly)
+        UploadWorker.enqueue(app, id, loadSettings().wifiOnly)
         refresh()
     }
 
@@ -453,7 +470,7 @@ class RecordingCoordinator(
     // ------------------------------------------------------------------ settings
     fun saveSettings(s: RecordingSettings, secret: String?) {
         prefs.save(s, secret)
-        publish { it.copy(settings = prefs.load()) }
+        publish { it.copy(settings = loadSettings()) }
     }
 
     /** Save & test: writes a small file into the bucket and deletes it again. */

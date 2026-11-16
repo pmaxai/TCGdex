@@ -34,12 +34,15 @@ android {
         System.getenv("POKESHOP_STAGING_SECRET")?.takeIf { it.isNotBlank() }?.let { testInstrumentationRunnerArguments["shopSecret"] = it }
         // a MinIO the CI starts for the S3 upload test (recordings); the test is skipped without it
         System.getenv("S3_TEST_ENDPOINT")?.takeIf { it.isNotBlank() }?.let { testInstrumentationRunnerArguments["s3Endpoint"] = it }
-        // Licence: the app asks for one only when this is on (gradle.properties), i.e. once the
-        // license service runs. The service's address can be changed the same way.
-        val licenceRequired = providers.gradleProperty("cardscanner.licenceRequired").orNull == "true"
-        val licenceUrl = providers.gradleProperty("cardscanner.licenceUrl").orNull ?: "https://license.pokemonkarten.at"
-        buildConfigField("boolean", "LICENSE_REQUIRED", licenceRequired.toString())
-        buildConfigField("String", "LICENSE_URL", "\"$licenceUrl\"")
+        // The account on overpricedcardboard.com (gradle.properties): the app needs one when this is on.
+        // accountUrl is the server for codes typed by hand (a scanned QR code names its own host);
+        // a staging build: -Pcardscanner.accountUrl=https://staging.overpricedcardboard.com
+        val accountRequired = providers.gradleProperty("cardscanner.accountRequired").orNull != "false"
+        val accountUrl = providers.gradleProperty("cardscanner.accountUrl").orNull ?: "https://overpricedcardboard.com"
+        buildConfigField("boolean", "ACCOUNT_REQUIRED", accountRequired.toString())
+        buildConfigField("String", "ACCOUNT_URL", "\"$accountUrl\"")
+        // the account test against staging (optional: a device token of a test subscription, CI secret)
+        System.getenv("ACCOUNT_STAGING_TOKEN")?.takeIf { it.isNotBlank() }?.let { testInstrumentationRunnerArguments["accountToken"] = it }
     }
 
     // one APK per processor type: arm64 for phones (the download), x86_64 for the CI emulator
@@ -129,7 +132,7 @@ dependencies {
     implementation("com.google.mlkit:text-recognition-korean:16.0.1")
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
-    // QR codes for the licence: reading (activation) and showing (switch to new device)
+    // QR codes for the account: reading (connect a device) and showing (move to a new phone)
     implementation("com.google.zxing:core:3.5.3")
     // recording uploads that go on with the app closed, when the network fits (spec UP-7)
     implementation("androidx.work:work-runtime-ktx:2.9.1")

@@ -368,6 +368,8 @@ private fun CardPrice(s: Shown, state: UiState, vm: ScannerViewModel, onPad: (Pa
         Text((if (give) "+ I give" else "+ Cart") + (state.book.active?.let { " (${it.name})" } ?: ""), fontSize = 17.sp,
             fontWeight = FontWeight.Bold, maxLines = 1)
     }
+    // a card you get: + Collection (in its chosen condition), ☆ Missing
+    if (!give) CollectionBar(state, vm, s, condition = draft.condition.label)
 }
 
 /** The last scanned cards; tap one to bring it back. */

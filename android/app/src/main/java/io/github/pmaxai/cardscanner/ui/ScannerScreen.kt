@@ -187,16 +187,15 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
     Surface(Modifier.fillMaxSize(), color = Ink) {
         Column(Modifier.fillMaxSize()) {
             // a newer app with newer prices (not over the YouTube picture)
-            state.update?.takeIf { !state.loading && !state.settings.youtube && state.settingsPage == null && !state.licence.locked }?.let { u ->
+            state.update?.takeIf { !state.loading && !state.settings.youtube && state.settingsPage == null && !state.account.locked }?.let { u ->
                 UpdateBanner(u, state.pricesDate, onUpdate = vm::startUpdate, onLater = vm::dismissUpdate)
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     !openCvReady -> Message("OpenCV could not be loaded on this phone.")
                     state.error != null -> Message("Could not start: ${state.error}")
-                    // without a licence (or after another device took it over) only the licence screen
-                    state.licence.locked -> LicenceGate(state.licence, onKey = { vm.activateLicence(it) },
-                        camera = { m -> QrCamera(m) { key -> vm.activateLicence(key, scanned = true) } })
+                    // not connected to an account, the subscription ended, or the saved answer ran out offline
+                    state.account.locked || state.account.justConnected -> AccountGateScreen(state, vm)
                     state.loading -> Loading(state.loadingText)
                     state.settingsPage != null -> SettingsScreen(state, vm, state.settingsPage ?: SettingsPage.MODE)
                     !granted -> Message("The scanner needs the camera.") { Button({ ask.launch(Manifest.permission.CAMERA) }) { Text("Allow camera") } }
@@ -211,6 +210,8 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
         state.picks?.let { PickList(it, state.shown, onPick = vm::pick, onSearch = { vm.openSearch(SearchMode.REPLACE) },
             onClose = vm::closePicks) }
         state.search?.let { SearchDialog(it, vm) }
+        // Trading: a cart just paid – its cards into the collection?
+        CartCollectionOffer(state, vm)
     }
 }
 
@@ -282,7 +283,7 @@ private fun Scanner(state: UiState, vm: ScannerViewModel) {
                         "the phone vibrates when any printing of it is worth at least your alert price. " +
                         "Not recognised? Double-tap the picture to take it anyway. Pinch to zoom.", color = Muted)
             } else {
-                ResultCard(s, state.settings, vm)
+                ResultCard(s, state, vm)
             }
             if (state.settings.showDebug || (s?.fromPhoto == true && !s.fromSearch)) state.debug?.let { DebugPanel(it) }
         }
@@ -343,7 +344,8 @@ fun CameraArea(state: UiState, vm: ScannerViewModel, torch: Boolean, video: Bool
 }
 
 @Composable
-private fun ResultCard(s: Shown, settings: Settings, vm: ScannerViewModel) {
+private fun ResultCard(s: Shown, state: UiState, vm: ScannerViewModel) {
+    val settings = state.settings
     val ctx = LocalContext.current
     val c = s.version
     Row {
@@ -385,6 +387,8 @@ private fun ResultCard(s: Shown, settings: Settings, vm: ScannerViewModel) {
     Spacer(Modifier.height(8.dp))
     PriceBlock(s)
     PriceHistoryLine(s)
+    // the account: + Collection, ☆ Missing
+    CollectionBar(state, vm, s)
     if (settings.showPsa) {
         val printing = s.selected?.kind?.takeIf { s.priceCard.printings.size > 1 }
         s.graded?.let { PsaLine(it, printing = printing) }

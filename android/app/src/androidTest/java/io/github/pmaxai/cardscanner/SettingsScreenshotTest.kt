@@ -19,9 +19,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.services.storage.TestStorage
-import io.github.pmaxai.cardscanner.license.LicenceStatus
 import io.github.pmaxai.cardscanner.ui.Gold
-import io.github.pmaxai.cardscanner.ui.LicenceState
 import io.github.pmaxai.cardscanner.ui.Ink
 import io.github.pmaxai.cardscanner.ui.Panel
 import io.github.pmaxai.cardscanner.ui.ScannerViewModel
@@ -50,8 +48,7 @@ class SettingsScreenshotTest {
         val state = UiState(loading = false, packInfo = "21094 card images · data 2026-11-06 · PSA prices",
             hasPsaData = true, hasCategories = true, pricesDate = "2026-11-05T22:54:32Z",
             settings = Settings(threshold = 5.0, trading = true),
-            licence = LicenceState(required = true, status = LicenceStatus.ACTIVE, key = "CS-7K2QX-9MZ4D-01ABC-1XYZW",
-                since = 1_762_630_800_000L, lastCheck = 1_762_634_400_000L))
+            account = TestAccount.ui())
         var page by mutableStateOf(SettingsPage.MODE)
         var shown by mutableStateOf(state)
         compose.setContent {
@@ -74,7 +71,8 @@ class SettingsScreenshotTest {
         // Upload to S3 on: the S3 fields, filled in as they were
         compose.runOnIdle {
             shown = state.copy(recording = state.recording.copy(settings = RecordingSettings(uploadS3 = true, provider = S3Provider.EXOSCALE,
-                region = "at-vie-1", endpoint = S3Provider.EXOSCALE.endpointFor("at-vie-1"), bucket = "my-recordings", accessKeyId = "EXO…", hasSecret = true)))
+                region = "at-vie-1", endpoint = S3Provider.EXOSCALE.endpointFor("at-vie-1"), bucket = "oc-recordings", prefix = "acc_7h2k9q0x3m/",
+                accessKeyId = "EXO…", hasSecret = true, managed = true)))
             page = SettingsPage.RECORDING
         }
         compose.waitForIdle()

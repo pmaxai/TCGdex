@@ -39,15 +39,11 @@ import io.github.pmaxai.cardscanner.vision.ScanTracker
 import io.github.pmaxai.cardscanner.vision.VersionResolver
 import io.github.pmaxai.cardscanner.update.AppRelease
 import io.github.pmaxai.cardscanner.BuildConfig
-import io.github.pmaxai.cardscanner.license.LicenceApi
 import io.github.pmaxai.cardscanner.recording.CameraRecording
+import io.github.pmaxai.cardscanner.account.AccountGate
+import io.github.pmaxai.cardscanner.account.AccountStatus
 import io.github.pmaxai.cardscanner.recording.EventLog
 import io.github.pmaxai.cardscanner.recording.RecordingController
-import io.github.pmaxai.cardscanner.license.LicenceCheck
-import io.github.pmaxai.cardscanner.license.LicenceException
-import io.github.pmaxai.cardscanner.license.LicenceKey
-import io.github.pmaxai.cardscanner.license.LicenceStatus
-import io.github.pmaxai.cardscanner.license.LicenceStore
 import io.github.pmaxai.cardscanner.shop.Money
 import io.github.pmaxai.cardscanner.shop.PendingWrite
 import io.github.pmaxai.cardscanner.shop.ProductPhoto
@@ -382,8 +378,8 @@ data class UiState(
     val update: UpdateState? = null,
     /** TCGdex's price date of this app's data pack, ISO UTC */
     val pricesDate: String? = null,
-    /** the app's licence on this device */
-    val licence: LicenceState = LicenceState(),
+    /** the account this phone is connected to: what is unlocked, collection and missing cards */
+    val account: AccountUi = AccountUi(),
     /** YouTube mode's recording: phase, settings, the Recordings list */
     val recording: RecordingUi = RecordingUi(),
     /** the data pack's version (date) */
@@ -431,19 +427,15 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     private val shopClock = ServerClock()
     /** Webshop Mode, Sell: the customer's order, kept until it's sold or cleared */
     private val orderFile = java.io.File(app.filesDir, "shop-order.json")
-    /** the licence on this phone, and the license service next to the shop */
-    private val licenceStore = LicenceStore(app)
-    private val licenceApi = LicenceApi(BuildConfig.LICENSE_URL)
-    @Volatile private var licenceToken: String? = null
-    @Volatile private var licenceChecking = false
-    /** a scanned key that the service just refused: not sent again for every frame */
-    @Volatile private var refusedKey: String? = null
     private var serial = 0
     private var lastAlerted: String? = null
     private var lastText: CardText? = null
     @Volatile private var lastFill: Double? = null
     /** Trading Mode's carts on the phone; written one after the other on their own thread */
     private val tradingStore = TradingStore(java.io.File(app.filesDir, "trading.json"))
+    /** the account on overpricedcardboard.com: pairing, status, collection and missing cards */
+    val account = AccountCoordinator(app, viewModelScope, { f -> _state.update { it.copy(account = f(it.account)) } }, { _state.value.account },
+        { m -> _state.update { it.copy(message = m) } }, onStatus = { st -> applyAccount(st) }, onS3 = { o -> rec.applyManagedS3(o) })
     private val saveDispatcher = java.util.concurrent.Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     /** text recognition runs here, one card at a time, so a card shows up without waiting for it */
     private val textDispatcher = java.util.concurrent.Executors.newSingleThreadExecutor().asCoroutineDispatcher()
@@ -480,8 +472,15 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         }
         loadShopConnection()
         loadShopOrder()
-        loadLicence()
-        checkLicence(force = true)
+        // uploads need the account's S3 storage and Automatic Content Processing
+        rec.uploadAllowed = { _state.value.account.let { a -> a.has("s3_upload") && a.has("pipeline") } }
+        account.start()
+        viewModelScope.launch { account.hourly() }
+        // the collection's lines of the shown card ("In collection: 2")
+        viewModelScope.launch {
+            state.map { s -> s.shown?.version?.id?.takeIf { s.account.has("collection") } }.distinctUntilChanged()
+                .collect { id -> if (id != null) account.loadCollection(id) }
+        }
         // Webshop Mode: a new card (or language, printing) -> look it up in the shop, fill in the form
         viewModelScope.launch {
             state.map { s -> if (s.settings.webshop) s.shown?.let { listOf(it.version.id, it.version.lang, it.printing, it.printedOnly) } else null }
@@ -1299,77 +1298,70 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             .onFailure { Log.w(TAG, "event log", it) }
     }
 
-    // ---------------------------------------------------------------- licence
+    // ---------------------------------------------------------------- account
 
-    private fun loadLicence() {
-        val saved = licenceStore.load()
-        licenceToken = saved.token
-        _state.update {
-            it.copy(licence = LicenceState(required = BuildConfig.LICENSE_REQUIRED, status = saved.status, key = saved.key,
-                since = saved.since, lastCheck = saved.lastCheck, suspendedBy = saved.suspendedBy, suspendedSince = saved.suspendedSince))
-        }
-    }
-
-    private fun updateLicence(f: (LicenceState) -> LicenceState) = _state.update { it.copy(licence = f(it.licence)) }
-
-    /** A scanned QR code or a typed key: activate it on this device (the device that had it stops). */
-    fun activateLicence(text: String, scanned: Boolean = false) {
-        if (_state.value.licence.busy) return
-        val key = LicenceKey.parse(text)
-        if (key == null) {
-            if (!scanned) updateLicence { it.copy(error = "That isn't a licence key (CS-XXXXX-XXXXX-XXXXX-XXXXX).") }
-            return
-        }
-        if (scanned && key == refusedKey) return
-        updateLicence { it.copy(busy = true, error = null) }
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val a = licenceApi.activate(key, licenceStore.deviceId, LicenceStore.deviceName(), BuildConfig.VERSION_NAME)
-                licenceStore.activated(key, a)
-                refusedKey = null
-                loadLicence()
-                _state.update { it.copy(message = "Licence activated") }
-            } catch (e: LicenceException) {
-                refusedKey = key
-                updateLicence { it.copy(busy = false, error = e.friendly) }
-            } catch (e: java.io.IOException) {
-                updateLicence { it.copy(busy = false, error = "No connection: activating needs the internet once. Try again when you're online.") }
-            }
-        }
+    /** a mode's feature in the account */
+    fun featureOf(m: AppMode): String = when (m) {
+        AppMode.SCANNER -> "scanner"; AppMode.TRADING -> "trading"; AppMode.YOUTUBE -> "youtube"; AppMode.WEBSHOP -> "webshop"
     }
 
     /**
-     * Asks the service whether this device still holds the licence: at every start, otherwise at
-     * most once an hour. Offline (or the service away): nothing happens, the app goes on.
+     * A new answer from the account: a mode that is no longer included falls back to Scanner,
+     * the connected webshop's host goes into ⚙ → Webshop, uploads follow the S3 storage.
      */
-    fun checkLicence(force: Boolean = false) {
-        val l = _state.value.licence
-        if (!l.required || l.status != LicenceStatus.ACTIVE || licenceChecking) return
-        val token = licenceToken ?: return
-        if (!force && l.lastCheck != null && System.currentTimeMillis() - l.lastCheck < 60 * 60 * 1000L) return
-        licenceChecking = true
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                when (val r = licenceApi.check(token, BuildConfig.VERSION_NAME)) {
-                    LicenceCheck.Active -> licenceStore.checked()
-                    is LicenceCheck.Suspended -> licenceStore.suspended(r.since, r.deviceName)
-                    LicenceCheck.Revoked -> licenceStore.revoked()
-                }
-                loadLicence()
-            } catch (e: Exception) {
-                // offline, the service is away or doesn't know the token: keep working
-            } finally {
-                licenceChecking = false
+    private fun applyAccount(st: AccountStatus?) {
+        val a = _state.value.account
+        if (a.required && a.gate == AccountGate.OPEN) {
+            val m = _state.value.settings.mode
+            if (m != AppMode.SCANNER && !a.has(featureOf(m))) {
+                updateSettings { it.withMode(AppMode.SCANNER) }
+                _state.update { it.copy(message = "${m.label} mode isn't in your plan any more – back to Scanner") }
+            }
+            st?.webshopHost?.takeIf { a.has("webshop") && shopStore.host.isBlank() }?.let { h ->
+                shopStore.save(h, shopStore.keyId, null); loadShopConnection()
             }
         }
+        rec.reload()
     }
+
+    /** + Collection for the shown card: its language, the selected printing, NM (or what the sheet says). */
+    fun addShownToCollection(condition: String = "NM", quantity: Int = 1, purchaseCents: Long? = null, binderId: Long? = null, note: String? = null) {
+        val s = _state.value.shown ?: return
+        account.addToCollection(s.version.id, ShopTerms.languageOf(s.printedOnly ?: s.version.lang), ShopTerms.finishOf(s.printing),
+            condition, quantity, purchaseCents, binderId, note, label = "${s.version.name} · ${s.version.setName} ${s.version.numberText}")
+    }
+
+    /** ☆ Missing for the shown card (a second tap takes it off the list). */
+    fun toggleShownWanted() {
+        val s = _state.value.shown ?: return
+        account.toggleWanted(s.version.id, ShopTerms.languageOf(s.printedOnly ?: s.version.lang), ShopTerms.finishOf(s.printing),
+            "${s.version.name} · ${s.version.setName} ${s.version.numberText}")
+    }
+
+    /** ☆ in the search list: the card in its language, any printing. */
+    fun toggleWanted(c: CardInfo) =
+        account.toggleWanted(c.id, ShopTerms.languageOf(c.lang), null, "${c.name} · ${c.setName} ${c.numberText}")
+
+    /** Trading, after Paid: the cards of the cart go into the collection (one per line, its price per copy). */
+    fun addCartToCollection(cartId: Long) {
+        val c = _state.value.book.carts.firstOrNull { it.id == cartId } ?: return
+        c.lines.filter { it.side == Side.GET && it.status == LineStatus.BOUGHT }.forEach { l ->
+            account.addToCollection(l.cardId, ShopTerms.languageOf(l.lang),
+                ShopTerms.finishOf(l.printing?.let { k -> Printing.Kind.values().firstOrNull { it.name == k } }), l.condition.label, l.qty,
+                l.price?.let { Math.round(it * 100) }, label = "${l.name} · ${l.setLine}")
+        }
+        _state.update { it.copy(account = it.account.copy(offerCart = null), message = "Adding the cards to your collection") }
+    }
+
+    fun dismissCartOffer() = _state.update { it.copy(account = it.account.copy(offerCart = null)) }
 
     /** The app left the screen: a recording ends here, so nothing else gets into the video. */
     fun onAppStopped() { if (RecordingController.recording) rec.stop("background") }
 
     fun onResume() {
         rec.refresh()
-        checkLicence()
+        account.onForeground()
+        account.sync()
         checkForUpdate()
         val u = _state.value.update ?: return
         if (u.needsPermission && u.apk != null && AppUpdate.canInstall(appCtx)) install(u.apk)
@@ -1791,12 +1783,18 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Paid: the cart's cards are bought; it moves to the deal history and the next open cart becomes active. */
-    fun markPaid(cartId: Long, payment: String) = updateBook { b ->
-        val c = b.carts.firstOrNull { it.id == cartId } ?: return@updateBook b
-        val paid = c.copy(paidAt = System.currentTimeMillis(), payment = payment,
-            lines = c.lines.map { if (it.active) it.copy(status = LineStatus.BOUGHT) else it })
-        val next = b.replace(paid)
-        next.copy(activeId = next.open.lastOrNull()?.id)
+    fun markPaid(cartId: Long, payment: String) {
+        updateBook { b ->
+            val c = b.carts.firstOrNull { it.id == cartId } ?: return@updateBook b
+            val paid = c.copy(paidAt = System.currentTimeMillis(), payment = payment,
+                lines = c.lines.map { if (it.active) it.copy(status = LineStatus.BOUGHT) else it })
+            val next = b.replace(paid)
+            next.copy(activeId = next.open.lastOrNull()?.id)
+        }
+        // the cards you got: offer them for the collection
+        val c = _state.value.book.carts.firstOrNull { it.id == cartId }
+        if (_state.value.account.has("collection") && c != null && c.lines.any { it.side == Side.GET && it.status == LineStatus.BOUGHT })
+            _state.update { it.copy(account = it.account.copy(offerCart = cartId)) }
     }
 
     /** A paid deal back to an open cart (to fix a mistake). */

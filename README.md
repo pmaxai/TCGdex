@@ -37,24 +37,52 @@ to install apps: allow it, come back, and it goes on). Your carts and settings s
 pipeline starts at 00:40 CET and the new APK (with that day's prices) is out at about
 02:30 CET, well before flea markets (6:00) and shows (10:00). Install it before you leave.
 
-## Licence
+## Account and subscription
 
-The app asks for a one-off licence (bought in the shop; the license service runs next to
-the shop: `apps/license` in the pokeshop repository, see its `docs/license-service.md`).
-It is **on** since build 1.2.25; `cardscanner.licenceRequired` in `android/gradle.properties`
-switches it (the service's address is `cardscanner.licenceUrl`).
+The app runs with an **account** on [overpricedcardboard.com](https://overpricedcardboard.com)
+and a **subscription** (Collector or Creator, sold by Antalyse GmbH; the API contract is
+`app-account-api.md` in the shop's repository). There is no login in the app: it is connected
+by a QR code from the web portal. `cardscanner.accountRequired` and `cardscanner.accountUrl`
+in `android/gradle.properties` switch it and set the server for typed codes (a scanned QR code
+names its own server: overpricedcardboard.com or staging.overpricedcardboard.com; debug builds
+also localhost / 10.0.2.2 with a port).
 
-- **First start:** scan the QR code from the licence e-mail, or type the key
-  (`CS-XXXXX-XXXXX-XXXXX-XXXXX`; case, spaces and dashes don't matter). Activating needs
-  the internet once.
-- **Offline is fine:** the app asks the service at every start and at most once an hour after
-  that; without a connection it simply goes on.
-- **One device at a time:** ⚙ → **Licence** → **Show the licence QR code** (Switch to new
-  device); scan it with the new device. The old one stops the next time it is online, says
-  where the licence went, and forgets the key: it comes back only by scanning a QR code again.
-- **Revoked** (refund): the app stops at its next check.
-- **Is the service up?** **Actions → License service health → Run workflow** asks the
-  production and the staging service and shows their answers in the log.
+- **Connect:** the portal's Account › Devices › **Connect a device** shows a QR code (valid
+  10 minutes, once). In the app: **Scan QR code**, or **Type the code** (12 characters;
+  case, spaces and dashes don't matter, O counts as 0, I and L as 1). It then shows the
+  account's e-mail and plan. No account yet: *Subscribe at overpricedcardboard.com/app*.
+- **What is unlocked** comes from the server (`features`), never from the plan's name:
+  Scanner and Search, Trading, YouTube (● REC only with recording), Upload to S3 (the
+  account's storage, set up by Overpriced Cardboard: shown in ⚙ → Recording & upload, not
+  edited; without it the switch is hidden and recordings go into the Gallery), the submit
+  screen with templates (Automatic Content Processing; without it Stop goes to Save to
+  Gallery), Webshop (once a webshop is connected; its host is filled in, key and secret are
+  still entered in ⚙ → Webshop), collection and missing cards. Modes the plan lacks are
+  listed greyed out in ⚙ → Mode ("Creator", "With a connected webshop"); a tap opens the
+  portal. A mode that is no longer included falls back to Scanner.
+- **Checks:** at every start, after connecting, at most once an hour while the app is open,
+  and when it comes back after more than an hour. Offline the last answer counts until its
+  *valid until* (end of the paid period + 3 days, at most 35 days); after that: "Connect to
+  the internet once to check your subscription". **Subscription ended:** every mode is
+  locked ("Your subscription has ended", Manage subscription, Check again); renewing in the
+  portal unlocks it again without a new QR code. **Removed** in the portal, **moved** to
+  another phone, connected elsewhere: the app forgets its token, says why and asks for a QR
+  code again.
+- **⚙ → Account:** e-mail, plan and its state (renews on …, ends on …, payment failed),
+  devices (2 of 2 in use), **Manage subscription** (the portal in the browser), **Move to a
+  new phone** (a QR code for the new phone; this one says "Moved" once it is scanned),
+  **Disconnect this phone**, and the changes waiting to sync.
+- **Collection and missing cards** (under the shown card in Scanner and Search, and for
+  *I get* cards in Trading): **+ Collection** adds the card in its language and printing,
+  NM (Trading: its condition), once; a long press asks condition, quantity, purchase price,
+  binder and note. "In collection: 2 (…)" shows what is already there. **☆ Missing** puts
+  it on the missing cards (★; a second tap takes it off); the shop's offer shows as *Offer
+  from the shop*, a match in the shop as *In the shop now*. The search list has a ☆ per card.
+  After **Paid** in Trading the app offers to add the cart's cards with their price per copy.
+  Offline these wait ("waiting to sync") and are sent in order once there is a connection;
+  each has its own reference, so a repeat after a timeout creates nothing twice.
+- The device token is stored encrypted with a key of the Android Keystore, never in a log,
+  CSV or export. The licence of earlier versions is gone (its device id is kept).
 
 ## Restore points
 
@@ -71,8 +99,8 @@ downgrades), or restore the code from the tag.
 - **Settings (⚙)** open as a screen of their own, with a sidebar of pages: **Mode**,
   **Camera** (wait time, frame size, zoom, fill, energy cards, orientation), **Prices**
   (alert, PSA, where prices come from, the step of − / +), **Trading**, **Webshop** (shop
-  connection, minimum selling price), **YouTube**, **Advanced** (details), **Licence**
-  (where it is active, switch to new device) and **About** (version, price date, updates). Upright, the sidebar is a slim column of
+  connection, minimum selling price), **YouTube**, **Advanced** (details), **Account**
+  (plan, devices, move to a new phone, disconnect) and **About** (version, price date, updates). Upright, the sidebar is a slim column of
   icons; turned sideways it lists the full names. ⚙ opens the page that fits where you
   are (Trading Mode: Trading; YouTube: YouTube; otherwise where you left it), the Alert
   chip opens Prices. Back (← or the phone's back) returns to the camera.

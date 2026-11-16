@@ -28,7 +28,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -70,6 +70,7 @@ import io.github.pmaxai.cardscanner.trading.Reference
 import io.github.pmaxai.cardscanner.update.AppUpdate
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.rememberLauncherForActivityResult
+import io.github.pmaxai.cardscanner.account.featureNeeds
 import io.github.pmaxai.cardscanner.recording.GallerySaver
 import io.github.pmaxai.cardscanner.recording.S3Provider
 import io.github.pmaxai.cardscanner.recording.RecordingSettings
@@ -84,7 +85,7 @@ enum class SettingsPage(val short: String, val title: String, val icon: ImageVec
     YOUTUBE("YouTube", "YouTube Mode", Icons.Filled.PlayArrow),
     RECORDING("Record", "Recording & upload", Icons.Filled.Share),
     ADVANCED("Advanced", "Advanced", Icons.Filled.Build),
-    LICENCE("Licence", "Licence", Icons.Filled.Lock),
+    ACCOUNT("Account", "Account", Icons.Filled.Person),
     ABOUT("About", "About & updates", Icons.Filled.Info),
 }
 
@@ -98,8 +99,8 @@ fun SettingsScreen(state: UiState, vm: ScannerViewModel, start: SettingsPage) {
     androidx.compose.runtime.LaunchedEffect(page) { vm.settingsPageShown(page) }
     BackHandler { vm.closeSettings() }
     val wide = LocalConfiguration.current.screenWidthDp >= 600
-    // the Licence page only in builds that ask for a licence
-    val pages = SettingsPage.values().filter { it != SettingsPage.LICENCE || state.licence.required }
+    // the Account page only in builds that need an account
+    val pages = SettingsPage.values().filter { it != SettingsPage.ACCOUNT || state.account.required }
     Column(Modifier.fillMaxSize().background(Ink)) {
         Row(Modifier.fillMaxWidth().background(Panel).padding(horizontal = 4.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically) {
@@ -150,7 +151,7 @@ fun SettingsScreen(state: UiState, vm: ScannerViewModel, start: SettingsPage) {
                     SettingsPage.YOUTUBE -> YouTubePage(state, vm)
                     SettingsPage.RECORDING -> RecordingPage(state, vm)
                     SettingsPage.ADVANCED -> AdvancedPage(state, vm)
-                    SettingsPage.LICENCE -> LicencePage(state.licence)
+                    SettingsPage.ACCOUNT -> AccountPage(state, vm)
                     SettingsPage.ABOUT -> AboutPage(state, vm)
                 }
                 Spacer(Modifier.height(24.dp))
@@ -164,16 +165,24 @@ fun SettingsScreen(state: UiState, vm: ScannerViewModel, start: SettingsPage) {
 @Composable
 private fun ModePage(state: UiState, vm: ScannerViewModel) {
     val s = state.settings
+    val ctx = LocalContext.current
     Hint("What the app is for right now. ⚙ brings you back here from every mode.")
     AppMode.values().forEach { m ->
         val selected = m == s.mode
+        val included = state.account.has(vm.featureOf(m))
         Column(Modifier.fillMaxWidth().padding(top = 10.dp)
             .background(if (selected) Gold.copy(alpha = 0.15f) else Panel, RoundedCornerShape(14.dp))
             .border(1.dp, if (selected) Gold else Color.Transparent, RoundedCornerShape(14.dp))
-            .clickable { vm.updateSettings { it.withMode(m) } }
+            .clickable { if (included) vm.updateSettings { it.withMode(m) } else openUrl(ctx, state.account.portalUrl) }
             .padding(14.dp)) {
-            Text(m.label, color = if (selected) Gold else Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            Text(m.about, color = Muted, fontSize = 13.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(m.label, color = if (selected) Gold else if (included) Color.White else Muted, fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f))
+                // not in the plan: shown, greyed out, with what it needs
+                if (!included) Text(featureNeeds(vm.featureOf(m)), color = Ink, fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.background(Muted, RoundedCornerShape(8.dp)).padding(horizontal = 8.dp, vertical = 2.dp))
+            }
+            Text(m.about, color = if (included) Muted else Muted.copy(alpha = 0.6f), fontSize = 13.sp)
         }
     }
 }
@@ -353,10 +362,21 @@ private fun RecordingPage(state: UiState, vm: ScannerViewModel) {
     }
 
     Heading("Where recordings go")
-    // off (the default): saved on this phone; the S3 fields are only hidden, their values stay for when it is on again
-    SettingSwitch("Upload to S3", if (s.uploadS3) "to your bucket, with the card log, for the video pipeline"
-        else "off: Save puts the videos into the Gallery (${GallerySaver.place})", s.uploadS3) { save(s.copy(uploadS3 = it)) }
-    if (s.uploadS3) {
+    val a = state.account
+    when {
+        // the account decides: S3 storage and Automatic Content Processing are services of the Creator plan
+        a.required && !a.has("s3_upload") -> Hint("Recordings are saved in the Gallery of this phone (${GallerySaver.place}). " +
+            "Uploading to S3 for the video pipeline is a service of the Creator plan, switched on by Overpriced Cardboard.")
+        a.required && !a.has("pipeline") -> Hint("Your S3 storage is set up, but uploads go with Automatic Content Processing, which isn't on " +
+            "for your account yet: recordings are saved in the Gallery (${GallerySaver.place}).")
+        else -> {
+            // off (the default): saved on this phone; the S3 settings stay for when it is on again
+            SettingSwitch("Upload to S3", if (s.uploadS3) "to the bucket, with the card log, for the video pipeline"
+                else "off: Save puts the videos into the Gallery (${GallerySaver.place})", s.uploadS3) { save(s.copy(uploadS3 = it)) }
+            if (s.uploadS3 && a.required) ManagedS3(state, vm, s) { save(it) }
+        }
+    }
+    if (s.uploadS3 && !a.required) {
         Heading("Upload (S3)")
         Setting("Provider", null) {
             Choices(S3Provider.values().toList(), s.provider, label = { it.label }) { p ->
@@ -413,6 +433,35 @@ private fun RecordingPage(state: UiState, vm: ScannerViewModel) {
         }
         Hint("The key only needs to write (s3:PutObject and multipart uploads) under the prefix. Each recording goes to " +
             "<prefix>recordings/<id>/; _complete.json comes last.")
+    }
+}
+
+/** The account's S3 storage: set up by Overpriced Cardboard (from GET /services/s3), shown, not edited. */
+@Composable
+private fun ManagedS3(state: UiState, vm: ScannerViewModel, s: RecordingSettings, save: (RecordingSettings) -> Unit) {
+    val r = state.recording
+    Heading("Upload (S3)")
+    Hint("Set up by Overpriced Cardboard")
+    state.account.s3Note?.let { Text("⚠ $it", color = Warn, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp)) }
+    if (s.managed) {
+        listOf("Provider" to s.provider.label, "Endpoint" to s.endpoint, "Bucket" to s.bucket, "Path prefix" to s.prefix.ifBlank { "–" },
+            "Access key ID" to s.accessKeyId, "Secret access key" to if (s.hasSecret) "stored encrypted on this phone" else "–").forEach { (k, v) ->
+            Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                Text(k, color = Muted, fontSize = 13.sp, modifier = Modifier.width(130.dp))
+                Text(v, color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
+            }
+        }
+        Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button({ vm.rec.testConnection() }, enabled = !r.testing) { Text(if (r.testing) "Testing…" else "Test the connection") }
+        }
+        r.connection?.let { Text((if (r.connectionOk == true) "✓ " else "⚠ ") + it, color = if (r.connectionOk == true) Sure else Warn, fontSize = 13.sp,
+            modifier = Modifier.padding(top = 4.dp)) }
+    } else if (state.account.s3Note == null) {
+        Text("Reading the storage settings…", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+    }
+    SettingSwitch("Only on Wi-Fi", "Upload now (in Recordings…) sends one over mobile data", s.wifiOnly) { save(s.copy(wifiOnly = it)) }
+    SettingSwitch("Delete local copy after upload", "only once the upload is complete and checked", s.deleteAfterUpload) {
+        save(s.copy(deleteAfterUpload = it))
     }
 }
 

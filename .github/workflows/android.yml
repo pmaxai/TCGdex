@@ -35,17 +35,13 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: License service reachable?
-        # the app asks the service in gradle.properties; only a note here, the build goes on either way
+      - name: Account service reachable?
+        # the app's account server (gradle.properties); only a note here, the build goes on either way
         run: |
-          if grep -q '^cardscanner.licenceRequired=true' android/gradle.properties; then
-            url=$(grep '^cardscanner.licenceUrl=' android/gradle.properties | cut -d= -f2-)
-            for u in "$url" "${url/license./license.staging.}"; do
-              echo "$u/health: $(curl -sS -m 15 "$u/health" 2>&1 || true)"
-            done
-          else
-            echo "licence check is off in this build"
-          fi
+          url=$(grep '^cardscanner.accountUrl=' android/gradle.properties | cut -d= -f2-)
+          for u in "$url" "${url/:\/\//://staging.}"; do
+            echo "$u/api/app/v1/status (no token): $(curl -sS -m 15 -w ' HTTP %{http_code}' "$u/api/app/v1/status" 2>&1 | tail -c 300 || true)"
+          done
 
       - name: Get the data pack and test photos
         env:
@@ -132,6 +128,8 @@ jobs:
           # the staging shop's key for the Webshop test (repository secrets; without them that test is skipped)
           POKESHOP_STAGING_KEY_ID: ${{ secrets.POKESHOP_STAGING_KEY_ID }}
           POKESHOP_STAGING_SECRET: ${{ secrets.POKESHOP_STAGING_SECRET }}
+          # a device token of a test subscription on staging.overpricedcardboard.com (optional; without it that test is skipped)
+          ACCOUNT_STAGING_TOKEN: ${{ secrets.ACCOUNT_STAGING_TOKEN }}
         with:
           api-level: 34
           arch: x86_64
@@ -140,7 +138,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           disable-animations: true
           working-directory: android
-          script: ./gradlew --no-daemon connectedDebugAndroidTest; s=$?; adb logcat -d -s ParityTest:I ScriptDetection:I ShopStaging:I RecordingE2E:I ZoomKept:I Templates:I GallerySaver:I Recording:W CardScanner:W AndroidRuntime:E; exit $s
+          script: ./gradlew --no-daemon connectedDebugAndroidTest; s=$?; adb logcat -d -s ParityTest:I ScriptDetection:I ShopStaging:I RecordingE2E:I Account:I ZoomKept:I Templates:I GallerySaver:I Recording:W CardScanner:W AndroidRuntime:E; exit $s
 
       - uses: actions/upload-artifact@v4
         continue-on-error: true      # a hiccup of GitHub's artifact store doesn't fail a good build

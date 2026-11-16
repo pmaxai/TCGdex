@@ -70,7 +70,8 @@ val RecRed = Color(0xFFE5484D)
 @Composable
 fun RecButton(state: UiState, vm: ScannerViewModel, onStart: () -> Unit) {
     val r = state.recording
-    if (r.recording) return
+    // recording is part of the Creator plan (the account's "recording" feature)
+    if (r.recording || !state.account.has("recording")) return
     Box(Modifier.padding(end = 8.dp).height(44.dp).border(2.dp, RecRed, RoundedCornerShape(22.dp))
         .clickable { if (r.settings.readyToRecord) onStart() else vm.openSettings(SettingsPage.RECORDING) }.padding(horizontal = 12.dp),
         contentAlignment = Alignment.Center) {

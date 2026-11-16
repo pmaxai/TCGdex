@@ -1,0 +1,333 @@
+package io.github.pmaxai.cardscanner
+
+import android.app.Application
+import android.util.Log
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import io.github.pmaxai.cardscanner.account.AccountApi
+import io.github.pmaxai.cardscanner.account.AccountException
+import io.github.pmaxai.cardscanner.account.AccountGate
+import io.github.pmaxai.cardscanner.account.AccountStatus
+import io.github.pmaxai.cardscanner.account.AccountStore
+import io.github.pmaxai.cardscanner.account.PairCode
+import io.github.pmaxai.cardscanner.ui.AccountCoordinator
+import io.github.pmaxai.cardscanner.ui.AccountUi
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
+import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
+import okhttp3.mockwebserver.SocketPolicy
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+
+/**
+ * The account in the app (app-account-api.md, "Tests the app should have"), against a stand-in
+ * of the shop's server: QR codes, pairing → status → features, inactive, unpaired, offline until
+ * valid_until, Move to a new phone, the collection's client_ref after a timeout, missing cards.
+ */
+@RunWith(AndroidJUnit4::class)
+class AccountTest {
+    private val app = ApplicationProvider.getApplicationContext<Application>()
+    private lateinit var server: MockWebServer
+    private lateinit var fake: FakeShop
+    private lateinit var scope: CoroutineScope
+    private val ui = MutableStateFlow(AccountUi())
+    private val messages = ArrayList<String>()
+    private lateinit var account: AccountCoordinator
+
+    /** the shop's server as the contract describes it, in memory */
+    class FakeShop : Dispatcher() {
+        val codes = ConcurrentHashMap<String, String>()          // pairing code → "pair" or "transfer:<token>"
+        val tokens = ConcurrentHashMap<String, String>()         // token → device name
+        val gone = ConcurrentHashMap<String, JSONObject>()       // token → the unpaired answer
+        @Volatile var active = true
+        @Volatile var plan = "creator"
+        @Volatile var offline = false
+        /** client_refs whose first answer comes too late (the app's call times out; the item is made anyway) */
+        val slowOnce = ConcurrentHashMap.newKeySet<String>()
+        val items = ConcurrentHashMap<String, JSONObject>()      // client_ref → item
+        val wanted = ConcurrentHashMap<Long, JSONObject>()
+        @Volatile var nextId = 100L
+        @Volatile var statusCalls = 0
+
+        fun status(): JSONObject = TestAccount.statusJson(plan = plan, active = active, state = if (active) "active" else "ended",
+            features = if (plan == "creator") TestAccount.ALL else TestAccount.ALL - setOf("youtube", "recording", "s3_upload", "pipeline", "webshop"))
+
+        private fun json(code: Int, o: Any) = MockResponse().setResponseCode(code).setHeader("Content-Type", "application/json").setBody(o.toString())
+        private fun err(code: Int, error: String, extra: JSONObject = JSONObject()) = json(code, extra.put("error", error).put("message", error))
+
+        override fun dispatch(request: RecordedRequest): MockResponse {
+            if (offline) return MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START)
+            val path = request.requestUrl!!.encodedPath.removePrefix("/api/app/v1")
+            val body = request.body.readUtf8().let { if (it.isBlank()) JSONObject() else JSONObject(it) }
+            if (request.method == "POST" && path == "/pair") {
+                val code = body.optString("code")
+                val what = codes.remove(code) ?: return err(404, "unknown_code")
+                if (!active && !what.startsWith("transfer:")) return err(402, "subscription_required")
+                val token = "tok_" + (nextId++) + "_" + "x".repeat(30)
+                tokens[token] = body.optString("device_name")
+                if (what.startsWith("transfer:")) {
+                    val old = what.removePrefix("transfer:")
+                    tokens.remove(old)
+                    gone[old] = JSONObject().put("reason", "transferred").put("since", java.time.Instant.now().toString())
+                        .put("device_name", body.optString("device_name"))
+                }
+                return json(201, JSONObject().put("token", token).put("device", JSONObject().put("id", "dev_1").put("name", body.optString("device_name")))
+                    .put("status", status()))
+            }
+            val token = request.getHeader("Authorization")?.removePrefix("Bearer ")
+            gone[token]?.let { return err(401, "unpaired", JSONObject(it.toString())) }
+            if (token == null || token !in tokens) return err(401, "invalid_token")
+            return when {
+                request.method == "GET" && path == "/status" -> { statusCalls++; json(200, status()) }
+                request.method == "POST" && path == "/transfer" -> {
+                    val code = "Q2M8-4KD1-0ZXA"; codes[code] = "transfer:$token"
+                    json(201, JSONObject().put("code", code).put("url", "http://localhost/pair/$code")
+                        .put("expires_at", java.time.Instant.now().plusSeconds(600).toString()))
+                }
+                request.method == "DELETE" && path == "/device" -> {
+                    tokens.remove(token); gone[token] = JSONObject().put("reason", "disconnected"); MockResponse().setResponseCode(204)
+                }
+                request.method == "POST" && path == "/collection/items" -> {
+                    if (body.optString("card_id") == "nope-1") return err(400, "invalid_request", JSONObject().put("fields", JSONObject().put("card_id", "unknown")))
+                    val ref = body.optString("client_ref")
+                    val known = items[ref]
+                    val item = known ?: JSONObject(body.toString()).put("id", nextId++).put("source", "app").also { items[ref] = it }
+                    val r = json(if (known != null) 200 else 201, item)
+                    if (slowOnce.remove(ref)) r.setHeadersDelay(3, TimeUnit.SECONDS) else r
+                }
+                request.method == "GET" && path.startsWith("/collection/cards/") -> {
+                    val id = path.removePrefix("/collection/cards/")
+                    json(200, JSONObject().put("items", JSONArray(items.values.filter { it.optString("card_id") == id })))
+                }
+                request.method == "GET" && path == "/wanted" -> json(200, JSONObject().put("items", JSONArray(wanted.values.toList())))
+                request.method == "POST" && path == "/wanted" -> {
+                    val w = JSONObject(body.toString()).put("id", nextId++).put("state", "searching"); wanted[w.getLong("id")] = w; json(201, w)
+                }
+                request.method == "DELETE" && path.startsWith("/wanted/") -> { wanted.remove(path.removePrefix("/wanted/").toLong()); MockResponse().setResponseCode(204) }
+                else -> err(404, "not_found")
+            }
+        }
+    }
+
+    @Before fun setUp() {
+        fake = FakeShop()
+        server = MockWebServer().apply { dispatcher = fake; start() }
+        AccountStore(app).forget(null)
+        AccountStore(app).saveQueue(emptyList())
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        account = AccountCoordinator(app, scope, { f -> ui.update(f) }, { ui.value }, { m -> synchronized(messages) { messages += m } }, {}, {})
+        // a short read timeout, so "the answer comes too late" doesn't take long
+        account.http = OkHttpClient.Builder().connectTimeout(2, TimeUnit.SECONDS).readTimeout(1, TimeUnit.SECONDS).build()
+        account.start()
+    }
+
+    @After fun tearDown() {
+        scope.cancel()
+        AccountStore(app).forget(null)
+        AccountStore(app).saveQueue(emptyList())
+        server.shutdown()
+    }
+
+    private fun waitUntil(what: String, ms: Long = 10_000, ok: () -> Boolean) {
+        val end = System.currentTimeMillis() + ms
+        while (!ok()) { check(System.currentTimeMillis() < end) { "timed out: $what (state ${ui.value.gate}, error ${ui.value.error})" }; Thread.sleep(50) }
+    }
+
+    private fun base() = "http://${server.hostName}:${server.port}"
+
+    /** connects this phone with a QR code of the stand-in server */
+    private fun pair() {
+        fake.codes["K7Q2-9MZ4-D01A"] = "pair"
+        account.pair("${base()}/pair/K7Q2-9MZ4-D01A", scanned = true)
+        waitUntil("connected") { ui.value.gate == AccountGate.OPEN }
+    }
+
+    @Test
+    fun qrCodesAndTypedCodes() {
+        val d = "https://overpricedcardboard.com"
+        assertEquals(PairCode.Target(d, "K7Q2-9MZ4-D01A"), PairCode.parse("https://overpricedcardboard.com/pair/K7Q2-9MZ4-D01A", d, debug = false))
+        assertEquals("https://staging.overpricedcardboard.com", PairCode.parse("https://staging.overpricedcardboard.com/pair/K7Q2-9MZ4-D01A", d, false)?.base)
+        // typed: case, spaces, dashes don't matter; O = 0, I and L = 1
+        assertEquals(PairCode.Target(d, "K7Q2-9MZ4-D01A"), PairCode.parse(" k7q2 9mz4-dO1a ", d, false))
+        assertEquals("K7Q2-9MZ4-D11A", PairCode.parse("K7Q29MZ4DIlA", d, false)?.code)
+        // not ours: other hosts, http, a look-alike host, another path, a user part, a bad code
+        listOf("https://evil.example/pair/K7Q2-9MZ4-D01A", "http://overpricedcardboard.com/pair/K7Q2-9MZ4-D01A",
+            "https://overpricedcardboard.com.evil.example/pair/K7Q2-9MZ4-D01A", "https://overpricedcardboard.com/account/K7Q2-9MZ4-D01A",
+            "https://anna@overpricedcardboard.com/pair/K7Q2-9MZ4-D01A", "https://overpricedcardboard.com/pair/K7Q2-9MZ4",
+            "https://overpricedcardboard.com/pair/K7Q2-9MZ4-DU1A", "K7Q2-9MZ4", "CS-7K2QX-9MZ4D-01ABC-1XYZW").forEach {
+            assertNull("rejects $it", PairCode.parse(it, d, debug = false))
+        }
+        // the shop on the computer: only debug builds, with its port
+        assertEquals("http://10.0.2.2:3000", PairCode.parse("http://10.0.2.2:3000/pair/K7Q2-9MZ4-D01A", d, debug = true)?.base)
+        assertNull(PairCode.parse("http://10.0.2.2:3000/pair/K7Q2-9MZ4-D01A", d, debug = false))
+        assertNull(PairCode.parse("http://localhost:3000/pair/K7Q2-9MZ4-D01A", d, debug = false))
+    }
+
+    /** Pair → status → features; Collector without YouTube; the token stored encrypted, the status saved. */
+    @Test
+    fun pairingUnlocksTheFeatures() {
+        pair()
+        val st = ui.value.status!!
+        assertEquals("anna@example.com", st.email)
+        assertTrue(ui.value.justConnected)
+        listOf("scanner", "trading", "youtube", "recording", "collection", "wanted").forEach { assertTrue("$it unlocked", ui.value.has(it)) }
+        waitUntil("the status asked right after pairing") { fake.statusCalls >= 1 }
+        assertTrue("token kept on the phone", AccountStore(app).connected)
+        assertFalse("never in plain text", app.getSharedPreferences("account", 0).all.values.any { it.toString().contains("tok_") })
+        // the plan changes to Collector: YouTube goes, the scanner stays
+        fake.plan = "collector"
+        account.check(force = true)
+        waitUntil("Collector") { ui.value.status?.plan == "collector" }
+        assertFalse(ui.value.has("youtube")); assertFalse(ui.value.has("recording")); assertTrue(ui.value.has("scanner"))
+    }
+
+    /** The subscription ends: every mode locked, the token kept (renewing unlocks without a new QR code). */
+    @Test
+    fun inactiveLocksEverything() {
+        pair()
+        fake.active = false
+        account.check(force = true, manual = true)
+        waitUntil("ended") { ui.value.gate == AccountGate.ENDED }
+        assertTrue(ui.value.locked)
+        assertFalse(ui.value.has("scanner"))
+        assertTrue("the token stays", AccountStore(app).connected)
+        fake.active = true
+        account.check(force = true, manual = true)
+        waitUntil("open again") { ui.value.gate == AccountGate.OPEN }
+    }
+
+    /** Removed in the portal: the token and the saved answer are forgotten, the connect screen says why. */
+    @Test
+    fun unpairedForgetsTheToken() {
+        pair()
+        val token = AccountStore(app).token!!
+        fake.tokens.remove(token)
+        fake.gone[token] = JSONObject().put("reason", "removed")
+        account.check(force = true)
+        waitUntil("back to connect") { ui.value.gate == AccountGate.CONNECT }
+        assertNull(AccountStore(app).token)
+        assertNull(AccountStore(app).status())
+        assertTrue(ui.value.notice!!, ui.value.notice!!.startsWith("This phone was removed in your account"))
+    }
+
+    /** Offline after a successful check: it works until valid_until, then asks to connect once. */
+    @Test
+    fun offlineUntilValidUntil() {
+        pair()
+        fake.offline = true
+        account.check(force = true, manual = true)
+        waitUntil("checked") { !ui.value.busy }
+        assertEquals("offline: the saved answer counts", AccountGate.OPEN, ui.value.gate)
+        val st = ui.value.status!!
+        assertEquals(AccountGate.OPEN, AccountGate.of(true, st, st.validUntil - 1))
+        assertEquals(AccountGate.CHECK_ONLINE, AccountGate.of(true, st, st.validUntil + 1))
+        // the saved answer has run out (valid_until passed) and the server can't be reached
+        AccountStore(app).saveStatus(TestAccount.statusJson(validDays = -1))
+        account.check(force = true, manual = true)
+        waitUntil("check online once") { ui.value.gate == AccountGate.CHECK_ONLINE }
+        assertTrue(ui.value.locked)
+        fake.offline = false
+        account.check(force = true, manual = true)
+        waitUntil("open again online") { ui.value.gate == AccountGate.OPEN }
+    }
+
+    /** Move to a new phone: the new phone pairs with the transfer code; this one learns it on its next check. */
+    @Test
+    fun movedToANewPhone() {
+        pair()
+        account.startTransfer()
+        waitUntil("the transfer code") { ui.value.transfer?.code != null }
+        val code = ui.value.transfer!!.code!!.code
+        // the new phone scans it
+        AccountApi(base(), "test").pair(code, "new-phone-id", "Pixel 9")
+        waitUntil("this phone learns it", ms = 15_000) { ui.value.gate == AccountGate.CONNECT }
+        assertTrue(ui.value.notice!!, ui.value.notice!!.startsWith("Moved to Pixel 9"))
+        assertNull(AccountStore(app).token)
+    }
+
+    /**
+     * + Collection retried after a timeout creates one item: offline first ("waiting to sync"),
+     * then the answer comes too late (the server made the item), then the repeat with the same
+     * client_ref finds it.
+     */
+    @Test
+    fun aTimeoutKeepsTheAddQueued() {
+        pair()
+        fake.offline = true
+        account.addToCollection("sv03.5-199", "DE", "holo", "NM", label = "Glurak-ex")
+        waitUntil("waiting to sync") { ui.value.pending.size == 1 }
+        val ref = ui.value.pending.first().clientRef
+        fake.slowOnce += ref
+        fake.offline = false
+        account.sync()
+        // the first try times out (1 s read timeout, 3 s answer) but the server made the item
+        waitUntil("made on the server", ms = 8_000) { fake.items.containsKey(ref) }
+        Thread.sleep(1500)
+        assertEquals("still queued after the timeout", 1, AccountStore(app).queue().size)
+        account.sync()
+        waitUntil("sent") { AccountStore(app).queue().isEmpty() }
+        assertEquals("one item", 1, fake.items.size)
+        waitUntil("In collection: 1") { ui.value.collection["sv03.5-199"]?.sumOf { it.quantity } == 1 }
+        Log.i("Account", "collection after a retried add: ${fake.items.values}")
+    }
+
+    /** A 400 (unknown card) drops the change and says why; a 5xx or no connection never does. */
+    @Test
+    fun aBadRequestIsDroppedWithWhy() {
+        pair()
+        account.addToCollection("nope-1", "EN", "normal", "NM", label = "Nope")
+        waitUntil("dropped") { AccountStore(app).queue().isEmpty() && synchronized(messages) { messages.isNotEmpty() } }
+        assertTrue(messages.toString(), synchronized(messages) { messages.any { it.contains("card_id: unknown") } })
+    }
+
+    /** ☆ Missing: on the list, filled; a second tap takes it off again. */
+    @Test
+    fun missingCardsOnAndOff() {
+        pair()
+        account.toggleWanted("base1-4", "EN", null, "Charizard · Base Set 4/102")
+        waitUntil("on the list") { fake.wanted.size == 1 && ui.value.wanted.any { it.cardId == "base1-4" && !it.pending } }
+        assertNotNull(ui.value.wanted.first().id)
+        account.toggleWanted("base1-4", "EN", "holo", "Charizard · Base Set 4/102")
+        waitUntil("off the list") { fake.wanted.isEmpty() && ui.value.wanted.isEmpty() }
+    }
+
+    /** Disconnect this phone: the slot is free, the app asks for a QR code again. */
+    @Test
+    fun disconnect() {
+        pair()
+        account.disconnect()
+        waitUntil("disconnected") { ui.value.gate == AccountGate.CONNECT }
+        assertNull(AccountStore(app).token)
+        assertTrue(fake.tokens.isEmpty())
+    }
+
+    /** Pairing errors in words: an unknown code, a full subscription. */
+    @Test
+    fun pairingErrors() {
+        account.pair("${base()}/pair/AAAA-BBBB-CCCC", scanned = false)
+        waitUntil("refused") { ui.value.error != null && !ui.value.busy }
+        assertTrue(ui.value.error!!, ui.value.error!!.startsWith("This code doesn't exist"))
+        val e = AccountException(409, "device_limit", "All 2 devices…", JSONObject().put("error", "device_limit").put("seats", 2))
+        assertTrue(e.friendly, e.friendly.startsWith("All 2 devices of your subscription are in use"))
+        assertEquals("Creator", AccountStatus.parse(TestAccount.statusJson()).planName)
+    }
+}

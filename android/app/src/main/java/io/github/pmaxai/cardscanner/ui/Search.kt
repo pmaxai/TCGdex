@@ -1,5 +1,7 @@
 package io.github.pmaxai.cardscanner.ui
 
+import io.github.pmaxai.cardscanner.shop.ShopTerms
+import androidx.compose.runtime.collectAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -50,6 +52,7 @@ import kotlinx.coroutines.delay
  */
 @Composable
 fun SearchDialog(mode: SearchMode, vm: ScannerViewModel) {
+    val account = vm.state.collectAsState().value.account
     var query by rememberSaveable { mutableStateOf("") }
     var results by remember { mutableStateOf<List<Candidate>>(emptyList()) }
     var searched by remember { mutableStateOf("") }
@@ -90,7 +93,13 @@ fun SearchDialog(mode: SearchMode, vm: ScannerViewModel) {
                 }
                 LazyColumn(Modifier.weight(1f)) {
                     items(results, key = { "${it.info.id}/${it.info.lang}" }) { c ->
-                        CardRow(c) { keyboard?.hide(); vm.pickFromSearch(c) }
+                        // ☆ Missing: the card in its language, any printing (a second tap takes it off the list)
+                        val star: (@Composable () -> Unit)? = if (mode == SearchMode.LOOK_UP && account.has("wanted")) { {
+                            val on = account.wanted.any { it.matches(c.info.id, ShopTerms.languageOf(c.info.lang), null) }
+                            Text(if (on) "★" else "☆", color = if (on) Gold else Muted, fontSize = 22.sp,
+                                modifier = Modifier.padding(start = 10.dp).clickable { vm.toggleWanted(c.info) }.padding(6.dp))
+                        } } else null
+                        CardRow(c, trailing = star) { keyboard?.hide(); vm.pickFromSearch(c) }
                     }
                 }
                 if (results.size >= 50) Hint("Showing the first 50 – add a word to narrow it down.")

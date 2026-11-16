@@ -42,7 +42,8 @@ class UploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         }
         runCatching { setForeground(foreground(rec, 0)) }
         rec.updateMeta { it.put("status", RecStatus.UPLOADING.name).put("error", "").put("waiting_wifi", false) }
-        val client = S3Client(cfg)
+        var client = S3Client(cfg)
+        var refetched = false
         var wait = 5_000L
         var lastPct = -1
         while (true) {
@@ -62,6 +63,12 @@ class UploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                 if (settings.deleteAfterUpload || rec.meta().optBoolean("from_gallery")) { rec.video.delete(); rec.camera.delete() }
                 return Result.success()
             } catch (e: S3Exception) {
+                // the account's storage: the shop may have changed the key – fetch it again once, then go on
+                if (settings.managed && !refetched && e.code in ACCESS_ERRORS) {
+                    refetched = true
+                    val again = if (io.github.pmaxai.cardscanner.account.ManagedStorage.refresh(applicationContext)) prefs.s3Config(prefs.load()) else null
+                    if (again != null) { client = S3Client(again); continue }
+                }
                 if (e.permanent) {
                     rec.updateMeta { it.put("status", RecStatus.FAILED.name).put("error", e.friendly) }
                     return Result.failure()
@@ -111,6 +118,8 @@ class UploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
 
     companion object {
         private const val TAG = "Recording"
+        /** S3 answers that mean the key is wrong or no longer allowed */
+        private val ACCESS_ERRORS = setOf("AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch")
         private const val KEY_ID = "id"
         private const val CHANNEL = "uploads"
         private const val NOTIFICATION_ID = 42
