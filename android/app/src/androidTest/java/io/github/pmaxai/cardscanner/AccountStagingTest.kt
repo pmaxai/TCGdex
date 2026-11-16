@@ -16,8 +16,8 @@ import java.io.IOException
 import java.util.UUID
 
 /**
- * Against staging.overpricedcardboard.com: the API answers as the contract says (no token,
- * an unknown code). With a test subscription's device token (CI secret ACCOUNT_STAGING_TOKEN)
+ * Against the account servers: production and staging.overpricedcardboard.com answer as the
+ * contract says (no token, an unknown code). With a test subscription's device token on staging (CI secret ACCOUNT_STAGING_TOKEN)
  * also status, the collection's client_ref and the missing cards. Skipped while staging can't
  * be reached.
  */
@@ -40,6 +40,18 @@ class AccountStagingTest {
         assumeTrue("staging answers 401 without the API's JSON, also to /pair (an access protection in front of it?)",
             !(noToken.error == "http_401" && code?.error == "http_401"))
         assertTrue("unknown_code: $code", code is AccountException && code.error in setOf("unknown_code", "code_expired", "invalid_code", "rate_limited"))
+    }
+
+    /** Production (the app's own server): the contract's answers, strictly – no token, an unknown code. */
+    @Test
+    fun productionAnswersAsTheContractSays() {
+        val prod = AccountApi(BuildConfig.ACCOUNT_URL, "ci")
+        val noToken = try { reach { prod.status("") }; null } catch (e: AccountException) { e }
+        Log.i("Account", "production, no token: ${noToken?.status} ${noToken?.error}")
+        assertTrue("401 invalid_token: $noToken", noToken != null && noToken.status == 401 && noToken.error == "invalid_token")
+        val code = try { reach { prod.pair("0000-0000-0000", "ci-${UUID.randomUUID()}", "CI emulator") }; null } catch (e: AccountException) { e }
+        Log.i("Account", "production, unknown code: ${code?.status} ${code?.error} – ${code?.friendly}")
+        assertTrue("unknown_code: $code", code != null && code.error in setOf("unknown_code", "code_expired", "rate_limited"))
     }
 
     @Test
