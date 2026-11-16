@@ -18,12 +18,12 @@ import java.nio.ByteBuffer
 
 /**
  * Recordings saved on the phone instead of uploaded: the videos into the Gallery, in
- * Movies/Card Scanner. The screen video (a fragmented MP4, written so a crash loses little)
+ * Movies/Overpriced Cardboard. The screen video (a fragmented MP4, written so a crash loses little)
  * is rewritten as a plain MP4 on the way, without re-encoding, so players can seek in it;
  * the camera video is copied as it is.
  */
 object GallerySaver {
-    const val FOLDER = "Card Scanner"
+    const val FOLDER = "Overpriced Cardboard"
     private const val TAG = "GallerySaver"
 
     /** Where they land, as people see it. */

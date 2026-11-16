@@ -1,4 +1,4 @@
-# Card scanner (flea-market edition)
+# Overpriced Cardboard – the scanner app
 
 A phone app that points at Pokémon cards and shows their Cardmarket price, offline,
 for flea markets.
@@ -21,7 +21,7 @@ counting all builds, so every build installs over the one before).
    and tap **CardScanner.apk**.
 2. Open the downloaded file. Android asks once to allow installing from your browser:
    allow it.
-3. Start **Card Scanner** and allow the camera. The first start takes a few seconds
+3. Start **Overpriced Cardboard** and allow the camera. The first start takes a few seconds
    while it unpacks the card database (about 80 MB).
 
 New builds install over the old one (same signing key), so updating is the same two taps.
@@ -29,7 +29,7 @@ Every data pipeline run with fresh prices also builds a new APK.
 
 **Updating:** when a newer build is out, the app shows a bar at the top: "New version
 1.1.57 · prices of 5 Nov (yours: 3 Nov)" with **Update**. One tap downloads it and opens
-Android's installer; confirm there (the first time, Android asks you to allow Card Scanner
+Android's installer; confirm there (the first time, Android asks you to allow Overpriced Cardboard
 to install apps: allow it, come back, and it goes on). Your carts and settings stay.
 **Later** hides the bar until the next start; ⚙ → **About** → **Check for updates** looks again.
 
@@ -341,7 +341,7 @@ downgrades), or restore the code from the tag.
     but not set up yet, ● REC opens ⚙ → Recording & upload. Before it starts: **Continue
     pack** or **New pack**, the microphone (off by default; the pipeline can add a
     voiceover) and the space it needs (a warning below an hour). Android then asks to share
-    the screen; on Android 14 and later choose *A single app* → Card Scanner.
+    the screen; on Android 14 and later choose *A single app* → Overpriced Cardboard.
     While recording, ● REC leaves the bar (nothing covers the pack value): a red dot and the
     time sit in the black border beside the 16:9 area, in a window the screen recording
     leaves out, so they are not in the video (tap them to stop; ⚙ → *Stop recording* and
@@ -365,7 +365,7 @@ downgrades), or restore the code from the tag.
       (`content_rect`), so the pipeline crops it exactly.
     - **Where recordings go** (⚙ → Recording & upload): *Upload to S3*, off by default.
       Off: after Stop, **Save** puts the videos into the phone's Gallery, in
-      *Movies/Card Scanner* (`<id>.mp4`, the screen, rewritten as a plain MP4 without
+      *Movies/Overpriced Cardboard* (`<id>.mp4`, the screen, rewritten as a plain MP4 without
       re-encoding so players can seek in it; `<id>-camera.mp4`, the camera, as it is); the
       app's own copies are then removed, the card log stays in ⚙ → Recordings… (*saved in
       the Gallery*; Share sends the Gallery's video). **Delete** asks once more; **Later**
@@ -416,7 +416,7 @@ downgrades), or restore the code from the tag.
       now** (also over mobile data, this one time), **Share** and **Delete** (stops its
       upload; files already in the bucket stay). If the phone's battery saver may stop
       uploads (Xiaomi HyperOS/MIUI, Samsung), it shows a hint once with buttons to the
-      battery settings (and Xiaomi's Autostart): allow Card Scanner to run unrestricted.
+      battery settings (and Xiaomi's Autostart): allow Overpriced Cardboard to run unrestricted.
 - **Light** turns on the torch. **Photo** recognises a picture from the gallery.
   **Details** (in ⚙) shows what the scanner saw: the straightened card, the top 5
   matches with scores, the text it read, and timings.

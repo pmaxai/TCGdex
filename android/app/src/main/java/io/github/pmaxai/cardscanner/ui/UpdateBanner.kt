@@ -45,7 +45,7 @@ fun UpdateBanner(u: UpdateState, localPrices: String?, onUpdate: () -> Unit, onL
                     Text(updateLine(u, localPrices), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     val note = when {
                         u.error != null -> "Update failed: ${u.error}"
-                        u.needsPermission -> "Allow Card Scanner to install updates (Settings opened), then come back"
+                        u.needsPermission -> "Allow Overpriced Cardboard to install updates (Settings opened), then come back"
                         u.apk != null -> "Downloaded – confirm the install"
                         else -> null
                     }

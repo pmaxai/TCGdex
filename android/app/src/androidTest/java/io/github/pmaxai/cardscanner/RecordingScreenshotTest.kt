@@ -62,7 +62,7 @@ class RecordingScreenshotTest {
         val localState = state.copy(recording = state.recording.copy(settings = settings.copy(uploadS3 = false), batteryHint = false, recordings = listOf(
             RecInfo("20261113T201500Z-4c1d", "13 Nov 2026, 21:15", 1_210_000, 24, 2, 1_190_000_000, RecStatus.LOCAL, "not saved yet", null),
             RecInfo("20261112T183000Z-9a7b", "12 Nov 2026, 19:30", 1_834_000, 38, 3, 1_830_000_000, RecStatus.SAVED,
-                "saved in the Gallery (Movies/Card Scanner)", null))))
+                "saved in the Gallery (Movies/Overpriced Cardboard)", null))))
         compose.setContent {
             MaterialTheme(colorScheme = darkColorScheme(primary = Gold, onPrimary = Ink, background = Ink, surface = Panel)) {
                 Box(Modifier.fillMaxSize().background(Ink))
@@ -110,7 +110,7 @@ class RecordingScreenshotTest {
         Screenshots.saveScreen(compose, "recording-0-save-local.png")
         compose.runOnIdle { shown = "local-list" }
         compose.onNodeWithText("Save…").assertExists()
-        compose.onNodeWithText("saved in the Gallery (Movies/Card Scanner)").assertExists()
+        compose.onNodeWithText("saved in the Gallery (Movies/Overpriced Cardboard)").assertExists()
         Screenshots.saveScreen(compose, "recording-2-list-local.png")
     }
 }

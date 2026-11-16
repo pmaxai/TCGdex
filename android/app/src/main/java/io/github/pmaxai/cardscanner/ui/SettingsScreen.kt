@@ -473,7 +473,7 @@ private fun AdvancedPage(state: UiState, vm: ScannerViewModel) {
 private fun AboutPage(state: UiState, vm: ScannerViewModel) {
     val ctx = LocalContext.current
     val version = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() }
-    Text("Card Scanner ${version ?: ""}", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+    Text("Overpriced Cardboard ${version ?: ""}", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
     Text(state.packInfo, color = Muted, fontSize = 13.sp)
     AppUpdate.day(state.pricesDate)?.let { Text("Prices of $it", color = Muted, fontSize = 13.sp) }
     Heading("Updates")

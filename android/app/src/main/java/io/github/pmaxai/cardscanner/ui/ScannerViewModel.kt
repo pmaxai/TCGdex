@@ -324,7 +324,7 @@ data class UpdateState(
     val progress: Float? = null,
     /** downloaded: the installer was opened (tap again if it was cancelled) */
     val apk: java.io.File? = null,
-    /** Android first needs "allow from this source" for Card Scanner (Settings was opened) */
+    /** Android first needs "allow from this source" for Overpriced Cardboard (Settings was opened) */
     val needsPermission: Boolean = false,
     val error: String? = null,
 )

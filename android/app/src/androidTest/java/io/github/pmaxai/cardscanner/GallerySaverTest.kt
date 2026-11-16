@@ -30,7 +30,7 @@ import java.io.File
 import java.io.InputStream
 
 /**
- * Upload to S3 off: Save puts the recording's videos into the Gallery (Movies/Card Scanner).
+ * Upload to S3 off: Save puts the recording's videos into the Gallery (Movies/Overpriced Cardboard).
  * The screen video arrives as a plain MP4 players can seek in, with every sample; the camera
  * video as it is; the app's copies go, the list says "saved in the Gallery".
  */
@@ -141,7 +141,7 @@ class GallerySaverTest {
             MediaStore.Video.Media.IS_PENDING, MediaStore.Video.Media.MIME_TYPE), null, null, null)!!.use { c ->
             assertTrue("in the Gallery", c.moveToFirst())
             assertEquals(name, c.getString(0))
-            assertTrue("in Movies/Card Scanner: ${c.getString(1)}", c.getString(1).trimEnd('/') == "Movies/Card Scanner")
+            assertTrue("in Movies/Overpriced Cardboard: ${c.getString(1)}", c.getString(1).trimEnd('/') == "Movies/Overpriced Cardboard")
             assertEquals("visible (not pending)", 0, c.getInt(2))
             assertEquals("video/mp4", c.getString(3))
         }
@@ -221,7 +221,7 @@ class GallerySaverTest {
             assertFalse("the app's screen video is gone", rec.video.exists())
             assertFalse("the app's camera video is gone", rec.camera.exists())
             assertEquals("the size shown is the videos'", size, rec.shownBytes)
-            assertEquals("saved in the Gallery (Movies/Card Scanner)", rec.statusText(uploadS3 = false))
+            assertEquals("saved in the Gallery (Movies/Overpriced Cardboard)", rec.statusText(uploadS3 = false))
             assertFalse("the question doesn't come back", rec.meta().optBoolean("decide"))
             assertTrue("Share sends the Gallery's video", vm.rec.shareIntent(rec.id) != null)
 

@@ -12,7 +12,7 @@ import java.util.TimeZone
 /** Where a recording stands. */
 enum class RecStatus(val label: String) {
     RECORDING("recording"), QUEUED("queued"), UPLOADING("uploading"), UPLOADED("uploaded"), FAILED("failed"), LOCAL("on this phone"),
-    /** its videos were moved into the Gallery (Movies/Card Scanner); not uploaded */
+    /** its videos were moved into the Gallery (Movies/Overpriced Cardboard); not uploaded */
     SAVED("saved in the Gallery")
 }
 

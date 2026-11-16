@@ -167,7 +167,7 @@ private class SecureLabel(private val ctx: android.content.Context) {
 
 /**
  * Before a recording: continue the pack or start a new one, microphone, the space it needs;
- * then Android's screen-capture consent (on Android 14+: "A single app" → Card Scanner).
+ * then Android's screen-capture consent (on Android 14+: "A single app" → Overpriced Cardboard).
  */
 @Composable
 fun StartSheet(state: UiState, vm: ScannerViewModel, landscape: Boolean, onClose: () -> Unit) {
@@ -223,7 +223,7 @@ fun StartSheet(state: UiState, vm: ScannerViewModel, landscape: Boolean, onClose
                 Text(if (minutes < 60) "⚠ Space for about $minutes minutes at these settings (an hour needs ${perMinute * 60 / 1_000_000_000} GB)"
                     else "Space for more than an hour", color = if (minutes < 60) Warn else Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp))
                 Text((if (landscape) "Landscape" else "Portrait") + ", locked until Stop. Android now asks to share the screen" +
-                    (if (Build.VERSION.SDK_INT >= 34) ": choose \"A single app\" → Card Scanner." else "."),
+                    (if (Build.VERSION.SDK_INT >= 34) ": choose \"A single app\" → Overpriced Cardboard." else "."),
                     color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
             }
         },
@@ -256,7 +256,7 @@ fun RecordingsDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) 
                 r.lastSummary?.let { Text(it, color = Gold, fontSize = 13.sp) }
                 if (r.batteryHint) {
                     Column(Modifier.fillMaxWidth().padding(top = 8.dp).background(Color(0xFF2A2214), RoundedCornerShape(10.dp)).padding(10.dp)) {
-                        Text("The phone's battery saver may stop uploads in the background. Allow Card Scanner to run unrestricted:",
+                        Text("The phone's battery saver may stop uploads in the background. Allow Overpriced Cardboard to run unrestricted:",
                             color = Color.White, fontSize = 13.sp)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             TextButton({
