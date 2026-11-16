@@ -160,9 +160,10 @@ class AccountCoordinator(
     /** paired or signed in: keep the token, show who (a new account without a plan goes straight to the plans) */
     private fun connectedWith(base: String, p: Paired) {
         store.connected(base, p.token, p.status)
-        load()
-        val active = store.status()?.active == true
+        // said before the gate opens (load), so whoever sees it open sees "Connected" too
+        val active = runCatching { AccountStatus.parse(p.status).active }.getOrDefault(false)
         publish { it.copy(busy = false, error = null, justConnected = active, emailSentTo = null) }
+        load()
         // a queue of another account is not sent to this one
         val acc = store.status()?.accountId
         store.saveQueue(store.queue().filter { it.accountId == null || it.accountId == acc })
