@@ -17,12 +17,12 @@ val versionBase: Int = versionProps.getProperty("base", "0").trim().toInt()
 
 android {
     namespace = "io.github.pmaxai.cardscanner"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "io.github.pmaxai.cardscanner"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = buildNumber
         versionName = "$versionLine.${(buildNumber - versionBase).coerceAtLeast(0)}"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -45,7 +45,24 @@ android {
         System.getenv("ACCOUNT_STAGING_TOKEN")?.takeIf { it.isNotBlank() }?.let { testInstrumentationRunnerArguments["accountToken"] = it }
     }
 
+    // Two editions of the same app:
+    //  direct: the APK on GitHub (release 'app-latest'), updates itself every night (the Update button)
+    //  play:   Google Play, its own app ID; updates come from Play, so no self-update and no permission to install APKs
+    flavorDimensions += "store"
+    productFlavors {
+        create("direct") {
+            dimension = "store"
+            buildConfigField("boolean", "SELF_UPDATE", "true")
+        }
+        create("play") {
+            dimension = "store"
+            applicationId = "com.overpricedcardboard.app"
+            buildConfigField("boolean", "SELF_UPDATE", "false")
+        }
+    }
+
     // one APK per processor type: arm64 for phones (the download), x86_64 for the CI emulator
+    // (APKs only: Play makes its own per-device split from the bundle)
     splits {
         abi {
             isEnable = true
@@ -63,11 +80,25 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        // The Play upload key: only from CI secrets, never in the repo (release builds are unsigned without it).
+        // PLAY_UPLOAD_KEYSTORE is the path of the keystore file the CI writes from its secret.
+        val uploadStore = System.getenv("PLAY_UPLOAD_KEYSTORE")?.takeIf { it.isNotBlank() }?.let { file(it) }?.takeIf { it.exists() }
+        if (uploadStore != null) create("upload") {
+            storeFile = uploadStore
+            storePassword = System.getenv("PLAY_UPLOAD_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("PLAY_UPLOAD_KEY_ALIAS")
+            keyPassword = System.getenv("PLAY_UPLOAD_KEY_PASSWORD") ?: System.getenv("PLAY_UPLOAD_KEYSTORE_PASSWORD")
+        }
     }
 
     buildTypes {
         debug {
             signingConfig = signingConfigs.getByName("debug")
+        }
+        // the Play bundle (bundlePlayRelease)
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("upload")
         }
     }
 
@@ -97,6 +128,21 @@ android {
     }
 }
 
+androidComponents {
+    // only the editions that are used: direct as debug (the APK people install), play as release (the bundle)
+    // and debug (to try it on a phone next to the direct one)
+    beforeVariants { v ->
+        if (v.productFlavors.contains("store" to "direct") && v.buildType == "release") v.enable = false
+    }
+    onVariants(selector().withFlavor("store" to "play")) { v ->
+        // 64-bit only (arm64 phones, x86_64 Chromebooks): the 32-bit libraries aren't tested anywhere
+        v.packaging.jniLibs.excludes.addAll(listOf("**/armeabi-v7a/*.so", "**/x86/*.so"))
+        // native libraries stored uncompressed: Play compresses the download itself, and they load in place
+        v.packaging.jniLibs.useLegacyPackaging.set(false)
+        v.packaging.jniLibs.useLegacyPackagingFromBundle.set(false)
+    }
+}
+
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
@@ -122,8 +168,9 @@ dependencies {
     // the recording's clean camera file (camera.mp4)
     implementation("androidx.camera:camera-video:$camerax")
 
-    implementation("org.opencv:opencv:4.10.0")
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
+    // both with native libraries aligned to 16 KB memory pages (Google Play requires it for Android 15+ phones)
+    implementation("org.opencv:opencv:4.12.0")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.23.2")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     // on-device text recognition (offline): card number and language
     implementation("com.google.mlkit:text-recognition:16.0.1")

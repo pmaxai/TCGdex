@@ -4,7 +4,7 @@ A phone app that points at Pokémon cards and shows their Cardmarket price, offl
 for flea markets.
 
 - `pipeline/`: card database, fingerprints, accuracy tests and the app's data pack (Python)
-- `android/`: the app (Kotlin). GitHub Actions builds it into an APK.
+- `android/`: the app (Kotlin). GitHub Actions builds it into an APK, and a bundle for Google Play.
 
 ## Install the app
 
@@ -36,6 +36,35 @@ to install apps: allow it, come back, and it goes on). Your carts and settings s
 **Fresh prices every night:** TCGdex updates its prices daily at about 23:50 CET. The data
 pipeline starts at 00:40 CET and the new APK (with that day's prices) is out at about
 02:30 CET, well before flea markets (6:00) and shows (10:00). Install it before you leave.
+
+## Two editions: direct and Google Play
+
+The same app is built twice (Gradle flavors `direct` and `play`):
+
+- **direct** (`io.github.pmaxai.cardscanner`): the APK above, from GitHub. It updates itself
+  (the Update bar) and gets new prices with every nightly build.
+- **play** (`com.overpricedcardboard.app`): for Google Play. A separate app ID, so both can be
+  installed side by side. No self-update and no permission to install APKs (Play doesn't allow
+  either): updates come from Play. Only the 64-bit processor types (arm64 phones, x86_64
+  Chromebooks).
+
+The **Android app** workflow builds the Play edition next to the APK (job *play*) as an app
+bundle: the run's artifact **play-bundle-&lt;run&gt;** (`app-play-release.aab`, kept 14 days), the
+file the Play Console takes. Before that it checks what Play checks on upload: native libraries
+aligned to 16 KB memory pages (`android/tools/check_16kb.py`), the app ID, no install permission.
+
+The bundle is signed with the **upload key** from four repository secrets (it is never in the
+repo): `PLAY_UPLOAD_KEYSTORE_BASE64` (the keystore file, base64), `PLAY_UPLOAD_KEYSTORE_PASSWORD`,
+`PLAY_UPLOAD_KEY_ALIAS`, `PLAY_UPLOAD_KEY_PASSWORD`. Without them it is built unsigned, which the
+checks accept but the Play Console doesn't. Make the key once and keep a copy somewhere safe:
+
+```bash
+keytool -genkeypair -v -keystore upload.jks -alias upload -keyalg RSA -keysize 4096 -validity 10000
+base64 -w0 upload.jks     # -> the secret PLAY_UPLOAD_KEYSTORE_BASE64
+```
+
+With Play App Signing (the default), Google keeps the key that signs what phones install; a lost
+upload key can be replaced through the Play Console.
 
 ## Account and subscription
 

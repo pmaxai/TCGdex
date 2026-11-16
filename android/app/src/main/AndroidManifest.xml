@@ -8,8 +8,8 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- only for card thumbnails (TCGdex) and the Cardmarket link; scanning works offline -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- the Update button: hands the new APK to Android's installer (you confirm it there) -->
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- the Update button's permission to hand the new APK to the installer: direct edition only
+         (src/direct/AndroidManifest.xml); on Google Play, Play updates the app -->
     <!-- Recording (YouTube mode): the screen via MediaProjection in a foreground service, the
          upload in the background; the microphone only when switched on, asked for then -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The direct edition (the APK from GitHub) on top of the shared manifest -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- the Update button: hands the new APK to Android's installer (you confirm it there) -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+</manifest>

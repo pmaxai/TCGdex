@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.pmaxai.cardscanner.trading.Condition
 import io.github.pmaxai.cardscanner.trading.Reference
+import io.github.pmaxai.cardscanner.BuildConfig
 import io.github.pmaxai.cardscanner.update.AppUpdate
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -227,7 +228,8 @@ private fun PricesPage(state: UiState, vm: ScannerViewModel) {
         s.showPsa) { v -> vm.updateSettings { it.copy(showPsa = v) } }
     Heading("Where the prices come from")
     Hint("Cardmarket trend (EUR) first, TCGplayer (USD, shown in € where Cardmarket has none). " +
-        "Prices of ${AppUpdate.day(state.pricesDate) ?: "–"}; a new app with that day's prices comes every night at about 01:15.")
+        "Prices of ${AppUpdate.day(state.pricesDate) ?: "–"}" +
+        if (BuildConfig.SELF_UPDATE) "; a new app with that day's prices comes every night at about 01:15." else "; newer prices come with app updates from Google Play.")
     Hint("Price check: some cards carry another card's Cardmarket price in the card database. The app removes " +
         "those (TCGplayer is shown instead) or warns, and Trading Mode gives no deal verdict on them.")
 }
@@ -484,9 +486,11 @@ private fun AboutPage(state: UiState, vm: ScannerViewModel) {
         Button(onClick = { vm.startUpdate() }, modifier = Modifier.padding(top = 6.dp)) {
             Text(if (u.progress != null) "Downloading… ${(u.progress * 100).toInt()} %" else if (u.apk != null) "Install" else "Update now")
         }
-    } else {
+    } else if (BuildConfig.SELF_UPDATE) {
         Hint("A new app with that day's prices comes every night at about 01:15; the app offers it at the top.")
         TextButton(onClick = { vm.checkForUpdate(announce = true) }) { Text("Check for updates") }
+    } else {
+        Hint("Updates, with newer prices, come from Google Play.")
     }
 }
 

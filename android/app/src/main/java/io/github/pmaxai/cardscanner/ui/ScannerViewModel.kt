@@ -56,6 +56,7 @@ import io.github.pmaxai.cardscanner.shop.ServerClock
 import io.github.pmaxai.cardscanner.shop.ShopCredentials
 import io.github.pmaxai.cardscanner.shop.shopWarningText
 import io.github.pmaxai.cardscanner.update.AppUpdate
+import io.github.pmaxai.cardscanner.update.Installer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -1208,6 +1209,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
      * minutes). [announce]: say so when there is none (the Settings button).
      */
     fun checkForUpdate(announce: Boolean = false) {
+        if (!BuildConfig.SELF_UPDATE) return       // Google Play edition: Play updates the app
         val now = System.currentTimeMillis()
         if (!announce && now - lastUpdateCheck < 30 * 60_000L) return
         lastUpdateCheck = now
@@ -1232,7 +1234,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(update = u.copy(progress = 0f, error = null)) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val f = AppUpdate.download(appCtx, u.release) { p -> _state.update { s -> s.copy(update = s.update?.copy(progress = p)) } }
+                val f = Installer.download(appCtx, u.release) { p -> _state.update { s -> s.copy(update = s.update?.copy(progress = p)) } }
                 _state.update { s -> s.copy(update = s.update?.copy(progress = null, apk = f)) }
                 withContext(Dispatchers.Main) { install(f) }
             } catch (t: Throwable) {
@@ -1243,14 +1245,14 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun install(apk: java.io.File) {
-        if (!AppUpdate.canInstall(appCtx)) {
+        if (!Installer.canInstall(appCtx)) {
             // once: Android wants "allow from this source" for Card Scanner; back in the app it goes on
             _state.update { s -> s.copy(update = s.update?.copy(needsPermission = true)) }
-            runCatching { appCtx.startActivity(AppUpdate.allowIntent(appCtx)) }
+            runCatching { appCtx.startActivity(Installer.allowIntent(appCtx)) }
             return
         }
         _state.update { s -> s.copy(update = s.update?.copy(needsPermission = false)) }
-        runCatching { appCtx.startActivity(AppUpdate.installIntent(appCtx, apk)) }.onFailure { t ->
+        runCatching { appCtx.startActivity(Installer.installIntent(appCtx, apk)) }.onFailure { t ->
             _state.update { s -> s.copy(update = s.update?.copy(error = t.message ?: "installer didn't open")) }
         }
     }
@@ -1364,7 +1366,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         account.sync()
         checkForUpdate()
         val u = _state.value.update ?: return
-        if (u.needsPermission && u.apk != null && AppUpdate.canInstall(appCtx)) install(u.apk)
+        if (u.needsPermission && u.apk != null && Installer.canInstall(appCtx)) install(u.apk)
     }
 
     /** Later: hide it until the app starts again. */
