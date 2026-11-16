@@ -95,7 +95,7 @@ class AccountTest {
             }
             val token = request.getHeader("Authorization")?.removePrefix("Bearer ")
             gone[token]?.let { return err(401, "unpaired", JSONObject(it.toString())) }
-            if (token == null || token !in tokens) return err(401, "invalid_token")
+            if (token == null || !tokens.containsKey(token)) return err(401, "invalid_token")
             return when {
                 request.method == "GET" && path == "/status" -> { statusCalls++; json(200, status()) }
                 request.method == "POST" && path == "/transfer" -> {
