@@ -97,6 +97,8 @@ enum class SettingsPage(val short: String, val title: String, val icon: ImageVec
 @Composable
 fun SettingsScreen(state: UiState, vm: ScannerViewModel, start: SettingsPage) {
     var page by rememberSaveable { mutableStateOf(start) }
+    // another page asked for from outside (a mode the plan lacks → Account)
+    androidx.compose.runtime.LaunchedEffect(start) { page = start }
     androidx.compose.runtime.LaunchedEffect(page) { vm.settingsPageShown(page) }
     BackHandler { vm.closeSettings() }
     val wide = LocalConfiguration.current.screenWidthDp >= 600
@@ -174,7 +176,7 @@ private fun ModePage(state: UiState, vm: ScannerViewModel) {
         Column(Modifier.fillMaxWidth().padding(top = 10.dp)
             .background(if (selected) Gold.copy(alpha = 0.15f) else Panel, RoundedCornerShape(14.dp))
             .border(1.dp, if (selected) Gold else Color.Transparent, RoundedCornerShape(14.dp))
-            .clickable { if (included) vm.updateSettings { it.withMode(m) } else openUrl(ctx, state.account.portalUrl) }
+            .clickable { if (included) vm.updateSettings { it.withMode(m) } else vm.morePlan(ctx) }
             .padding(14.dp)) {
             Text(m.label, color = if (selected) Gold else if (included) Color.White else Muted, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             Text(m.about, color = if (included) Muted else Muted.copy(alpha = 0.6f), fontSize = 13.sp)
@@ -229,7 +231,8 @@ private fun PricesPage(state: UiState, vm: ScannerViewModel) {
     Heading("Where the prices come from")
     Hint("Cardmarket trend (EUR) first, TCGplayer (USD, shown in € where Cardmarket has none). " +
         "Prices of ${AppUpdate.day(state.pricesDate) ?: "–"}" +
-        if (BuildConfig.SELF_UPDATE) "; a new app with that day's prices comes every night at about 01:15." else "; newer prices come with app updates from Google Play.")
+        if (BuildConfig.SELF_UPDATE) "; a new app with that day's prices comes every night at about 01:15."
+        else "; the app downloads the newest prices every night when there is a connection and uses them from its next start.")
     Hint("Price check: some cards carry another card's Cardmarket price in the card database. The app removes " +
         "those (TCGplayer is shown instead) or warns, and Trading Mode gives no deal verdict on them.")
 }
@@ -490,8 +493,10 @@ private fun AboutPage(state: UiState, vm: ScannerViewModel) {
         Hint("A new app with that day's prices comes every night at about 01:15; the app offers it at the top.")
         TextButton(onClick = { vm.checkForUpdate(announce = true) }) { Text("Check for updates") }
     } else {
-        Hint("Updates, with newer prices, come from Google Play.")
+        Hint("Updates come from Google Play; the newest prices are downloaded every night.")
     }
+    Heading("Privacy")
+    TextButton(onClick = { openUrl(ctx, StoreCoordinator.privacyUrl) }) { Text("Privacy policy") }
 }
 
 // ---------------------------------------------------------------- building blocks

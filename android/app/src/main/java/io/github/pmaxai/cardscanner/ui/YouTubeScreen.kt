@@ -115,7 +115,7 @@ fun YouTubeScreen(state: UiState, vm: ScannerViewModel) {
     var recordings by rememberSaveable { mutableStateOf(false) }
     val startRec = {
         when {
-            !state.account.has("recording") -> openUrl(ctx, state.account.portalUrl)
+            !state.account.has("recording") -> vm.morePlan(ctx)
             state.recording.settings.readyToRecord -> startSheet = true
             else -> vm.openSettings(SettingsPage.RECORDING)
         }

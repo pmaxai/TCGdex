@@ -64,7 +64,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           disable-animations: true
           working-directory: android
-          script: echo "page size $(adb shell getconf PAGE_SIZE)"; ./gradlew --no-daemon connectedPlayDebugAndroidTest; s=$?; adb logcat -d -s ParityTest:I ScriptDetection:I RecordingE2E:I Account:I ZoomKept:I Templates:I GallerySaver:I Recording:W CardScanner:W AndroidRuntime:E linker:W; exit $s
+          script: echo "page size $(adb shell getconf PAGE_SIZE)"; ./gradlew --no-daemon connectedPlayDebugAndroidTest; s=$?; adb logcat -d -s ParityTest:I ScriptDetection:I RecordingE2E:I Account:I ZoomKept:I Templates:I GallerySaver:I Store:I PackUpdate:I Recording:W CardScanner:W AndroidRuntime:E linker:W; exit $s
 
       - uses: actions/upload-artifact@v4
         continue-on-error: true

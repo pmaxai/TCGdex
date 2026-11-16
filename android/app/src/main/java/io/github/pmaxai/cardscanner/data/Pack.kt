@@ -42,13 +42,19 @@ class Pack(
         fun hasBundledPack(ctx: Context): Boolean =
             runCatching { ctx.assets.open("pack/pack.json").close() }.isSuccess
 
-        /** Slow (copies ~50 MB the first time, converts the index): call off the main thread. */
+        /**
+         * Slow (copies ~50 MB the first time, converts the index): call off the main thread.
+         * The pack in app storage is used unless the app brings a newer one (or one for another
+         * model); the store editions also download newer ones ([PackUpdate]), used from here.
+         */
         fun load(ctx: Context): Pack {
             val dir = File(ctx.filesDir, "pack")
             val bundled = JSONObject(ctx.assets.open("pack/pack.json").bufferedReader().readText())
-            val version = bundled.getString("version")
-            val installed = File(dir, "pack.json").takeIf { it.exists() }
-                ?.let { runCatching { JSONObject(it.readText()).getString("version") }.getOrNull() }
+            PackUpdate.promote(ctx.filesDir, bundled)
+            val installedJson = PackUpdate.manifest(dir)
+            val installed = installedJson?.optString("version")?.takeIf { it.isNotBlank() }
+            val version = if (installed != null && installed >= bundled.getString("version") && PackUpdate.fits(installedJson, bundled))
+                installed else bundled.getString("version")
             if (installed != version) {
                 dir.deleteRecursively()
                 dir.mkdirs()

@@ -66,6 +66,26 @@ base64 -w0 upload.jks     # -> the secret PLAY_UPLOAD_KEYSTORE_BASE64
 With Play App Signing (the default), Google keeps the key that signs what phones install; a lost
 upload key can be replaced through the Play Console.
 
+### Buying in the Play edition
+
+The Play edition sells the subscription with Play Billing (app-account-api.md in the shop repo,
+*Sign-in* and *Buying in Google Play*):
+
+- **Sign-in:** *Continue with Google* (the phone's Google account; needs the shop's server client
+  id in `cardscanner.googleServerClientId`) or *Use another email* (a 6-digit code). A new
+  account starts without a plan and sees the plans with Google Play's prices; customers of the
+  website can still connect with the portal's QR code.
+- **Buying:** Collector or Creator, monthly or yearly, bought with the account's `store_ref`; the
+  app reports every purchase to the server (`POST /store/google`), which checks and acknowledges
+  it. A report that doesn't get through waits and is sent again. **Restore purchases** sends
+  everything Google Play holds again.
+- **Extra devices** (⚙ → Account): up to 4 as add-ons of the running purchase (`+ Add a device`,
+  `Remove one`); **Switch to …** changes the plan and moves the extra devices with it.
+- **Prices every night:** the app downloads the newest data pack from the shop (`GET /pack`;
+  only changed files, resumed, checked) and uses it from its next start.
+- **Delete account** and the **privacy policy** are in ⚙ → Account (both editions). The Play
+  edition never links to buying on the website.
+
 ## Account and subscription
 
 The app runs with an **account** on [overpricedcardboard.com](https://overpricedcardboard.com)

@@ -8,6 +8,7 @@ import io.github.pmaxai.cardscanner.account.AccountGate
 import io.github.pmaxai.cardscanner.account.AccountStatus
 import io.github.pmaxai.cardscanner.account.AccountStore
 import io.github.pmaxai.cardscanner.account.PairCode
+import io.github.pmaxai.cardscanner.account.Paired
 import io.github.pmaxai.cardscanner.account.PendingOp
 import io.github.pmaxai.cardscanner.account.TransferCode
 import io.github.pmaxai.cardscanner.account.unpairedText
@@ -65,6 +66,11 @@ data class AccountUi(
     val s3Note: String? = null,
     /** Trading: a cart just paid whose cards could go into the collection */
     val offerCart: Long? = null,
+    /** Use another email: where the code went, and from when another may be asked for */
+    val emailSentTo: String? = null,
+    val resendAt: Long = 0,
+    /** buying in the store (Play edition) */
+    val store: StoreUi = StoreUi(),
 ) {
     /** a feature unlocked now (builds without an account: everything) */
     fun has(feature: String): Boolean = !required || (gate == AccountGate.OPEN && status?.has(feature) == true)
@@ -99,7 +105,13 @@ class AccountCoordinator(
     /** the HTTP client (tests: short timeouts); null: the API's own */
     @Volatile var http: okhttp3.OkHttpClient? = null
 
-    private fun api(): AccountApi? = store.base?.let { AccountApi(it, BuildConfig.VERSION_NAME, http) }
+    internal fun api(): AccountApi? = store.base?.let { AccountApi(it, BuildConfig.VERSION_NAME, http) }
+
+    /** an answer that carries the status (a purchase report): kept like a check's */
+    internal fun applyStatus(o: JSONObject) {
+        store.saveStatus(o)
+        load()
+    }
 
     /** At the app's start (after the settings are loaded): the saved state, then a check. */
     fun start() {
@@ -109,7 +121,7 @@ class AccountCoordinator(
     }
 
     /** the saved state: connected?, the last answer, the gate */
-    private fun load() {
+    internal fun load() {
         val st = store.status()
         publish {
             it.copy(required = BuildConfig.ACCOUNT_REQUIRED, status = st, lastCheck = store.lastCheck, notice = store.notice,
@@ -133,14 +145,8 @@ class AccountCoordinator(
         scope.launch(Dispatchers.IO) {
             try {
                 val p = AccountApi(target.base, BuildConfig.VERSION_NAME, http).pair(target.code, store.deviceId, AccountStore.deviceName())
-                store.connected(target.base, p.token, p.status)
                 refused = null
-                load()
-                publish { it.copy(busy = false, justConnected = true) }
-                // a queue of another account is not sent to this one
-                val acc = store.status()?.accountId
-                store.saveQueue(store.queue().filter { it.accountId == null || it.accountId == acc })
-                check(force = true)
+                connectedWith(target.base, p)
             } catch (e: AccountException) {
                 refused = target.code
                 publish { it.copy(busy = false, error = e.friendly) }
@@ -150,6 +156,73 @@ class AccountCoordinator(
         }
     }
     @Volatile private var refused: String? = null
+
+    /** paired or signed in: keep the token, show who (a new account without a plan goes straight to the plans) */
+    private fun connectedWith(base: String, p: Paired) {
+        store.connected(base, p.token, p.status)
+        load()
+        val active = store.status()?.active == true
+        publish { it.copy(busy = false, error = null, justConnected = active, emailSentTo = null) }
+        // a queue of another account is not sent to this one
+        val acc = store.status()?.accountId
+        store.saveQueue(store.queue().filter { it.accountId == null || it.accountId == acc })
+        onConnected?.invoke()
+        check(force = true)
+    }
+
+    /** the store's part (Play edition): after connecting, look at the store's purchases */
+    @Volatile var onConnected: (() -> Unit)? = null
+
+    // ---------------------------------------------------------------- sign-in (store editions)
+    /** the build's own server: sign-ins go there (a QR code names its own); tests: a stand-in */
+    @Volatile var home: String = BuildConfig.ACCOUNT_URL.trimEnd('/')
+
+    /** Continue with Google: the ID token the phone's Google account gave */
+    fun signInGoogle(idToken: String) = signIn("signing in needs the internet.") {
+        it.loginGoogle(idToken, store.deviceId, AccountStore.deviceName())
+    }
+
+    /** Use another email: the code is emailed */
+    fun emailCode(email: String) {
+        val e = email.trim()
+        if (current().busy || e.isEmpty()) return
+        publish { it.copy(busy = true, error = null) }
+        scope.launch(Dispatchers.IO) {
+            try {
+                val wait = AccountApi(home, BuildConfig.VERSION_NAME, http).loginEmail(e)
+                publish { it.copy(busy = false, emailSentTo = e, resendAt = System.currentTimeMillis() + wait * 1000L) }
+            } catch (x: AccountException) {
+                publish { it.copy(busy = false, error = x.friendly) }
+            } catch (x: Exception) {
+                publish { it.copy(busy = false, error = offline(x, "signing in needs the internet.")) }
+            }
+        }
+    }
+
+    /** the code from the email */
+    fun emailVerify(code: String) {
+        val email = current().emailSentTo ?: return
+        signIn("signing in needs the internet.") { it.loginEmailVerify(email, code.filter(Char::isDigit), store.deviceId, AccountStore.deviceName()) }
+    }
+
+    /** another address (back from the code) */
+    fun emailBack() = publish { it.copy(emailSentTo = null, error = null) }
+
+    fun signInFailed(why: String) = publish { it.copy(busy = false, error = why) }
+
+    private fun signIn(what: String, call: (AccountApi) -> Paired) {
+        if (current().busy) return
+        publish { it.copy(busy = true, error = null) }
+        scope.launch(Dispatchers.IO) {
+            try {
+                connectedWith(home, call(AccountApi(home, BuildConfig.VERSION_NAME, http)))
+            } catch (e: AccountException) {
+                publish { it.copy(busy = false, error = e.friendly) }
+            } catch (e: Exception) {
+                publish { it.copy(busy = false, error = offline(e, what)) }
+            }
+        }
+    }
 
     /** The connected screen's Continue. */
     fun connectedSeen() = publish { it.copy(justConnected = false) }
@@ -206,7 +279,7 @@ class AccountCoordinator(
         stopTransfer()
         store.forget(why)
         load()
-        publish { it.copy(busy = false, error = null, transfer = null, wanted = emptyList(), collection = emptyMap(), binders = emptyList()) }
+        publish { it.copy(busy = false, error = null, transfer = null, wanted = emptyList(), collection = emptyMap(), binders = emptyList(), store = StoreUi()) }
         onS3(null)
     }
 
@@ -283,12 +356,39 @@ class AccountCoordinator(
                 api()!!.disconnect(token)
                 store.forget("This phone was disconnected from the account.")
                 load()
-                publish { it.copy(busy = false, wanted = emptyList(), collection = emptyMap(), binders = emptyList()) }
+                publish { it.copy(busy = false, wanted = emptyList(), collection = emptyMap(), binders = emptyList(), store = StoreUi()) }
                 onS3(null)
             } catch (e: AccountException) {
                 if (e.lostToken) lost(e) else publish { it.copy(busy = false, error = e.friendly) }
             } catch (e: Exception) {
                 publish { it.copy(busy = false, error = offline(e, "disconnecting needs the internet.")) }
+            }
+        }
+    }
+
+    /**
+     * Delete the account (asked first): every device is signed out, the data goes, renewals stop.
+     * An App Store subscription the person cancels themselves ([message] says where).
+     */
+    fun deleteAccount() {
+        val token = store.token ?: return
+        publish { it.copy(busy = true, error = null) }
+        scope.launch(Dispatchers.IO) {
+            try {
+                val o = api()!!.deleteAccount(token)
+                store.forget("The account was deleted.")
+                store.saveQueue(emptyList())
+                load()
+                publish { it.copy(busy = false, wanted = emptyList(), collection = emptyMap(), binders = emptyList(), store = StoreUi()) }
+                onS3(null)
+                o.optString("manage_url").takeIf { it.isNotBlank() && !o.isNull("manage_url") }?.let {
+                    message("The account is deleted. Cancel the subscription in the App Store too: $it")
+                } ?: message("The account is deleted.")
+            } catch (e: AccountException) {
+                if (e.lostToken) lost(e) else publish { it.copy(busy = false, error = if (e.error == "internal")
+                    "The subscription couldn't be stopped just now, so nothing was deleted. Try again later." else e.friendly) }
+            } catch (e: Exception) {
+                publish { it.copy(busy = false, error = offline(e, "deleting needs the internet.")) }
             }
         }
     }

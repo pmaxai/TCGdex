@@ -14,8 +14,8 @@ import java.util.concurrent.TimeUnit
 /** The account server is there but doesn't answer as the API does (down, not deployed, a proxy's page). Counts as offline. */
 class ServerUnavailable(val code: Int, message: String) : IOException(message)
 
-/** Pairing's answer: the device token (secret) and the status. */
-class Paired(val token: String, val status: JSONObject)
+/** Pairing's (or a sign-in's) answer: the device token (secret) and the status; [created]: a new account. */
+class Paired(val token: String, val status: JSONObject, val created: Boolean = false)
 
 /** Move to a new phone: the code the new phone scans (as a QR code of [url]). */
 data class TransferCode(val code: String, val url: String, val expiresAt: Long?)
@@ -38,6 +38,39 @@ class AccountApi(baseUrl: String, private val appVersion: String?, http: OkHttpC
     }
 
     fun status(token: String): JSONObject = need(call("GET", url("status"), token))
+
+    // ---------------------------------------------------------------- sign-in (store editions)
+    /** Continue with Google: the ID token from Credential Manager. Works without a subscription. */
+    fun loginGoogle(idToken: String, deviceId: String, deviceName: String?, platform: String = "android"): Paired =
+        signedIn(call("POST", url("login", "google"), null, device(deviceId, deviceName, platform).put("id_token", idToken)))
+
+    /** Use another email: a 6-digit code is emailed. Returns the seconds until another may be asked for. */
+    fun loginEmail(email: String): Int = need(call("POST", url("login", "email"), null, JSONObject().put("email", email))).optInt("resend_after", 60)
+
+    fun loginEmailVerify(email: String, code: String, deviceId: String, deviceName: String?, platform: String = "android"): Paired =
+        signedIn(call("POST", url("login", "email", "verify"), null, device(deviceId, deviceName, platform).put("email", email).put("code", code)))
+
+    private fun device(deviceId: String, deviceName: String?, platform: String) = JSONObject().put("device_id", deviceId)
+        .put("device_name", deviceName?.take(80)).put("platform", platform).put("app_version", appVersion?.take(40))
+
+    private fun signedIn(answer: JSONObject?): Paired {
+        val o = need(answer)
+        return Paired(o.getString("token"), o.optJSONObject("status") ?: JSONObject(), o.optBoolean("created"))
+    }
+
+    // ---------------------------------------------------------------- buying in Google Play
+    /** the plans on sale and their store product ids (`offers`) */
+    fun offers(token: String): JSONArray = need(call("GET", url("store", "offers"), token)).optJSONArray("offers") ?: JSONArray()
+
+    /** reports a Play purchase (the plan's product id); answers the status */
+    fun storeGoogle(token: String, productId: String, purchaseToken: String): JSONObject =
+        need(call("POST", url("store", "google"), token, JSONObject().put("product_id", productId).put("purchase_token", purchaseToken)))
+
+    /** Deletes the account (asked first in the app): `{ "deleted": true, "manage_url": … }` */
+    fun deleteAccount(token: String): JSONObject = call("POST", url("account", "delete"), token, JSONObject().put("confirm", true)) ?: JSONObject()
+
+    /** the newest data pack: version and files with their download addresses (valid 1 hour) */
+    fun pack(token: String): JSONObject = need(call("GET", url("pack"), token))
 
     fun transfer(token: String): TransferCode {
         val o = need(call("POST", url("transfer"), token, JSONObject()))

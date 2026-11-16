@@ -437,6 +437,10 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     /** the account on overpricedcardboard.com: pairing, status, collection and missing cards */
     val account = AccountCoordinator(app, viewModelScope, { f -> _state.update { it.copy(account = f(it.account)) } }, { _state.value.account },
         { m -> _state.update { it.copy(message = m) } }, onStatus = { st -> applyAccount(st) }, onS3 = { o -> rec.applyManagedS3(o) })
+    /** Play edition: the plans with the store's prices, buying, extra devices, Restore purchases */
+    val store = StoreCoordinator(app, viewModelScope, account, io.github.pmaxai.cardscanner.store.Stores.billing(app),
+        { f -> _state.update { it.copy(account = it.account.copy(store = f(it.account.store))) } }, { _state.value.account.store },
+        { _state.value.account.status })
     private val saveDispatcher = java.util.concurrent.Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     /** text recognition runs here, one card at a time, so a card shows up without waiting for it */
     private val textDispatcher = java.util.concurrent.Executors.newSingleThreadExecutor().asCoroutineDispatcher()
@@ -475,7 +479,9 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         loadShopOrder()
         // uploads need the account's S3 storage and Automatic Content Processing
         rec.uploadAllowed = { _state.value.account.let { a -> a.has("s3_upload") && a.has("pipeline") } }
+        account.onConnected = { store.start(); io.github.pmaxai.cardscanner.data.PackUpdate.schedule(app) }
         account.start()
+        if (account.store.connected) { store.start(); io.github.pmaxai.cardscanner.data.PackUpdate.schedule(app) }
         viewModelScope.launch { account.hourly() }
         // the collection's lines of the shown card ("In collection: 2")
         viewModelScope.launch {
@@ -664,7 +670,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     /** The settings screen, on [page] (or where it was left last time). */
     fun openSettings(page: SettingsPage? = null) = _state.update { it.copy(settingsPage = page ?: lastSettingsPage) }
 
-    fun settingsPageShown(page: SettingsPage) { lastSettingsPage = page }
+    fun settingsPageShown(page: SettingsPage) { lastSettingsPage = page; _state.update { if (it.settingsPage != null) it.copy(settingsPage = page) else it } }
 
     fun closeSettings() = _state.update { it.copy(settingsPage = null) }
 
@@ -1355,6 +1361,27 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(account = it.account.copy(offerCart = null), message = "Adding the cards to your collection") }
     }
 
+    /** Continue with Google (Play edition): the phone's Google account signs in (or creates) the account. */
+    fun signInWithGoogle(activity: android.app.Activity) {
+        viewModelScope.launch {
+            try {
+                val t = store.billing.googleIdToken(activity, BuildConfig.GOOGLE_SERVER_CLIENT_ID) ?: return@launch
+                account.signInGoogle(t)
+            } catch (e: Exception) {
+                account.signInFailed(e.message ?: "Google sign-in didn't work.")
+            }
+        }
+    }
+
+    /**
+     * A mode or REC the plan lacks: the Play edition shows its plans (Account: switch plan, or the
+     * plans to buy); the direct edition opens the portal.
+     */
+    fun morePlan(ctx: android.content.Context) {
+        if (store.sells) { openSettings(SettingsPage.ACCOUNT); store.refresh() }
+        else openUrl(ctx, _state.value.account.portalUrl)
+    }
+
     fun dismissCartOffer() = _state.update { it.copy(account = it.account.copy(offerCart = null)) }
 
     /** The app left the screen: a recording ends here, so nothing else gets into the video. */
@@ -1363,6 +1390,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     fun onResume() {
         rec.refresh()
         account.onForeground()
+        if (_state.value.account.store.waiting > 0) viewModelScope.launch(Dispatchers.IO) { store.sendWaiting() }
         account.sync()
         checkForUpdate()
         val u = _state.value.update ?: return

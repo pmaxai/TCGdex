@@ -41,6 +41,11 @@ android {
         val accountUrl = providers.gradleProperty("cardscanner.accountUrl").orNull ?: "https://overpricedcardboard.com"
         buildConfigField("boolean", "ACCOUNT_REQUIRED", accountRequired.toString())
         buildConfigField("String", "ACCOUNT_URL", "\"$accountUrl\"")
+        // Continue with Google (store editions): the shop's server client id (public; empty: only "Use another email")
+        val googleClient = providers.gradleProperty("cardscanner.googleServerClientId").orNull.orEmpty()
+        buildConfigField("String", "GOOGLE_SERVER_CLIENT_ID", "\"$googleClient\"")
+        // the staging server's access header for the store tests (CI secret; only the test run gets it)
+        System.getenv("ACCOUNT_STAGING_ACCESS")?.takeIf { it.isNotBlank() }?.let { testInstrumentationRunnerArguments["stagingAccess"] = it }
         // the account test against staging (optional: a device token of a test subscription, CI secret)
         System.getenv("ACCOUNT_STAGING_TOKEN")?.takeIf { it.isNotBlank() }?.let { testInstrumentationRunnerArguments["accountToken"] = it }
     }
@@ -53,11 +58,14 @@ android {
         create("direct") {
             dimension = "store"
             buildConfigField("boolean", "SELF_UPDATE", "true")
+            buildConfigField("boolean", "STORE_BILLING", "false")
         }
         create("play") {
             dimension = "store"
             applicationId = "com.overpricedcardboard.app"
             buildConfigField("boolean", "SELF_UPDATE", "false")
+            // sells the subscription with Play Billing, signs in with Google, downloads the nightly prices
+            buildConfigField("boolean", "STORE_BILLING", "true")
         }
     }
 
@@ -183,6 +191,12 @@ dependencies {
     implementation("com.google.zxing:core:3.5.3")
     // recording uploads that go on with the app closed, when the network fits (spec UP-7)
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+    // Google Play edition: the subscription and extra devices (add-ons) with Play Billing,
+    // Continue with Google (Credential Manager)
+    "playImplementation"("com.android.billingclient:billing:8.3.0")
+    "playImplementation"("androidx.credentials:credentials:1.5.0")
+    "playImplementation"("androidx.credentials:credentials-play-services-auth:1.5.0")
+    "playImplementation"("com.google.android.libraries.identity.googleid:googleid:1.1.1")
 
     androidTestImplementation(composeBom)
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")

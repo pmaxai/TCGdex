@@ -87,6 +87,7 @@ import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import io.github.pmaxai.cardscanner.BuildConfig
 import io.github.pmaxai.cardscanner.account.AccountGate
 import io.github.pmaxai.cardscanner.account.AccountStatus
+import io.github.pmaxai.cardscanner.account.storeEdition
 import io.github.pmaxai.cardscanner.shop.ShopTerms
 import io.github.pmaxai.cardscanner.trading.LineStatus
 import io.github.pmaxai.cardscanner.trading.Side
@@ -119,6 +120,7 @@ fun AccountGateScreen(state: UiState, vm: ScannerViewModel, camera: @Composable 
                 AccountSummary(st)
                 Button({ vm.account.connectedSeen() }, modifier = Modifier.padding(top = 18.dp)) { Text("Continue") }
             }
+            a.gate == AccountGate.ENDED && storeEdition -> OffersPanel(state, vm)
             a.gate == AccountGate.ENDED -> {
                 Text("Your subscription has ended", color = Warn, fontSize = 22.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
                 st?.let { AccountSummary(it) }
@@ -133,10 +135,11 @@ fun AccountGateScreen(state: UiState, vm: ScannerViewModel, camera: @Composable 
                     modifier = Modifier.padding(top = 6.dp)) }
                 CheckButtons(a, vm)
             }
+            storeEdition -> StoreSignIn(state, vm, camera)
             else -> ConnectPanel(state, vm, camera)
         }
         a.error?.let { Text("⚠ $it", color = Warn, fontSize = 14.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 12.dp)) }
-        if (a.gate == AccountGate.CONNECT && !a.justConnected) {
+        if (a.gate == AccountGate.CONNECT && !a.justConnected && !storeEdition) {
             TextButton({ openUrl(ctx, BuildConfig.ACCOUNT_URL.trimEnd('/') + "/app") }, modifier = Modifier.padding(top = 14.dp)) {
                 Text("No account yet? Subscribe at overpricedcardboard.com/app", textAlign = TextAlign.Center)
             }
@@ -148,7 +151,7 @@ fun AccountGateScreen(state: UiState, vm: ScannerViewModel, camera: @Composable 
 private fun CheckButtons(a: AccountUi, vm: ScannerViewModel) {
     val ctx = LocalContext.current
     Row(Modifier.padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Button({ openUrl(ctx, a.portalUrl) }) { Text("Manage subscription") }
+        manageUrl(a)?.let { url -> Button({ openUrl(ctx, url) }) { Text("Manage subscription") } }
         OutlinedButton({ vm.account.check(force = true, manual = true) }, enabled = !a.busy) {
             if (a.busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) else Text("Check again")
         }
@@ -220,7 +223,8 @@ fun AccountPage(state: UiState, vm: ScannerViewModel) {
     }
     a.error?.let { Text("⚠ $it", color = Warn, fontSize = 13.sp) }
 
-    Button({ openUrl(ctx, a.portalUrl) }, modifier = Modifier.padding(top = 10.dp)) { Text("Manage subscription") }
+    if (storeEdition) StorePart(state, vm, st)
+    else Button({ openUrl(ctx, a.portalUrl) }, modifier = Modifier.padding(top = 10.dp)) { Text("Manage subscription") }
 
     Text("Move to a new phone", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 18.dp))
     Text("On the new phone, open the app and scan this code. It takes over this phone's place; this one is disconnected then.",
@@ -254,13 +258,211 @@ fun AccountPage(state: UiState, vm: ScannerViewModel) {
         }
     }
 
-    Text("Disconnect this phone", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 18.dp))
-    Text("Frees its place for another device. The app asks for a QR code again.", color = Muted, fontSize = 13.sp)
-    OutlinedButton({ confirm = true }, enabled = !a.busy, modifier = Modifier.padding(top = 8.dp)) { Text("Disconnect this phone", color = Warn) }
-    if (confirm) AlertDialog(onDismissRequest = { confirm = false }, title = { Text("Disconnect this phone?") },
-        text = { Text("The app on this phone stops until it is connected again with a QR code from the portal.") },
-        confirmButton = { Button({ confirm = false; vm.account.disconnect() }) { Text("Disconnect") } },
+    Text(if (storeEdition) "Sign out of this phone" else "Disconnect this phone", color = Color.White, fontSize = 16.sp,
+        fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 18.dp))
+    Text(if (storeEdition) "Frees its place for another device. The app asks you to sign in again."
+        else "Frees its place for another device. The app asks for a QR code again.", color = Muted, fontSize = 13.sp)
+    OutlinedButton({ confirm = true }, enabled = !a.busy, modifier = Modifier.padding(top = 8.dp)) {
+        Text(if (storeEdition) "Sign out" else "Disconnect this phone", color = Warn)
+    }
+    if (confirm) AlertDialog(onDismissRequest = { confirm = false }, title = { Text(if (storeEdition) "Sign out of this phone?" else "Disconnect this phone?") },
+        text = { Text(if (storeEdition) "The app on this phone stops until you sign in again. The subscription goes on."
+            else "The app on this phone stops until it is connected again with a QR code from the portal.") },
+        confirmButton = { Button({ confirm = false; vm.account.disconnect() }) { Text(if (storeEdition) "Sign out" else "Disconnect") } },
         dismissButton = { TextButton({ confirm = false }) { Text("Cancel") } })
+
+    DeleteAccount(a, vm)
+    TextButton({ openUrl(ctx, StoreCoordinator.privacyUrl) }, modifier = Modifier.padding(top = 10.dp)) { Text("Privacy policy") }
+}
+
+/** Delete the account (both stores require it in the app): asked first. */
+@Composable
+private fun DeleteAccount(a: AccountUi, vm: ScannerViewModel) {
+    var ask by remember { mutableStateOf(false) }
+    Text("Delete account", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 18.dp))
+    Text("Deletes the account with its collection and missing cards, and signs out every device.", color = Muted, fontSize = 13.sp)
+    OutlinedButton({ ask = true }, enabled = !a.busy, modifier = Modifier.padding(top = 8.dp)) { Text("Delete account…", color = Warn) }
+    if (ask) AlertDialog(onDismissRequest = { ask = false }, title = { Text("Delete your account?") },
+        text = { Text("Your collection, missing cards and sign-ins are deleted at once, and every device is signed out. " +
+            "The subscription stops renewing; time already paid isn't refunded. This can't be undone.") },
+        confirmButton = { Button({ ask = false; vm.account.deleteAccount() }) { Text("Delete") } },
+        dismissButton = { TextButton({ ask = false }) { Text("Cancel") } })
+}
+
+/** where Manage subscription leads: the store's page for a store subscription; the portal only in the direct edition */
+private fun manageUrl(a: AccountUi): String? {
+    val st = a.status
+    return when {
+        !storeEdition -> a.portalUrl
+        st?.source == "google_play" -> st.manageUrl ?: "https://play.google.com/store/account/subscriptions"
+        else -> null
+    }
+}
+
+/** the Activity behind a Compose context (the store's sheets need it) */
+fun Context.activity(): android.app.Activity? = when (this) {
+    is android.app.Activity -> this
+    is android.content.ContextWrapper -> baseContext.activity()
+    else -> null
+}
+
+// ---------------------------------------------------------------- the Play edition: sign-in, plans, devices
+
+/** Sign in to subscribe (or to use a subscription): Continue with Google, or a code by email; the portal's QR code too. */
+@Composable
+private fun StoreSignIn(state: UiState, vm: ScannerViewModel, camera: @Composable (Modifier) -> Unit) {
+    val a = state.account
+    val ctx = LocalContext.current
+    var withQr by rememberSaveable { mutableStateOf(false) }
+    var email by rememberSaveable { mutableStateOf("") }
+    var code by rememberSaveable { mutableStateOf("") }
+    if (withQr) {
+        ConnectPanel(state, vm, camera)
+        TextButton({ withQr = false }, modifier = Modifier.padding(top = 10.dp)) { Text("‹ Back to sign-in") }
+        return
+    }
+    Text("Overpriced Cardboard", color = Gold, fontSize = 26.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+    Text("Sign in to choose a plan, or to use the one you have.", color = Muted, fontSize = 14.sp, textAlign = TextAlign.Center,
+        modifier = Modifier.padding(top = 6.dp))
+    a.notice?.let { Text(it, color = Warn, fontSize = 15.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp)) }
+    if (BuildConfig.GOOGLE_SERVER_CLIENT_ID.isNotBlank()) {
+        Button({ ctx.activity()?.let { vm.signInWithGoogle(it) } }, enabled = !a.busy, modifier = Modifier.padding(top = 18.dp).widthIn(min = 260.dp)) {
+            Text("Continue with Google")
+        }
+        Text("or", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
+    }
+    val sentTo = a.emailSentTo
+    if (sentTo == null) {
+        OutlinedTextField(email, { email = it.trim().take(120) }, label = { Text("Email") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, autoCorrectEnabled = false),
+            modifier = Modifier.padding(top = 10.dp).widthIn(max = 360.dp).fillMaxWidth())
+        OutlinedButton({ vm.account.emailCode(email) }, enabled = !a.busy && email.contains('@'), modifier = Modifier.padding(top = 8.dp)) {
+            Text(if (BuildConfig.GOOGLE_SERVER_CLIENT_ID.isNotBlank()) "Use another email" else "Send me a code")
+        }
+    } else {
+        Text("We sent a 6-digit code to $sentTo.", color = Color.White, fontSize = 14.sp, textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 12.dp))
+        OutlinedTextField(code, { code = it.filter(Char::isDigit).take(6) }, label = { Text("Code") }, singleLine = true,
+            textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace, fontSize = 20.sp),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+            modifier = Modifier.padding(top = 8.dp).widthIn(max = 220.dp))
+        Button({ vm.account.emailVerify(code) }, enabled = !a.busy && code.length == 6, modifier = Modifier.padding(top = 8.dp)) { Text("Sign in") }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            TextButton({ code = ""; vm.account.emailBack() }) { Text("Another address") }
+            TextButton({ vm.account.emailCode(sentTo) }, enabled = !a.busy && System.currentTimeMillis() >= a.resendAt) { Text("Send again") }
+        }
+    }
+    if (a.busy) CircularProgressIndicator(Modifier.padding(top = 10.dp).size(24.dp), strokeWidth = 2.dp)
+    TextButton({ withQr = true }, modifier = Modifier.padding(top = 18.dp)) {
+        Text("Have a QR code from the portal? Connect with it", textAlign = TextAlign.Center)
+    }
+}
+
+/** the plan's features in words */
+private fun featureWords(f: List<String>): String = f.mapNotNull {
+    when (it) {
+        "scanner" -> "Scanner"; "trading" -> "Trading"; "youtube" -> "YouTube mode"; "recording" -> "recording"
+        "collection" -> "collection"; "wanted" -> "missing cards"; else -> null
+    }
+}.joinToString(" · ")
+
+/** Signed in, no running subscription: the plans with Google Play's prices. */
+@Composable
+private fun OffersPanel(state: UiState, vm: ScannerViewModel) {
+    val a = state.account
+    val s = a.store
+    val st = a.status
+    val ctx = LocalContext.current
+    LaunchedEffect(st?.accountId) { vm.store.refresh() }
+    Text(if (st == null || st.none) "Choose your plan" else "Your subscription has ended", color = if (st?.none == false) Warn else Color.White,
+        fontSize = 22.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+    st?.email?.let { Text("Signed in as $it", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp)) }
+    if (st != null && !st.emailVerified) Text("Confirm your email: open the link we sent you.", color = Gold, fontSize = 13.sp,
+        textAlign = TextAlign.Center, modifier = Modifier.padding(top = 4.dp))
+    if (s.loading) CircularProgressIndicator(Modifier.padding(top = 16.dp).size(28.dp), strokeWidth = 2.dp)
+    s.onSale.forEach { plan -> PlanCard(plan, s, enabled = !s.busy && !a.busy) { period -> ctx.activity()?.let { vm.store.buy(it, plan, period) } } }
+    if (!s.loading && s.onSale.isEmpty() && s.error == null)
+        Text("The plans aren't on sale in Google Play yet.", color = Muted, fontSize = 14.sp, modifier = Modifier.padding(top = 16.dp))
+    StoreLines(s)
+    if (s.busy) CircularProgressIndicator(Modifier.padding(top = 10.dp).size(24.dp), strokeWidth = 2.dp)
+    Text("A subscription renews automatically until you cancel it in Google Play.", color = Muted, fontSize = 12.sp,
+        textAlign = TextAlign.Center, modifier = Modifier.padding(top = 12.dp))
+    Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        TextButton({ vm.store.restore() }, enabled = !s.busy) { Text("Restore purchases") }
+        TextButton({ vm.account.check(force = true, manual = true) }, enabled = !a.busy) { Text("Check again") }
+    }
+    TextButton({ vm.account.disconnect() }, enabled = !a.busy) { Text("Sign out", color = Muted) }
+}
+
+@Composable
+private fun StoreLines(s: StoreUi) {
+    s.error?.let { Text("⚠ $it", color = Warn, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp)) }
+    s.note?.let { Text(it, color = Sure, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp)) }
+    if (s.waiting > 0) Text("A purchase waits to be confirmed: it is sent again as soon as there is a connection.", color = Muted,
+        fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
+}
+
+/** a plan: what it unlocks, and a button per period with Google Play's price */
+@Composable
+private fun PlanCard(plan: io.github.pmaxai.cardscanner.store.PlanOffer, s: StoreUi, enabled: Boolean, onBuy: (String) -> Unit) {
+    Column(Modifier.padding(top = 14.dp).widthIn(max = 420.dp).fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(14.dp)) {
+        Text(plan.name, color = Gold, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+        Text(featureWords(plan.features), color = Muted, fontSize = 13.sp)
+        Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            s.price(plan, "monthly")?.let { o -> Button({ onBuy("monthly") }, enabled = enabled) { Text("${o.price} / month") } }
+            s.price(plan, "yearly")?.let { o -> OutlinedButton({ onBuy("yearly") }, enabled = enabled) { Text("${o.price} / year") } }
+        }
+    }
+}
+
+/** ⚙ → Account in the Play edition: manage in Google Play, extra devices, change plan, restore. */
+@Composable
+private fun StorePart(state: UiState, vm: ScannerViewModel, st: AccountStatus) {
+    val a = state.account
+    val s = a.store
+    val ctx = LocalContext.current
+    LaunchedEffect(st.accountId) { vm.store.refresh() }
+    if (!st.emailVerified) Text("Confirm your email: open the link we sent to ${st.email ?: "you"}.", color = Gold, fontSize = 13.sp,
+        modifier = Modifier.padding(top = 6.dp))
+    when (st.source) {
+        "google_play" -> Button({ manageUrl(a)?.let { openUrl(ctx, it) } }, modifier = Modifier.padding(top = 10.dp)) { Text("Manage subscription") }
+        "web" -> Text("This subscription is managed on the website.", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
+    }
+    if (st.source == "google_play" && st.active) {
+        val dev = s.devices(st)
+        Text("Extra devices", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 18.dp))
+        Text("1 device is included. Bought in the app: ${st.devicesInStore}" +
+            (if (st.devicesOnWeb > 0) " · on the website: ${st.devicesOnWeb}" else ""), color = Muted, fontSize = 13.sp)
+        if (dev == null) {
+            Text("Extra devices and plan changes work on the phone whose Google account bought the subscription. Try Restore purchases.",
+                color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+        } else {
+            val (have, max) = dev
+            val plan = s.offers.firstOrNull { it.plan == st.plan }
+            val next = plan?.deviceProductIds?.firstOrNull { it !in (s.purchase?.products ?: emptyList()) }
+            val nextPrice = next?.let { id -> s.prices[id]?.values?.firstOrNull()?.price }
+            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton({ ctx.activity()?.let { vm.store.addDevice(it) } }, enabled = !s.busy && have < max) {
+                    Text("+ Add a device" + (nextPrice?.let { " · $it" } ?: ""))
+                }
+                OutlinedButton({ ctx.activity()?.let { vm.store.removeDevice(it) } }, enabled = !s.busy && have > 0) { Text("Remove one") }
+            }
+            Text("$have of $max extra devices in the app. A removed device runs to the end of its period.", color = Muted, fontSize = 12.sp)
+            val others = s.onSale.filter { it.plan != st.plan }
+            if (others.isNotEmpty()) {
+                Text("Plan", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 18.dp))
+                others.forEach { o ->
+                    OutlinedButton({ ctx.activity()?.let { vm.store.changePlan(it, o) } }, enabled = !s.busy, modifier = Modifier.padding(top = 6.dp)) {
+                        Text("Switch to ${o.name}" + (s.price(o, "monthly")?.let { " · ${it.price} / month" } ?: ""))
+                    }
+                }
+                Text("A bigger plan starts at once; a smaller one from the next renewal. Extra devices move with it.", color = Muted, fontSize = 12.sp)
+            }
+        }
+    }
+    StoreLines(s)
+    if (s.busy) CircularProgressIndicator(Modifier.padding(top = 8.dp).size(22.dp), strokeWidth = 2.dp)
+    TextButton({ vm.store.restore() }, enabled = !s.busy) { Text("Restore purchases") }
 }
 
 // ---------------------------------------------------------------- collection and missing cards

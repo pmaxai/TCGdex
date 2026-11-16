@@ -73,6 +73,19 @@ data class AccountStatus(
     val s3Enabled: Boolean,
     val portalUrl: String?,
     val json: JSONObject,
+    /** signed in for buying in the store, never had a subscription (`status: "none"`) */
+    val none: Boolean = false,
+    /** fixed per account: passed with every store purchase (Google: obfuscatedAccountId) */
+    val storeRef: String? = null,
+    /** false while an account made in the app hasn't clicked its confirmation link */
+    val emailVerified: Boolean = true,
+    /** where the subscription is managed: web, google_play, app_store */
+    val source: String? = null,
+    /** "Manage subscription": the portal's page for web, the store's page for the stores */
+    val manageUrl: String? = null,
+    /** extra devices bought in the app (Play add-ons) and on the website */
+    val devicesInStore: Int = 0,
+    val devicesOnWeb: Int = 0,
 ) {
     /** a feature the server unlocked (an inactive answer unlocks nothing) */
     fun has(feature: String): Boolean = active && features[feature] == true
@@ -117,6 +130,13 @@ data class AccountStatus(
                 s3Enabled = o.optJSONObject("services")?.optJSONObject("s3")?.optBoolean("enabled") == true,
                 portalUrl = str(o, "portal_url"),
                 json = o,
+                none = o.optString("status") == "none",
+                storeRef = str(acc, "store_ref"),
+                emailVerified = acc.optBoolean("email_verified", true),
+                source = str(sub, "source"),
+                manageUrl = str(sub, "manage_url"),
+                devicesInStore = dev.optInt("in_store", 0),
+                devicesOnWeb = dev.optInt("on_web", 0),
             )
         }
 
@@ -148,6 +168,12 @@ enum class AccountGate {
     }
 }
 
+/** this edition sells the subscription in the store (Google Play): no links to buying on the website */
+val storeEdition: Boolean get() = storeEditionForTests ?: io.github.pmaxai.cardscanner.BuildConfig.STORE_BILLING
+
+/** tests: draw the other edition's screens */
+@Volatile var storeEditionForTests: Boolean? = null
+
 /** An error answer of the account API: `{ "error": "device_limit", "message": "…" }`. */
 class AccountException(val status: Int, val error: String, message: String?, val json: JSONObject? = null) :
     Exception(message ?: error) {
@@ -168,7 +194,16 @@ class AccountException(val status: Int, val error: String, message: String?, val
         "code_expired" -> "This code has expired or was already used. Show a new one in the portal: Account › Devices › Connect a device."
         "device_limit" -> "All " + (json?.optInt("seats")?.takeIf { it > 0 }?.let { "$it " } ?: "") +
             "devices of your subscription are in use. Remove one in the portal (Account › Devices) or add a device."
-        "subscription_required" -> "Your account has no active subscription. Subscribe at overpricedcardboard.com/app."
+        "subscription_required" -> if (storeEdition) "Your account has no active subscription."
+            else "Your account has no active subscription. Subscribe at overpricedcardboard.com/app."
+        "invalid_identity" -> "Google didn't confirm the sign-in. Try again."
+        "invalid_email" -> "That isn't an email address."
+        "wrong_code" -> "That code isn't right" + (json?.optInt("tries_left", -1)?.takeIf { it >= 0 }?.let { " – $it tries left." } ?: ".")
+        "already_subscribed" -> "This account already has a subscription" +
+            (when (json?.optString("source")) { "web" -> " from the website"; "google_play" -> " from Google Play"; else -> "" }) + ". Nothing new was bought."
+        "linked_elsewhere" -> "This purchase belongs to another account" + (json?.optString("owner")?.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: "") + "."
+        "invalid_purchase" -> "Google Play doesn't know this purchase."
+        "store_unavailable" -> "Google didn't answer just now. The purchase is kept and sent again."
         "rate_limited" -> "Too many tries – please wait a few minutes."
         "feature_not_included" -> "Your plan doesn't include this."
         else -> message?.takeIf { it.isNotBlank() && it != error } ?: "The server answered $status ($error)."

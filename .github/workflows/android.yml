@@ -137,6 +137,8 @@ jobs:
           POKESHOP_STAGING_SECRET: ${{ secrets.POKESHOP_STAGING_SECRET }}
           # a device token of a test subscription on staging.overpricedcardboard.com (optional; without it that test is skipped)
           ACCOUNT_STAGING_TOKEN: ${{ secrets.ACCOUNT_STAGING_TOKEN }}
+          # the staging server's access header for the store tests (from the shop team; without it they are skipped)
+          ACCOUNT_STAGING_ACCESS: ${{ secrets.ACCOUNT_STAGING_ACCESS }}
         with:
           api-level: 34
           arch: x86_64
@@ -145,7 +147,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           disable-animations: true
           working-directory: android
-          script: ./gradlew --no-daemon connectedDirectDebugAndroidTest; s=$?; adb logcat -d -s ParityTest:I ScriptDetection:I ShopStaging:I RecordingE2E:I Account:I ZoomKept:I Templates:I GallerySaver:I Recording:W CardScanner:W AndroidRuntime:E; exit $s
+          script: ./gradlew --no-daemon connectedDirectDebugAndroidTest; s=$?; adb logcat -d -s ParityTest:I ScriptDetection:I ShopStaging:I RecordingE2E:I Account:I ZoomKept:I Templates:I GallerySaver:I Store:I PackUpdate:I Recording:W CardScanner:W AndroidRuntime:E; exit $s
 
       - uses: actions/upload-artifact@v4
         continue-on-error: true      # a hiccup of GitHub's artifact store doesn't fail a good build
