@@ -182,10 +182,12 @@ class AccountCoordinator(
                 if (st?.has("wanted") == true) refreshWanted()
                 sync()
             } catch (e: AccountException) {
-                if (e.lostToken) lost(e) else publish { it.copy(busy = false, error = if (manual) e.friendly else null) }
+                // a check nobody asked for leaves the screen's message alone: right after Check again it
+                // would wipe what that one just said
+                if (e.lostToken) lost(e) else if (manual) publish { it.copy(busy = false, error = e.friendly) }
             } catch (e: Exception) {
                 load()      // valid_until may have passed meanwhile
-                publish { it.copy(busy = false, error = if (manual) offline(e, "the subscription can't be checked now.") else null) }
+                if (manual) publish { it.copy(busy = false, error = offline(e, "the subscription can't be checked now.")) }
             } finally {
                 val again = synchronized(this@AccountCoordinator) {
                     checking = false
