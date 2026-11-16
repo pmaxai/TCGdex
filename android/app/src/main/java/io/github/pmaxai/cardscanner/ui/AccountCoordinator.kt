@@ -92,6 +92,7 @@ class AccountCoordinator(
     val store = AccountStore(app)
     @Volatile private var checking = false
     @Volatile private var syncing = false
+    @Volatile private var syncAgain = false
     private var transferPoll: Job? = null
     private var retry: Job? = null
 
@@ -163,8 +164,11 @@ class AccountCoordinator(
         val token = store.token ?: return
         val last = store.lastCheck
         if (!force && last != null && System.currentTimeMillis() - last < HOUR) return
-        if (checking) return
-        checking = true
+        // one at a time; asked again meanwhile (Check again, right after pairing): once more afterwards
+        synchronized(this) {
+            if (checking) { if (force) { checkAgain = true; checkAgainManual = checkAgainManual || manual }; return }
+            checking = true
+        }
         if (manual) publish { it.copy(busy = true, error = null) }
         scope.launch(Dispatchers.IO) {
             try {
@@ -183,10 +187,16 @@ class AccountCoordinator(
                 load()      // valid_until may have passed meanwhile
                 publish { it.copy(busy = false, error = if (manual) offline(e, "the subscription can't be checked now.") else null) }
             } finally {
-                checking = false
+                val again = synchronized(this@AccountCoordinator) {
+                    checking = false
+                    (checkAgain to checkAgainManual).also { checkAgain = false; checkAgainManual = false }
+                }
+                if (again.first) check(force = true, manual = again.second)
             }
         }
     }
+    @Volatile private var checkAgain = false
+    @Volatile private var checkAgainManual = false
 
     /** The token doesn't count any more: forget it and the saved answer, say why, back to Connect. */
     private fun lost(e: AccountException) {
@@ -381,10 +391,15 @@ class AccountCoordinator(
      * again in a minute while the app is open). A 400: dropped, with why.
      */
     fun sync() {
-        if (syncing || store.token == null) return
-        syncing = true
+        if (store.token == null) return
+        // one at a time; a change made meanwhile is sent right after
+        synchronized(this) {
+            if (syncing) { syncAgain = true; return }
+            syncing = true
+        }
         scope.launch(Dispatchers.IO) {
             var stuck = false
+            var again = false
             try {
                 while (true) {
                     val token = store.token ?: break
@@ -410,9 +425,10 @@ class AccountCoordinator(
                     }
                 }
             } finally {
-                syncing = false
+                again = synchronized(this@AccountCoordinator) { syncing = false; syncAgain.also { syncAgain = false } }
                 publishWanted()
             }
+            if (again && !stuck) { sync(); return@launch }
             if (stuck && store.token != null && store.queue().isNotEmpty()) {
                 retry?.cancel()
                 retry = scope.launch { delay(60_000); sync() }
