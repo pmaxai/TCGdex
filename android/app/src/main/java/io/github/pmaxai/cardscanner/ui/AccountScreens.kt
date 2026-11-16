@@ -426,11 +426,14 @@ private fun CreatorCode(s: StoreUi, vm: ScannerViewModel) {
     }
 }
 
-/** "€5.60 / month for 3 months, then €7.00" */
+/** "€5.60 / month for 3 months, then €7.00"; "€60.48 for the first year, then €75.60 / year" */
 private fun offerText(o: io.github.pmaxai.cardscanner.store.StoreOffer, unit: String): String {
     val n = o.introCycles
-    return if (o.introPrice != null && n > 0) "${o.introPrice} / $unit for " + (if (n == 1) "1 $unit" else "$n ${unit}s") + ", then ${o.price}"
-    else "${o.price} / $unit"
+    return when {
+        o.introPrice == null || n <= 0 -> "${o.price} / $unit"
+        n == 1 -> "${o.introPrice} for the first $unit, then ${o.price} / $unit"
+        else -> "${o.introPrice} / $unit for $n ${unit}s, then ${o.price}"
+    }
 }
 
 /** a plan: what it unlocks, and a button per period with Google Play's price (a creator code's discount when there is one) */

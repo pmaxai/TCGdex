@@ -107,7 +107,8 @@ class StoreScreenshotTest {
                 "plans" -> { compose.onNodeWithText("Choose your plan").assertExists(); compose.onNodeWithText("€12.00 / month").assertExists()
                     compose.onNodeWithText("Have a creator code?").assertExists() }
                 "plans-code" -> { compose.onNodeWithText("Creator code MISTY · 20 % off for 3 months").assertExists()
-                    compose.onNodeWithText("€9.60 / month for 3 months, then €12.00").assertExists() }
+                    compose.onNodeWithText("€9.60 / month for 3 months, then €12.00").assertExists()
+                    compose.onNodeWithText("€103.68 for the first year, then €129.60 / year").assertExists() }
             }
             Screenshots.save(compose, "store-$name.png")
         }
