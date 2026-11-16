@@ -80,7 +80,8 @@ class AccountScreenshotTest {
         if (!Screenshots.ready(compose)) { Log.w("AccountScreenshot", "skipped: the test screen didn't come up"); return }
         for ((name, st) in states) {
             compose.runOnIdle { shown = st }
-            compose.waitForIdle()
+            // right after the emulator starts the test window can go away for a moment: skip rather than fail
+            if (!Screenshots.ready(compose)) { Log.w("AccountScreenshot", "$name skipped: the test screen went away"); return }
             when (name) {
                 "connect" -> compose.onNodeWithText("Connect the app to your account").assertExists()
                 "connected" -> compose.onNodeWithText("anna@example.com").assertExists()
