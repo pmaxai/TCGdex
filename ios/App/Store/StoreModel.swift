@@ -252,13 +252,18 @@ final class StoreModel: ObservableObject {
         note = nil
         Task { [self] in
             do { try await billing.sync() } catch { /* cancelled sign-in: what the phone has is still sent */ }
-            let all = await billing.current()
-            var sent = 0
-            for t in all { if await report(t, quiet: false) { sent += 1 } }
-            if all.isEmpty { note = "The App Store has no subscription for this phone's Apple account." }
-            else if sent > 0 { note = "Restored." }
+            await reportHeld()
             busy = false
         }
+    }
+
+    /// Every transaction the phone's Apple account holds goes to the server (Restore, after asking the App Store).
+    func reportHeld() async {
+        let all = await billing.current()
+        var sent = 0
+        for t in all { if await report(t, quiet: false) { sent += 1 } }
+        if all.isEmpty { note = "The App Store has no subscription for this phone's Apple account." }
+        else if sent > 0 { note = "Restored." }
     }
 
     /**

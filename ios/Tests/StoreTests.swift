@@ -104,20 +104,15 @@ final class StoreTests: XCTestCase {
     }
 
     /**
-     * A purchase in StoreKitTest: first through the app's own purchase call (the sheet); where that
-     * doesn't answer in a unit test, as the App Store's own purchase (SKTestSession) for the account's
-     * store_ref, which the app's Restore then reports, the same way a purchase made elsewhere arrives.
+     * A purchase in StoreKitTest. The purchase sheet and the App Store sign-in of Restore need a screen,
+     * which a unit test hasn't: the purchase is made as the App Store's own (SKTestSession) for the
+     * account's store_ref, and the app reports what the phone holds, as after Restore.
      */
-    private func storeKitBuy(_ sk: SKTestSession, _ store: StoreModel, _ a: AccountModel, _ product: String, _ start: () -> Void) async throws {
-        let before = StandIn.calls("/store/apple").count
-        start()
-        let answered = await within(8) { !store.busy }
-        if answered && StandIn.calls("/store/apple").count > before { log("bought \(product) through the app's purchase call"); return }
-        log("the purchase sheet didn't answer in the unit test (\(store.error ?? "no answer")): buying \(product) through SKTestSession")
+    private func storeKitBuy(_ sk: SKTestSession, _ store: StoreModel, _ a: AccountModel, _ product: String) async throws {
         let ref = try XCTUnwrap(a.status?.storeRef.flatMap(UUID.init(uuidString:)))
-        _ = try await sk.buyProduct(identifier: product, options: [.appAccountToken(ref)])
-        _ = await within(15) { !store.busy }
-        store.restore()
+        let t = try await sk.buyProduct(identifier: product, options: [.appAccountToken(ref)])
+        log("bought \(product) in StoreKitTest: transaction \(t.id), appAccountToken \(t.appAccountToken?.uuidString.lowercased() ?? "-")")
+        await store.reportHeld()
     }
 
     private func signedIn(_ email: String = "anna@test.overpricedcardboard.com") async throws -> AccountModel {
@@ -164,8 +159,8 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.price(collector, "yearly")?.period, "yearly")
         XCTAssertEqual(PlanCard.text(try XCTUnwrap(store.price(collector, "monthly")), "month").hasSuffix(" / month"), true)
 
-        try await storeKitBuy(sk, store, a, "oc_collector_monthly") { store.buy(collector, "monthly") }
-        try await until("the account is active") { a.gate == .open && !store.busy }
+        try await storeKitBuy(sk, store, a, "oc_collector_monthly")
+        try await until("the account is active") { a.gate == .open }
         let report = try XCTUnwrap(StandIn.calls("/store/apple").last)
         let jws = try XCTUnwrap(report.body["signed_transaction"] as? String)
         let payload = try XCTUnwrap(StandIn.payload(jws))
@@ -184,10 +179,9 @@ final class StoreTests: XCTestCase {
         // an extra device: the product for one extra device of the plan's period
         XCTAssertEqual(store.devices?.have, 0)
         XCTAssertEqual(store.devices?.max, 2)
-        try await storeKitBuy(sk, store, a, "oc_collector_devices_1_monthly") { store.changeDevices(by: 1) }
+        try await storeKitBuy(sk, store, a, "oc_collector_devices_1_monthly")
         try await until("one extra device") { a.status?.devicesInStore == 1 }
-        XCTAssertEqual(StandIn.payload(StandIn.calls("/store/apple").last?.body["signed_transaction"] as? String ?? "")?["productId"] as? String,
-                       "oc_collector_devices_1_monthly")
+        XCTAssertTrue(StandIn.calls("/store/apple").contains { StandIn.payload($0.body["signed_transaction"] as? String ?? "")?["productId"] as? String == "oc_collector_devices_1_monthly" })
     }
 
     func testRestorePurchasesOnANewPhone() async throws {
@@ -195,9 +189,8 @@ final class StoreTests: XCTestCase {
         let first = try await signedIn()
         let store = StoreModel(account: first, billing: StoreKitBilling())
         await store.loadOffers()
-        let collector = try XCTUnwrap(store.onSale.first)
-        try await storeKitBuy(sk, store, first, "oc_collector_yearly") { store.buy(collector, "yearly") }
-        try await until("bought") { first.gate == .open && !store.busy }
+        try await storeKitBuy(sk, store, first, "oc_collector_yearly")
+        try await until("bought") { first.gate == .open }
 
         // the same Apple account on a "new phone", and a server that lost the purchase: Restore purchases sends it again
         let reports = StandIn.calls("/store/apple").count
@@ -207,8 +200,8 @@ final class StoreTests: XCTestCase {
         let second = try await signedIn()
         XCTAssertEqual(second.gate, .ended)
         let store2 = StoreModel(account: second, billing: StoreKitBilling())
-        store2.restore()
-        try await until("restored") { !store2.busy && StandIn.calls("/store/apple").count > reports }
+        await store2.reportHeld()
+        try await until("restored") { StandIn.calls("/store/apple").count > reports }
         XCTAssertEqual(second.status?.basePlan, "yearly")
         XCTAssertEqual(second.gate, .open)
         log("restore: \(store2.note ?? store2.error ?? "-")")
