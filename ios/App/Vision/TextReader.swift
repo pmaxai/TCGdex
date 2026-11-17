@@ -314,7 +314,7 @@ final class TextReader {
             if n.isEmpty { return 0 }
             return (printed.contains(n) ? 10 + n.count : 0) + (knownN.contains(n) ? 5 : 0)
         }
-        let ranked = cands.map { ($0, score($0)) }.enumerated().sorted { a, b in a.element.1 != b.element.1 ? a.element.1 > b.element.1 : a.offset < b.offset }.map(\.element)
+        let ranked = cands.map { ($0, score($0)) }.enumerated().sorted { a, b in a.element.1 != b.element.1 ? a.element.1 > b.element.1 : a.offset < b.offset }.map { $0.element }
         let (best, top) = ranked[0]
         if top > 0 && (ranked.count < 2 || ranked[1].1 != top) { return best }
         if top == 0 && cands.count == 1 && totalKnown && printed.isEmpty { return best }

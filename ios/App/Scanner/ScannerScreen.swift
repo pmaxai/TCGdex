@@ -189,7 +189,12 @@ struct GuideOverlay: View {
             let w = max(1, Int(sz.width)), h = max(1, Int(sz.height))
             let g = ScannerEngine.guideQuad(width: w, height: h, prior: ScannerEngine.guidePrior(width: w, height: h, size: model.settings.guideFraction))
             let rect = CGRect(x: g[0].x, y: g[0].y, width: g[1].x - g[0].x, height: g[3].y - g[0].y)
-            let col: Color = switch model.liveConfidence { case .sure: Theme.sure; case .likely: Theme.likely; case .unsure: .white }
+            let col: Color
+            switch model.liveConfidence {
+            case .sure: col = Theme.sure
+            case .likely: col = Theme.likely
+            case .unsure: col = .white
+            }
             let frame = Path(roundedRect: rect, cornerRadius: 9)
             var dim = Path(CGRect(origin: .zero, size: sz))
             dim.addPath(frame)

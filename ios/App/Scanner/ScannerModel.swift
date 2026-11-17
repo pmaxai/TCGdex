@@ -208,9 +208,9 @@ final class ScannerModel: ObservableObject {
         gate.set(picking: false)
         guard let hit else { maybeAlert(first); return }
         // the card straightened, upright, for reading its text
-        let reader = reader, engine = engine
+        let textReader = reader, eng = engine
         textQueue.async { [weak self] in
-            let text = engine.readText(img, r, hit, reader: reader)
+            let text = eng.readText(img, r, hit, reader: textReader)
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.refine(first.serial, group, hit, text) } }
         }
     }

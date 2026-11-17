@@ -35,7 +35,10 @@ struct CandidateRow: View {
     var body: some View {
         HStack(spacing: 12) {
             AsyncImage(url: c.image.flatMap(URL.init(string:))) { phase in
-                if case .success(let img) = phase { img.resizable().scaledToFit() } else { RoundedRectangle(cornerRadius: 4).fill(Theme.panel) }
+                switch phase {
+                case .success(let img): img.resizable().scaledToFit()
+                default: RoundedRectangle(cornerRadius: 4).fill(Theme.panel)
+                }
             }
             .frame(width: 44, height: 62)
             VStack(alignment: .leading, spacing: 2) {

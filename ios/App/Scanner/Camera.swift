@@ -14,7 +14,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unc
     private var device: AVCaptureDevice?
     private var configured = false
     /// called on the camera queue with each frame, upright (portrait)
-    var onFrame: ((RGBImage) -> Void)?
+    var onFrame: (@Sendable (RGBImage) -> Void)?
 
     var maxZoom: CGFloat { min(device?.maxAvailableVideoZoomFactor ?? 1, 10) }
     /// the zoom factor a person sees as 1× (virtual cameras start on the ultra wide)
