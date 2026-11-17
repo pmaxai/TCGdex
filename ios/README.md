@@ -86,7 +86,8 @@ sets this.
      `StoreKit/OverpricedCardboard.storekit`.
    - Fill in the App Store Server Notifications URLs (the shop doc lists them).
    - Create the shop's in-app purchase key.
-3. **For CI uploads:** create an App Store Connect API key with the App Manager role. Put it into
+3. **For CI uploads:** create an App Store Connect API key with the Admin role (with App Manager, Xcode can't
+   use the cloud-managed distribution certificate). Put it into
    GitHub:
    - The secrets `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID` and
      `APP_STORE_CONNECT_KEY_P8` (the .p8 file, base64).

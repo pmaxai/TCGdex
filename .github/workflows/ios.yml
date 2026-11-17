@@ -148,7 +148,7 @@ jobs:
   testflight:
     # by hand only, after the tests passed. Needs (GitHub → Settings → Secrets and variables):
     #   secrets   APP_STORE_CONNECT_KEY_ID, APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_KEY_P8
-    #             (the API key's .p8 file, base64; role App Manager or Admin)
+    #             (the API key's .p8 file, base64; role Admin: cloud signing needs it)
     #   variable  APPLE_TEAM_ID (the 10-character team ID)
     # Signing is automatic (Xcode makes the certificate and profile with the API key), so no
     # certificate is stored anywhere. The key is written to the runner only for this job.
