@@ -19,6 +19,7 @@ final class StandIn: URLProtocol {
         var wanted: [[String: Any]] = []
         var collection: [[String: Any]] = []
         var devicesInStore = 0
+        var emailVerified = false
         init(id: String, email: String) { self.id = id; self.email = email }
     }
 
@@ -33,10 +34,12 @@ final class StandIn: URLProtocol {
     /// every call fails as if there were no connection
     nonisolated(unsafe) static var offline = false
     nonisolated(unsafe) static var nextId = 1
+    /// the line-up of the Apple setup guide: 1 to 4 extra devices for both plans and periods (review screenshots)
+    nonisolated(unsafe) static var fullLineup = false
 
     static func reset() {
         lock.lock(); defer { lock.unlock() }
-        accounts = [:]; tokens = [:]; calls = []; failNextReport = false; offline = false; nextId = 1
+        accounts = [:]; tokens = [:]; calls = []; failNextReport = false; offline = false; nextId = 1; fullLineup = false
     }
 
     static func session() -> URLSession {
@@ -87,7 +90,7 @@ final class StandIn: URLProtocol {
             "status": a.active ? "active" : "none",
             "server_time": iso.string(from: now),
             "valid_until": iso.string(from: now.addingTimeInterval(a.active ? 30 * 86_400 : 0)),
-            "account": ["id": a.id, "email": a.email, "name": NSNull(), "store_ref": a.storeRef, "email_verified": false] as [String: Any],
+            "account": ["id": a.id, "email": a.email, "name": NSNull(), "store_ref": a.storeRef, "email_verified": a.emailVerified] as [String: Any],
             "device": ["id": "dev_1", "name": "iPhone"],
             "features": a.active ? ["scanner": true, "trading": true, "collection": true, "wanted": true, "youtube": a.plan == "creator"] : [String: Bool](),
         ]
@@ -152,9 +155,13 @@ final class StandIn: URLProtocol {
                 ["plan": key, "name": name, "features": features, "google": NSNull(),
                  "apple": ["product_ids": ["monthly": "oc_\(key)_monthly", "yearly": "oc_\(key)_yearly"], "device_product_ids": devices] as [String: Any]]
             }
-            return (200, ["offers": [plan("collector", "Collector", ["scanner", "trading", "collection", "wanted"],
-                                          devices: ["monthly": ["oc_collector_devices_1_monthly", "oc_collector_devices_2_monthly"]]),
-                                     plan("creator", "Creator", ["scanner", "trading", "youtube", "recording", "collection", "wanted"], devices: [:])],
+            func lineup(_ key: String) -> [String: [String]] {
+                ["monthly": (1...4).map { "oc_\(key)_devices_\($0)_monthly" }, "yearly": (1...4).map { "oc_\(key)_devices_\($0)_yearly" }]
+            }
+            let collectorDevices = Self.fullLineup ? lineup("collector") : ["monthly": ["oc_collector_devices_1_monthly", "oc_collector_devices_2_monthly"]]
+            let creatorDevices = Self.fullLineup ? lineup("creator") : [:]
+            return (200, ["offers": [plan("collector", "Collector", ["scanner", "trading", "collection", "wanted"], devices: collectorDevices),
+                                     plan("creator", "Creator", ["scanner", "trading", "youtube", "recording", "collection", "wanted"], devices: creatorDevices)],
                           "affiliate": a.affiliate.map { $0 as Any } ?? NSNull()])
         case ("POST", "/store/apple"):
             if Self.failNextReport { Self.failNextReport = false; return err(503, "store_unavailable") }
