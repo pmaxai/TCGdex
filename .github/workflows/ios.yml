@@ -1,0 +1,128 @@
+name: iOS app
+
+# Builds the iPhone app (ios/) with the latest data pack on a Mac and self-tests it on the
+# iPhone simulator: the same comparison with the Python pipeline as the Android app's ParityTest.
+# Signing, TestFlight and the App Store follow once the Apple developer account is set up.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+
+concurrency:
+  group: ios
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  OPENCV_VERSION: "4.12.0"
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Xcode
+        run: |
+          ls -d /Applications/Xcode*.app
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: OpenCV for iOS (cached)
+        id: opencv-cache
+        uses: actions/cache@v4
+        with:
+          path: ios/Vendor/opencv2.xcframework
+          # core + imgproc only, arm64 device and simulator (bump the suffix when the build options change)
+          key: opencv2-xcframework-${{ env.OPENCV_VERSION }}-ios17-core-imgproc-v1
+
+      - name: Build OpenCV (core and imgproc) as an xcframework
+        if: steps.opencv-cache.outputs.cache-hit != 'true'
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+        run: |
+          git clone -q --depth 1 --branch "$OPENCV_VERSION" https://github.com/opencv/opencv.git "$RUNNER_TEMP/opencv"
+          without=""
+          for m in calib3d dnn features2d flann gapi highgui imgcodecs ml objdetect photo stitching video videoio objc ts; do
+            without="$without --without $m"
+          done
+          python3 "$RUNNER_TEMP/opencv/platforms/apple/build_xcframework.py" --out "$RUNNER_TEMP/ocv" \
+            --iphoneos_archs arm64 --iphonesimulator_archs arm64 --build_only_specified_archs \
+            --iphoneos_deployment_target 17.0 --disable-swift --disable-bitcode $without \
+            > "$RUNNER_TEMP/opencv-build.log" 2>&1 || { tail -n 200 "$RUNNER_TEMP/opencv-build.log"; exit 1; }
+          tail -n 20 "$RUNNER_TEMP/opencv-build.log"
+          mkdir -p ios/Vendor
+          cp -R "$RUNNER_TEMP/ocv/opencv2.xcframework" ios/Vendor/
+          find ios/Vendor/opencv2.xcframework -maxdepth 2
+          du -sh ios/Vendor/opencv2.xcframework
+
+      - name: Get the data pack and test photos
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p ios/pack ios/Tests/Fixtures/parity ios/Tests/Fixtures/real
+          gh release download data-pack -D ios/pack --clobber -p model.onnx -p index.f16 -p catalog.sqlite -p pack.json
+          gh release download data-pack -D ios/pack --clobber -p texture.u8 || echo "this data pack has no foil texture grids yet"
+          gh release download data-pack -D "$RUNNER_TEMP" --clobber -p parity.zip
+          unzip -o -q "$RUNNER_TEMP/parity.zip" -d ios/Tests/Fixtures/parity
+          find testdata/real -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) \
+            -exec cp {} ios/Tests/Fixtures/real/ \;
+          ls -la ios/pack ios/Tests/Fixtures/parity ios/Tests/Fixtures/real
+
+      - name: Generate the Xcode project
+        working-directory: ios
+        run: |
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          xcodegen --version
+          xcodegen generate
+
+      - name: Build for iPhone (unsigned)
+        # checks that the device build links (the archive for the App Store is signed later)
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild build -project OverpricedCardboard.xcodeproj -scheme OverpricedCardboard -configuration Release \
+            -destination 'generic/platform=iOS' -derivedDataPath build/device \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee device.log \
+            | grep -E '(error|warning: .*(CardCore|Bridge|App/)|BUILD (SUCCEEDED|FAILED)|\*\*)' || true
+          grep -q 'BUILD SUCCEEDED' device.log || { grep -E 'error' -A3 device.log | head -n 120; exit 1; }
+          app=$(find build/device -name 'OverpricedCardboard.app' -type d | head -n 1)
+          du -sh "$app"
+          lipo -info "$app/OverpricedCardboard"
+
+      - name: Self-test on the iPhone simulator (app vs. pipeline)
+        working-directory: ios
+        run: |
+          set -o pipefail
+          udid=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          d = json.load(sys.stdin)["devices"]
+          ios = sorted((k for k in d if "iOS" in k), key=lambda k: [int(x) for x in k.split("iOS-")[-1].split("-")], reverse=True)
+          for k in ios:
+              for dev in d[k]:
+                  if dev["name"].startswith("iPhone") and dev.get("isAvailable", True):
+                      print(dev["udid"]); sys.exit(0)
+          ')
+          echo "simulator: $udid"
+          xcrun simctl list devices | grep "$udid"
+          xcodebuild test -project OverpricedCardboard.xcodeproj -scheme OverpricedCardboard \
+            -destination "id=$udid" -derivedDataPath build/sim -resultBundlePath build/Tests.xcresult \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee test.log | grep -E '(ParityTest:|Test Case .*(passed|failed)|error:|\*\* TEST)' || true
+          grep -q '\*\* TEST SUCCEEDED \*\*' test.log || { grep -E 'error|failed' -A5 test.log | head -n 200; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: ios-logs
+          path: |
+            ios/device.log
+            ios/test.log
+          retention-days: 7
