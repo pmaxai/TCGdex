@@ -174,9 +174,7 @@ final class ScreenshotTests: XCTestCase {
             XCTAssertEqual(store.nextDevice?.product.displayPrice, plan == "creator" ? "€7.00" : "€4.00")
             let tab = NavigationStack { AccountView(account: a, store: store).navigationBarTitleDisplayMode(.inline) }
             // scrolled so that the plan, the devices row and its line under it are all in the picture
-            for by in [60, 76] as [CGFloat] {
-                try await shot("review-devices-\(plan)-\(Int(by))", tab, width: 400, height: 575, scrolledBy: by)
-            }
+            try await shot("review-devices-\(plan)", tab, width: 400, height: 575, scrolledBy: 60)
         }
     }
 }
