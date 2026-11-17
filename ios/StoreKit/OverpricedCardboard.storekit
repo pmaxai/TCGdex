@@ -1,0 +1,164 @@
+{
+  "identifier": "6B1D7C2E",
+  "nonRenewingSubscriptions": [],
+  "products": [],
+  "settings": {
+    "_applicationInternalID": "6740000001",
+    "_failTransactionsEnabled": false,
+    "_locale": "en_US",
+    "_storefront": "DEU",
+    "_storeKitErrors": []
+  },
+  "subscriptionGroups": [
+    {
+      "id": "21582201",
+      "localizations": [],
+      "name": "Overpriced Cardboard",
+      "subscriptions": [
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "11.99",
+          "familyShareable": false,
+          "groupNumber": 1,
+          "internalID": "6740000011",
+          "introductoryOffer": null,
+          "localizations": [
+            {
+              "description": "Creator",
+              "displayName": "Creator",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "oc_creator_monthly",
+          "recurringSubscriptionPeriod": "P1M",
+          "referenceName": "Creator monthly",
+          "subscriptionGroupID": "21582201",
+          "type": "RecurringSubscription",
+          "winbackOffers": []
+        },
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "129.49",
+          "familyShareable": false,
+          "groupNumber": 1,
+          "internalID": "6740000012",
+          "introductoryOffer": null,
+          "localizations": [
+            {
+              "description": "Creator",
+              "displayName": "Creator",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "oc_creator_yearly",
+          "recurringSubscriptionPeriod": "P1Y",
+          "referenceName": "Creator yearly",
+          "subscriptionGroupID": "21582201",
+          "type": "RecurringSubscription",
+          "winbackOffers": []
+        },
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "6.99",
+          "familyShareable": false,
+          "groupNumber": 2,
+          "internalID": "6740000013",
+          "introductoryOffer": null,
+          "localizations": [
+            {
+              "description": "Collector",
+              "displayName": "Collector",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "oc_collector_monthly",
+          "recurringSubscriptionPeriod": "P1M",
+          "referenceName": "Collector monthly",
+          "subscriptionGroupID": "21582201",
+          "type": "RecurringSubscription",
+          "winbackOffers": []
+        },
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "75.49",
+          "familyShareable": false,
+          "groupNumber": 2,
+          "internalID": "6740000014",
+          "introductoryOffer": null,
+          "localizations": [
+            {
+              "description": "Collector",
+              "displayName": "Collector",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "oc_collector_yearly",
+          "recurringSubscriptionPeriod": "P1Y",
+          "referenceName": "Collector yearly",
+          "subscriptionGroupID": "21582201",
+          "type": "RecurringSubscription",
+          "winbackOffers": []
+        }
+      ]
+    },
+    {
+      "id": "21582202",
+      "localizations": [],
+      "name": "Extra devices (Collector)",
+      "subscriptions": [
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "3.98",
+          "familyShareable": false,
+          "groupNumber": 1,
+          "internalID": "6740000022",
+          "introductoryOffer": null,
+          "localizations": [
+            {
+              "description": "2 extra devices",
+              "displayName": "2 extra devices",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "oc_collector_devices_2_monthly",
+          "recurringSubscriptionPeriod": "P1M",
+          "referenceName": "Collector 2 extra devices monthly",
+          "subscriptionGroupID": "21582202",
+          "type": "RecurringSubscription",
+          "winbackOffers": []
+        },
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "1.99",
+          "familyShareable": false,
+          "groupNumber": 2,
+          "internalID": "6740000021",
+          "introductoryOffer": null,
+          "localizations": [
+            {
+              "description": "1 extra device",
+              "displayName": "1 extra device",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "oc_collector_devices_1_monthly",
+          "recurringSubscriptionPeriod": "P1M",
+          "referenceName": "Collector 1 extra device monthly",
+          "subscriptionGroupID": "21582202",
+          "type": "RecurringSubscription",
+          "winbackOffers": []
+        }
+      ]
+    }
+  ],
+  "version": {
+    "major": 4,
+    "minor": 0
+  }
+}

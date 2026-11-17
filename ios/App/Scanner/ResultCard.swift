@@ -6,6 +6,7 @@ struct ResultCard: View {
     let s: Shown
     @ObservedObject var model: ScannerModel
     let onSearch: () -> Void
+    @EnvironmentObject var account: AccountModel
     @State private var fullscreen = false
 
     var body: some View {
@@ -49,6 +50,7 @@ struct ResultCard: View {
             }
 
             PriceBlock(s: s)
+            CollectionBar(account: account, s: s)
             if let h = s.history { PriceHistoryChart(history: h, printing: s.selected?.kind, hasNormal: s.priceCard.printings.contains { $0.kind == .normal }) }
             if model.settings.showPsa {
                 let printing = s.priceCard.printings.count > 1 ? s.selected?.kind : nil

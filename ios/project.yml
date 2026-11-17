@@ -63,6 +63,15 @@ targets:
         UIRequiresFullScreen: true
         NSCameraUsageDescription: The camera recognises your cards and shows their prices.
         ITSAppUsesNonExemptEncryption: false
+        # the account server (sign-in, subscription, nightly prices)
+        AccountURL: https://overpricedcardboard.com
+        # the nightly data pack, downloaded in the background
+        UIBackgroundModes: [processing]
+        BGTaskSchedulerPermittedIdentifiers: [com.overpricedcardboard.app.pack]
+    entitlements:
+      path: Generated/OverpricedCardboard.entitlements
+      properties:
+        com.apple.developer.applesignin: [Default]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.overpricedcardboard.app
@@ -86,8 +95,12 @@ targets:
         type: folder
         buildPhase: resources
         optional: true
+      # stand-in App Store products for StoreKitTest
+      - path: StoreKit/OverpricedCardboard.storekit
+        buildPhase: resources
     dependencies:
       - target: OverpricedCardboard
+      - sdk: StoreKitTest.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.overpricedcardboard.app.tests
@@ -103,6 +116,8 @@ schemes:
         OverpricedCardboardTests: [test]
     run:
       config: Debug
+      # purchases in Xcode without the App Store (stand-in products)
+      storeKitConfiguration: StoreKit/OverpricedCardboard.storekit
     test:
       config: Debug
       targets:

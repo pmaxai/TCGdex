@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 
-/// The app's data: the data pack (loaded once, off the main thread), its catalog and the scanner.
+/// The app's data: the data pack (loaded once, off the main thread), its catalog and the scanner; the account and the App Store.
 @MainActor
 final class AppModel: ObservableObject {
     enum State {
@@ -15,8 +15,16 @@ final class AppModel: ObservableObject {
     private(set) var catalog: Catalog?
     private(set) var engine: ScannerEngine?
     private(set) var scanner: ScannerModel?
+    let account: AccountModel
+    let store: StoreModel
 
-    init() {
+    init(account: AccountModel = AccountModel(), billing: AppStoreBilling = StoreKitBilling()) {
+        self.account = account
+        store = StoreModel(account: account, billing: billing)
+        account.onConnected = { [weak self] in self?.store.start() }
+        account.onAffiliate = { [weak self] result, aff in self?.store.signedInWithCode(result, aff) }
+        account.start()
+        store.start()
         Task { await load() }
     }
 
@@ -24,7 +32,8 @@ final class AppModel: ObservableObject {
         state = .loading
         do {
             let (p, c, e) = try await Task.detached(priority: .userInitiated) { () throws -> (Pack, Catalog, ScannerEngine) in
-                guard let dir = Pack.bundledDir else {
+                // a newer pack downloaded meanwhile takes over now (at the start, before anything is open)
+                guard let dir = PackUpdate.choose(bundled: Pack.bundledDir) else {
                     throw NSError(domain: "Pack", code: 1, userInfo: [NSLocalizedDescriptionKey: "The card data is missing from the app."])
                 }
                 let pack = try Pack(dir: dir)
@@ -36,5 +45,17 @@ final class AppModel: ObservableObject {
         } catch {
             state = .failed(error.localizedDescription)
         }
+    }
+
+    /// back in the app: the account check (after an hour), and the nightly prices
+    func onForeground() {
+        account.onForeground()
+        Task.detached { try? await PackUpdate.runOnce() }
+    }
+
+    /// a link into the app: a creator code (overpricedcardboard.com/r/CODE) goes with the first sign-in
+    func open(_ url: URL) {
+        guard let code = Affiliate.fromLink(url) else { return }
+        if account.store.token == nil { account.store.pendingAffiliate = code } else { store.applyCode(code) }
     }
 }
