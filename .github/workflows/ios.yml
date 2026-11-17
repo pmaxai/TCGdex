@@ -2,10 +2,16 @@ name: iOS app
 
 # Builds the iPhone app (ios/) with the latest data pack on a Mac and self-tests it on the
 # iPhone simulator: the same comparison with the Python pipeline as the Android app's ParityTest.
-# Signing, TestFlight and the App Store follow once the Apple developer account is set up.
+# Started by hand with "testflight", it also archives the app, signs it and uploads it to
+# App Store Connect (TestFlight); that needs the secrets listed at the job below.
 
 on:
   workflow_dispatch:
+    inputs:
+      testflight:
+        description: "Upload a signed build to TestFlight"
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -122,7 +128,7 @@ jobs:
           xcrun simctl list devices | grep "$udid"
           xcodebuild test -project OverpricedCardboard.xcodeproj -scheme OverpricedCardboard \
             -destination "id=$udid" -derivedDataPath build/sim -resultBundlePath build/Tests.xcresult \
-            CODE_SIGNING_ALLOWED=NO 2>&1 | tee test.log | grep -E '(ParityTest:|Test Case .*(passed|failed)|error:|\*\* TEST)' || true
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee test.log | grep -E '(ParityTest:|StoreTest:|^SHOT|Test Case .*(passed|failed)|error:|\*\* TEST)' || true
           grep -q '\*\* TEST SUCCEEDED \*\*' test.log || { grep -E 'error|failed' -A5 test.log | head -n 200; exit 1; }
 
       - uses: actions/upload-artifact@v4
@@ -134,3 +140,84 @@ jobs:
             ios/device.log
             ios/test.log
           retention-days: 7
+
+  testflight:
+    # by hand only, after the tests passed. Needs (GitHub → Settings → Secrets and variables):
+    #   secrets   APP_STORE_CONNECT_KEY_ID, APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_KEY_P8
+    #             (the API key's .p8 file, base64; role App Manager or Admin)
+    #   variable  APPLE_TEAM_ID (the 10-character team ID)
+    # Signing is automatic (Xcode makes the certificate and profile with the API key), so no
+    # certificate is stored anywhere. The key is written to the runner only for this job.
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.testflight
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Secrets present?
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          KEY_P8: ${{ secrets.APP_STORE_CONNECT_KEY_P8 }}
+          TEAM: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          missing=""
+          [ -n "$KEY_ID" ] || missing="$missing APP_STORE_CONNECT_KEY_ID"
+          [ -n "$ISSUER" ] || missing="$missing APP_STORE_CONNECT_ISSUER_ID"
+          [ -n "$KEY_P8" ] || missing="$missing APP_STORE_CONNECT_KEY_P8"
+          [ -n "$TEAM" ] || missing="$missing APPLE_TEAM_ID(variable)"
+          if [ -n "$missing" ]; then echo "::error::missing:$missing"; exit 1; fi
+
+      - name: OpenCV for iOS (cached)
+        uses: actions/cache/restore@v4
+        with:
+          path: ios/Vendor/opencv2.xcframework
+          key: opencv2-xcframework-${{ env.OPENCV_VERSION }}-ios17-core-imgproc-v1
+          fail-on-cache-miss: true
+
+      - name: Get the data pack
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p ios/pack
+          gh release download data-pack -D ios/pack --clobber -p model.onnx -p index.f16 -p catalog.sqlite -p pack.json
+          gh release download data-pack -D ios/pack --clobber -p texture.u8 || true
+
+      - name: Archive, sign and upload
+        working-directory: ios
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          KEY_P8: ${{ secrets.APP_STORE_CONNECT_KEY_P8 }}
+          TEAM: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          set -o pipefail
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          xcodegen generate
+          key="$RUNNER_TEMP/AuthKey.p8"
+          echo "$KEY_P8" | base64 --decode > "$key"
+          chmod 600 "$key"
+          auth=(-allowProvisioningUpdates -authenticationKeyPath "$key" -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER")
+          xcodebuild archive -project OverpricedCardboard.xcodeproj -scheme OverpricedCardboard -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath build/OverpricedCardboard.xcarchive \
+            DEVELOPMENT_TEAM="$TEAM" CODE_SIGN_STYLE=Automatic CURRENT_PROJECT_VERSION="${{ github.run_number }}" "${auth[@]}" 2>&1 \
+            | tee archive.log | grep -E '(error|warning: .*sign|ARCHIVE (SUCCEEDED|FAILED)|\*\*)' || true
+          grep -q 'ARCHIVE SUCCEEDED' archive.log || { rm -f "$key"; exit 1; }
+          cat > build/ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>$TEAM</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive -archivePath build/OverpricedCardboard.xcarchive -exportOptionsPlist build/ExportOptions.plist \
+            -exportPath build/export "${auth[@]}" 2>&1 | tee export.log | grep -E '(error|Upload|EXPORT (SUCCEEDED|FAILED)|\*\*)' || true
+          rm -f "$key"
+          grep -q 'EXPORT SUCCEEDED' export.log
+          echo "Uploaded build ${{ github.run_number }} to App Store Connect (TestFlight shows it after Apple's processing)."
+

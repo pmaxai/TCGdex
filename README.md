@@ -5,6 +5,7 @@ for flea markets.
 
 - `pipeline/`: card database, fingerprints, accuracy tests and the app's data pack (Python)
 - `android/`: the app (Kotlin). GitHub Actions builds it into an APK, and a bundle for Google Play.
+- `ios/`: the iPhone app (Swift, with the recognition core in C++), for the App Store. See `ios/README.md`.
 
 ## Install the app
 

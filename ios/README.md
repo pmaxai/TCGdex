@@ -1,7 +1,28 @@
 # Overpriced Cardboard for iPhone
 
 The native iPhone app (Swift and SwiftUI), the counterpart of the Android app in `android/`.
-App ID `com.overpricedcardboard.app`, iOS 17 or later, iPhone only.
+App ID `com.overpricedcardboard.app`, iOS 17 or later, iPhone only. The subscription is sold in the
+App Store.
+
+## What it does (first release)
+
+- **Scanner:** the live camera with the guide frame (green when sure), double tap to take a card by
+  hand (with the list of the 10 most likely cards), pinch to zoom, the light, photos from the
+  library. The printed text (Apple's Vision) gives the language and the number, so the right set and
+  language are shown. The result shows the printings with their prices, the price check's notes, the
+  price history, PSA prices and gem rate, other versions and languages, and the alternatives.
+- **Search:** any card by name (any language), number or set.
+- **Trading:** the market value for the card's condition, the vendor's price with a verdict, carts
+  per booth, trades (I give), shows with a budget, the deal history with CSV.
+- **Collection and Missing cards:** + Collection and ☆ Missing on every card, the missing cards
+  list. Changes wait on the phone while it is offline.
+- **Account and App Store:** Sign in with Apple, an emailed code, or a code from an existing
+  account. The plans with the App Store's prices, buying, plan changes, extra devices, Restore
+  purchases, Manage subscription, creator codes, Delete account.
+- **Nightly prices:** the data pack downloads from the shop (only the changed files), also in the
+  background, and is used from the next start.
+
+YouTube mode with recording, and Webshop mode, come later.
 
 ## How it is built
 
@@ -12,8 +33,14 @@ App ID `com.overpricedcardboard.app`, iOS 17 or later, iPhone only.
 - **App** (`App/`): Swift. The fingerprint model runs on ONNX Runtime (Swift package
   `onnxruntime-swift-package-manager`). The catalog is read with SQLite, and the data pack is the
   same one the Android app ships (`pack/`, downloaded from the release `data-pack`).
-- **Tests** (`Tests/`): the same comparison with the Python pipeline as Android's `ParityTest`
-  (the detector on synthetic photos, recognition of the real test photos, the card search).
+- **Tests** (`Tests/`), on the iPhone simulator:
+  - The same comparison with the Python pipeline as Android's `ParityTest`: the detector, the
+    recognition, the printed language and number, the card search, the price data.
+  - Sign-in, buying (StoreKitTest with `StoreKit/OverpricedCardboard.storekit`), Restore,
+    creator codes, Delete account and the offline queue. These run against `StandIn`, a stand-in
+    of the shop's API.
+  - Trading mode's numbers.
+  - Screenshots of the main screens.
 
 The Xcode project is generated from `project.yml` by [XcodeGen](https://github.com/yonaskolb/XcodeGen),
 and it isn't stored in Git.
@@ -26,24 +53,46 @@ and it isn't stored in Git.
    and caches it.
 2. It downloads the data pack into `pack/` and the test photos into `Tests/Fixtures/`.
 3. It generates the project, then builds the app for iPhone without signing.
-4. It runs the tests on the iPhone simulator. The log shows the lines starting with `ParityTest:`.
+4. It runs the tests on the iPhone simulator. The log shows the lines starting with `ParityTest:`
+   and `StoreTest:`. Screenshots appear as base64 between `SHOT-BEGIN` and `SHOT-END`.
+
+Started by hand (Run workflow) with **Upload a signed build to TestFlight**, a second job archives
+the app, signs it and uploads it to App Store Connect.
 
 ## On a Mac
 
 ```sh
 brew install xcodegen
 cd ios
-# OpenCV (once, ~10 minutes): see the step "Build OpenCV" in .github/workflows/ios.yml
+# OpenCV (once, ~15 minutes): see the step "Build OpenCV" in .github/workflows/ios.yml
 # the data pack
 gh release download data-pack -D pack -p model.onnx -p index.f16 -p catalog.sqlite -p pack.json -p texture.u8
 xcodegen generate
 open OverpricedCardboard.xcodeproj
 ```
 
+In Xcode, purchases use the stand-in products of `StoreKit/OverpricedCardboard.storekit`. The scheme
+sets this.
+
 ## Once the Apple developer account is ready
 
-- Set `DEVELOPMENT_TEAM` in `project.yml` to the team ID.
-- Register the App ID `com.overpricedcardboard.app`, with the Sign in with Apple capability.
-- Create the subscriptions in App Store Connect (the same products as on Google Play).
-- Signing and TestFlight uploads from CI need an App Store Connect API key as GitHub secrets.
-  They are never put into the repository.
+1. **Apple Developer (Certificates, Identifiers & Profiles):** register the App ID
+   `com.overpricedcardboard.app`, with the Sign in with Apple capability. Also create a Sign in
+   with Apple key for the shop's server, so the shop can revoke tokens when an account is deleted.
+2. **App Store Connect:**
+   - Create the app, and the subscriptions: the group "Overpriced Cardboard" with Collector and
+     Creator, each monthly and yearly. Creator ranks above Collector.
+   - Hand the product IDs to the shop team (it enters them in its admin), and put them into
+     `StoreKit/OverpricedCardboard.storekit`.
+   - Fill in the App Store Server Notifications URLs (the shop doc lists them).
+   - Create the shop's in-app purchase key.
+3. **For CI uploads:** create an App Store Connect API key with the App Manager role. Put it into
+   GitHub:
+   - The secrets `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID` and
+     `APP_STORE_CONNECT_KEY_P8` (the .p8 file, base64).
+   - The variable `APPLE_TEAM_ID`.
+
+   Then run the workflow with "Upload a signed build to TestFlight". No certificate is stored:
+   Xcode signs automatically with the key.
+4. **Review:** the review account (`review@overpricedcardboard.com`, see the shop doc) goes into the
+   review notes. The privacy policy URL is `https://overpricedcardboard.com/app/privacy`.

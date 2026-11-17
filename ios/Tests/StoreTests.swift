@@ -75,6 +75,19 @@ final class StoreTests: XCTestCase {
         log("signed in: \(a.status?.email ?? "-") store_ref \(a.status?.storeRef ?? "-") gate \(a.gate)")
     }
 
+    func testStoreKitTestSellsTheStandInProducts() async throws {
+        let sk = try startStoreKit()
+        do {
+            let ps = try await Product.products(for: ["oc_collector_monthly", "oc_creator_yearly", "oc_collector_devices_1_monthly"])
+            log("StoreKitTest products: \(ps.map { "\($0.id) \($0.displayPrice) \($0.subscription.map { "\($0.subscriptionPeriod.value) \($0.subscriptionPeriod.unit)" } ?? "-")" })")
+            XCTAssertEqual(ps.count, 3)
+        } catch {
+            log("StoreKitTest products failed: \(error)")
+            XCTFail("\(error)")
+        }
+        _ = sk
+    }
+
     func testBuyingAPlanReportsTheTransactionAndOpensTheApp() async throws {
         let sk = try startStoreKit()
         let a = try await signedIn()
