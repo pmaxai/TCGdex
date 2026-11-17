@@ -112,7 +112,10 @@ final class StoreTests: XCTestCase {
         let ref = try XCTUnwrap(a.status?.storeRef.flatMap(UUID.init(uuidString:)))
         let t = try await sk.buyProduct(identifier: product, options: [.appAccountToken(ref)])
         log("bought \(product) in StoreKitTest: transaction \(t.id), appAccountToken \(t.appAccountToken?.uuidString.lowercased() ?? "-")")
-        await store.reportHeld()
+        // the signed transaction, as the purchase call would have given it
+        let v = try XCTUnwrap(await Transaction.latest(for: product), "no transaction for \(product)")
+        let ok = await store.report(StoreKitBilling.transaction(v), quiet: false)
+        XCTAssertTrue(ok, "the server didn't take \(product): \(store.error ?? "-")")
     }
 
     private func signedIn(_ email: String = "anna@test.overpricedcardboard.com") async throws -> AccountModel {
