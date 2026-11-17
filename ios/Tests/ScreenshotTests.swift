@@ -49,12 +49,14 @@ final class ReviewPrices: AppStoreBilling {
  */
 @MainActor
 final class ScreenshotTests: XCTestCase {
-    private func shot(_ name: String, _ view: some View, width: CGFloat = 393, height: CGFloat = 852,
-                      scrolledToBottom: Bool = false) async throws {
+    /// `top`: the window's place on the screen (below the status bar: no safe area at the top);
+    /// `scrolledBy` / `scrolledToBottom`: where the screen's scroll view stands
+    private func shot(_ name: String, _ view: some View, width: CGFloat = 393, height: CGFloat = 852, top: CGFloat = 0,
+                      scrolledBy: CGFloat? = nil, scrolledToBottom: Bool = false) async throws {
         // a window of the test host's scene (a window without a scene draws nothing)
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first, "no window scene")
         let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: width, height: height)
+        window.frame = CGRect(x: 0, y: top, width: width, height: height)
         window.windowLevel = .alert + 1
         window.overrideUserInterfaceStyle = .dark
         let host = UIHostingController(rootView: view.preferredColorScheme(.dark).tint(Theme.gold))
@@ -62,9 +64,10 @@ final class ScreenshotTests: XCTestCase {
         window.makeKeyAndVisible()
         // let SwiftUI lay out, load what it loads, and draw
         for _ in 0..<20 { try await Task.sleep(nanoseconds: 100_000_000); window.layoutIfNeeded() }
-        if scrolledToBottom, let sv = Self.scrollViews(window).max(by: { $0.contentSize.height < $1.contentSize.height }) {
+        if scrolledToBottom || scrolledBy != nil, let sv = Self.scrollViews(window).max(by: { $0.contentSize.height < $1.contentSize.height }) {
             let bottom = sv.contentSize.height - sv.bounds.height + sv.adjustedContentInset.bottom
-            sv.setContentOffset(CGPoint(x: 0, y: max(-sv.adjustedContentInset.top, bottom)), animated: false)
+            let y = scrolledBy.map { -sv.adjustedContentInset.top + $0 } ?? bottom
+            sv.setContentOffset(CGPoint(x: 0, y: max(-sv.adjustedContentInset.top, min(bottom, y))), animated: false)
             for _ in 0..<5 { try await Task.sleep(nanoseconds: 100_000_000); window.layoutIfNeeded() }
         }
         let img = UIGraphicsImageRenderer(bounds: window.bounds, format: { let f = UIGraphicsImageRendererFormat(); f.scale = 2; return f }()).image { _ in
@@ -155,8 +158,8 @@ final class ScreenshotTests: XCTestCase {
         try await until { a.status?.emailVerified == true && !a.busy }
         await store.loadOffers()
         XCTAssertEqual(store.onSale.map(\.plan), ["collector", "creator"])
-        try await shot("review-plans-top", AccountGateView(account: a, store: store), width: 400, height: 575)
-        try await shot("review-plans-bottom", AccountGateView(account: a, store: store), width: 400, height: 575, scrolledToBottom: true)
+        try await shot("review-plans-top", AccountGateView(account: a, store: store), width: 400, height: 575, top: 100)
+        try await shot("review-plans-bottom", AccountGateView(account: a, store: store), width: 400, height: 575, top: 100, scrolledToBottom: true)
 
         for plan in ["collector", "creator"] {
             StandIn.lock.lock()
@@ -167,7 +170,9 @@ final class ScreenshotTests: XCTestCase {
             await store.loadOffers()
             XCTAssertEqual(store.devices?.max, 4, "4 extra devices on sale for \(plan)")
             let tab = NavigationStack { AccountView(account: a, store: store).navigationBarTitleDisplayMode(.inline) }
-            try await shot("review-devices-\(plan)", tab, width: 400, height: 575)
+            for by in [0, 30, 45, 60] as [CGFloat] {
+                try await shot("review-devices-\(plan)-\(Int(by))", tab, width: 400, height: 575, top: 100, scrolledBy: by)
+            }
         }
     }
 }
