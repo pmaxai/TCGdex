@@ -31,16 +31,28 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unc
         }
     }
 
-    func start() {
+    private var users = 0
+
+    /// A screen with the camera appears (the scanner, Trading): the camera runs while at least one is shown.
+    func acquire() {
         queue.async { [self] in
+            users += 1
             if !configured { configure() }
             if !session.isRunning { session.startRunning() }
         }
     }
 
-    func stop() {
-        queue.async { [self] in if session.isRunning { session.stopRunning() } }
+    /// that screen went away
+    func release() {
+        queue.async { [self] in
+            users = max(0, users - 1)
+            if users == 0 && session.isRunning { session.stopRunning() }
+        }
     }
+
+    /// the app went to the background / came back (the screens stay)
+    func pause() { queue.async { [self] in if session.isRunning { session.stopRunning() } } }
+    func resume() { queue.async { [self] in if users > 0 && configured && !session.isRunning { session.startRunning() } } }
 
     private func configure() {
         configured = true

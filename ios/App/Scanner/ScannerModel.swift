@@ -318,6 +318,14 @@ final class ScannerModel: ObservableObject {
         shown = s
     }
 
+    /// A card from the last scans (Trading's tray): shown again and kept.
+    func show(_ s: Shown) {
+        tracker.lock(s.group)
+        kept = s.group
+        rejected = []
+        shown = s
+    }
+
     /// Forget the current card and look for the next one.
     func next() {
         tracker.reset()

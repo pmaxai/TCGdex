@@ -342,6 +342,8 @@ struct AccountView: View {
 struct CollectionBar: View {
     @ObservedObject var account: AccountModel
     let s: Shown
+    /// the condition + Collection adds the copy in (Trading: the one chosen)
+    var condition = "NM"
     @State private var sheet = false
 
     var body: some View {
@@ -355,7 +357,7 @@ struct CollectionBar: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     if coll {
-                        Button { account.addToCollection(cardId: cardId, language: lang, finish: finish, condition: "NM", label: label) } label: {
+                        Button { account.addToCollection(cardId: cardId, language: lang, finish: finish, condition: condition, label: label) } label: {
                             Text("+ Collection").font(.subheadline.bold()).foregroundStyle(Theme.ink)
                                 .padding(.horizontal, 14).padding(.vertical, 8).background(Theme.gold, in: Capsule())
                         }

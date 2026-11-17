@@ -34,6 +34,10 @@ struct ContentView: View {
                         ScannerScreen(model: scanner)
                             .tabItem { Label("Scanner", systemImage: "camera.viewfinder") }
                     }
+                    if account.has("trading"), let scanner = model.scanner {
+                        TradingScreen(scanner: scanner, trading: model.trading)
+                            .tabItem { Label("Trading", systemImage: "arrow.left.arrow.right") }
+                    }
                     SearchView()
                         .tabItem { Label("Search", systemImage: "magnifyingglass") }
                     if account.has("wanted"), let catalog = model.catalog {

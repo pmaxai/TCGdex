@@ -17,6 +17,7 @@ final class AppModel: ObservableObject {
     private(set) var scanner: ScannerModel?
     let account: AccountModel
     let store: StoreModel
+    let trading = TradingModel()
 
     init(account: AccountModel? = nil, billing: AppStoreBilling? = nil) {
         let account = account ?? AccountModel()

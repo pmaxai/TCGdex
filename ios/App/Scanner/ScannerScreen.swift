@@ -46,14 +46,7 @@ struct ScannerScreen: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Theme.ink)
-        .task {
-            cameraAllowed = await Camera.authorized()
-            if cameraAllowed == true { model.camera.start(); model.camera.setZoom(model.settings.zoom) }
-        }
-        .onChange(of: phase) { _, p in
-            if p == .active, cameraAllowed == true { model.camera.start() } else if p == .background { model.camera.stop() }
-        }
-        .onDisappear { model.camera.stop() }
+        .cameraLifecycle(model: model, allowed: $cameraAllowed)
         .onChange(of: torch) { _, on in model.camera.setTorch(on) }
         .onChange(of: photoItem) { _, item in
             guard let item else { return }
@@ -172,6 +165,32 @@ struct CameraArea: View {
         case .likely: return "Probably…"
         case .unsure: return "Fit the card into the frame"
         }
+    }
+}
+
+extension View {
+    /// The camera runs while this screen is shown and the app is in front.
+    func cameraLifecycle(model: ScannerModel, allowed: Binding<Bool?>) -> some View {
+        modifier(CameraLifecycle(model: model, allowed: allowed))
+    }
+}
+
+private struct CameraLifecycle: ViewModifier {
+    let model: ScannerModel
+    @Binding var allowed: Bool?
+    @State private var acquired = false
+    @Environment(\.scenePhase) private var phase
+
+    func body(content: Content) -> some View {
+        content
+            .task {
+                allowed = await Camera.authorized()
+                if allowed == true && !acquired { acquired = true; model.camera.acquire(); model.camera.setZoom(model.settings.zoom) }
+            }
+            .onDisappear { if acquired { acquired = false; model.camera.release() } }
+            .onChange(of: phase) { _, p in
+                if p == .active { model.camera.resume() } else if p == .background { model.camera.pause() }
+            }
     }
 }
 

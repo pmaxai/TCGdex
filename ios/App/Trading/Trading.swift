@@ -306,26 +306,42 @@ struct Cart: Codable, Equatable, Identifiable {
     var payTotal: Double { TradingMath.round2(Self.sum(getLines) { ($0.price ?? 0) * Double($0.qty) }) }
     /// market value minus price, over the cards you get that have both
     var savedVsMarket: Double {
-        TradingMath.round2(Self.sum(getLines.filter { $0.price != nil && $0.market != nil }) { ($0.market! - $0.price!) * Double($0.qty) })
+        var sum = 0.0
+        for l in getLines { if let p = l.price, let m = l.market { sum += (m - p) * Double(l.qty) } }
+        return TradingMath.round2(sum)
     }
     /// market value of the cards you get that have a price (the base of the saved share)
     var pricedMarket: Double {
-        TradingMath.round2(Self.sum(getLines.filter { $0.price != nil && $0.market != nil }) { $0.market! * Double($0.qty) })
+        var sum = 0.0
+        for l in getLines { if l.price != nil, let m = l.market { sum += m * Double(l.qty) } }
+        return TradingMath.round2(sum)
     }
     var savedVsAsking: Double {
-        TradingMath.round2(Self.sum(getLines.filter { $0.asking != nil && $0.price != nil }) { ($0.asking! - $0.price!) * Double($0.qty) })
+        var sum = 0.0
+        for l in getLines { if let a = l.asking, let p = l.price { sum += (a - p) * Double(l.qty) } }
+        return TradingMath.round2(sum)
     }
     /// cards you get that nobody has put a price on yet (in a trade they count at the rate)
     var unpriced: Int { isTrade ? 0 : getLines.filter { $0.price == nil }.count }
     /// I get: own prices, else (trade) market value x rate
     var getValue: Double {
         let trade = isTrade, rate = getRate
-        return TradingMath.round2(Self.sum(getLines) { ($0.price ?? (trade ? ($0.market ?? 0) * rate : 0)) * Double($0.qty) })
+        var sum = 0.0
+        for l in getLines {
+            let each: Double = l.price ?? (trade ? (l.market ?? 0) * rate : 0)
+            sum += each * Double(l.qty)
+        }
+        return TradingMath.round2(sum)
     }
     /// I give: the vendor's offer, else market value x rate
     var giveValue: Double {
         let rate = giveRate
-        return TradingMath.round2(Self.sum(giveLines) { ($0.price ?? ($0.market ?? 0) * rate) * Double($0.qty) })
+        var sum = 0.0
+        for l in giveLines {
+            let each: Double = l.price ?? (l.market ?? 0) * rate
+            sum += each * Double(l.qty)
+        }
+        return TradingMath.round2(sum)
     }
     /// + you pay, - the vendor pays you
     var balance: Double { TradingMath.round2(getValue - giveValue) }
@@ -344,13 +360,21 @@ struct DealSummary: Equatable {
     let bought: Int, given: Int
 
     static func of(_ carts: [Cart]) -> DealSummary {
-        DealSummary(deals: carts.count,
-                    spent: TradingMath.round2(carts.reduce(0) { $0 + max($1.settle, 0) }),
-                    received: TradingMath.round2(carts.reduce(0) { $0 + max(-$1.settle, 0) }),
-                    marketIn: TradingMath.round2(carts.reduce(0) { $0 + $1.marketTotal }),
-                    marketOut: TradingMath.round2(carts.reduce(0) { $0 + $1.marketGive }),
-                    saved: TradingMath.round2(carts.reduce(0) { $0 + $1.savedVsMarket }),
-                    bought: carts.reduce(0) { $0 + $1.cards }, given: carts.reduce(0) { $0 + $1.giveCards })
+        var spent = 0.0, received = 0.0, marketIn = 0.0, marketOut = 0.0, saved = 0.0
+        var bought = 0, given = 0
+        for c in carts {
+            let s = c.settle
+            spent += max(s, 0)
+            received += max(-s, 0)
+            marketIn += c.marketTotal
+            marketOut += c.marketGive
+            saved += c.savedVsMarket
+            bought += c.cards
+            given += c.giveCards
+        }
+        return DealSummary(deals: carts.count, spent: TradingMath.round2(spent), received: TradingMath.round2(received),
+                           marketIn: TradingMath.round2(marketIn), marketOut: TradingMath.round2(marketOut), saved: TradingMath.round2(saved),
+                           bought: bought, given: given)
     }
 }
 
@@ -386,13 +410,17 @@ struct TradingBook: Codable, Equatable {
 
     /// spent at the current show: cash paid in its closed deals
     var spent: Double {
-        TradingMath.round2(paid.filter { $0.showId != nil && $0.showId == showId }.reduce(0) { $0 + max($1.settle, 0) })
+        var sum = 0.0
+        for c in paid where c.showId != nil && c.showId == showId { sum += max(c.settle, 0) }
+        return TradingMath.round2(sum)
     }
     /// agreed but not paid yet at the current show: agreed cards you get in its open carts
     var agreed: Double {
-        TradingMath.round2(open.filter { $0.showId != nil && $0.showId == showId }.reduce(0) { acc, c in
-            acc + c.getLines.filter { $0.status == .AGREED }.reduce(0) { $0 + ($1.price ?? 0) * Double($1.qty) }
-        })
+        var sum = 0.0
+        for c in open where c.showId != nil && c.showId == showId {
+            for l in c.getLines where l.status == .AGREED { sum += (l.price ?? 0) * Double(l.qty) }
+        }
+        return TradingMath.round2(sum)
     }
 
     /// a new show (or day): new carts belong to it; carts still open move along
@@ -500,23 +528,35 @@ enum TradingCsv {
         for c in carts {
             let paid = c.paidAt.map(when) ?? ""
             for l in c.lines {
-                row([c.name, paid, c.payment, l.status.label, l.name, l.setLine, l.cardId, l.lang, l.printingLabel, l.condition.label, l.qty,
-                     num(l.market), num(l.asking), num(l.negotiated), l.active && l.side == .GET ? num(l.price.map { $0 * Double(l.qty) }) : "",
-                     l.verdict?.label ?? l.sellVerdict?.label, l.side.label])
+                let pay: String = l.active && l.side == .GET ? num(l.price.map { $0 * Double(l.qty) }) : ""
+                let verdict: String? = l.verdict?.label ?? l.sellVerdict?.label
+                let values: [Any?] = [c.name, paid, c.payment, l.status.label, l.name, l.setLine, l.cardId, l.lang, l.printingLabel, l.condition.label,
+                                      l.qty, num(l.market), num(l.asking), num(l.negotiated), pay, verdict, l.side.label]
+                row(values)
             }
         }
         out += "\r\n"
         row(["Booth", "Paid", "Cards", "Market value EUR", "Asking EUR", "You pay EUR", "Saved vs market EUR", "Cards given",
              "Market value given EUR", "Your cards count at %", "Trade balance EUR", "Cash paid (+) / received (-) EUR", "Show"])
         for c in carts {
-            row([c.name, c.paidAt.map(when) ?? "open", c.cards, num(c.marketTotal), num(c.askingTotal), num(c.payTotal), num(c.savedVsMarket),
-                 c.isTrade ? String(c.giveCards) : "", c.isTrade ? num(c.marketGive) : "", c.isTrade ? String(Int((c.giveRate * 100).rounded())) : "",
-                 c.isTrade ? num(c.balance) : "", num(c.settle), shows.first { $0.id == c.showId }?.name])
+            let t = c.isTrade
+            let rate: String = t ? String(Int((c.giveRate * 100).rounded())) : ""
+            let paid: String = c.paidAt.map(when) ?? "open"
+            let show: String? = shows.first { $0.id == c.showId }?.name
+            let values: [Any?] = [c.name, paid, c.cards, num(c.marketTotal), num(c.askingTotal), num(c.payTotal), num(c.savedVsMarket),
+                                  t ? String(c.giveCards) : "", t ? num(c.marketGive) : "", rate, t ? num(c.balance) : "", num(c.settle), show]
+            row(values)
         }
         if carts.count > 1 {
-            row(["All", "", carts.reduce(0) { $0 + $1.cards }, num(carts.reduce(0) { $0 + $1.marketTotal }), num(carts.reduce(0) { $0 + $1.askingTotal }),
-                 num(carts.reduce(0) { $0 + $1.payTotal }), num(carts.reduce(0) { $0 + $1.savedVsMarket }), carts.reduce(0) { $0 + $1.giveCards },
-                 num(carts.reduce(0) { $0 + $1.marketGive }), "", "", num(carts.reduce(0) { $0 + $1.settle }), ""])
+            var cards = 0, given = 0
+            var market = 0.0, asking = 0.0, pay = 0.0, saved = 0.0, marketGive = 0.0, settle = 0.0
+            for c in carts {
+                cards += c.cards; given += c.giveCards
+                market += c.marketTotal; asking += c.askingTotal; pay += c.payTotal
+                saved += c.savedVsMarket; marketGive += c.marketGive; settle += c.settle
+            }
+            let all: [Any?] = ["All", "", cards, num(market), num(asking), num(pay), num(saved), given, num(marketGive), "", "", num(settle), ""]
+            row(all)
         }
         return out
     }
