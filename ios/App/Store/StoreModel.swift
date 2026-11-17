@@ -124,6 +124,14 @@ final class StoreModel: ObservableObject {
         return (status?.devicesInStore ?? 0, list.count)
     }
 
+    /// the App Store product that one more extra device switches to (it holds them all: 2 devices = the product
+    /// for 2), with its number; nil when all are bought or the App Store doesn't sell it
+    var nextDevice: (count: Int, product: StoreProduct)? {
+        guard let plan = runningPlan, let list = plan.deviceProductIds[runningPeriod], let have = devices?.have,
+              have < list.count, let p = products[list[have]] else { return nil }
+        return (have + 1, p)
+    }
+
     // ---------------------------------------------------------------- start, offers
     /// At start and after connecting: the plans, then every transaction this phone holds goes to the server.
     func start() {

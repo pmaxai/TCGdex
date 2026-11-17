@@ -274,10 +274,22 @@ struct AccountView: View {
                         Text("A bigger plan starts at once; a smaller one from the next renewal.").font(.caption).foregroundStyle(Theme.muted)
                     }
                     if let d = store.devices {
+                        // borderless: two buttons in one Form row would otherwise both fire on a tap
                         HStack {
-                            Button("+ Add a device") { store.changeDevices(by: 1) }.disabled(store.busy || d.have >= d.max)
+                            Button { store.changeDevices(by: 1) } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("+ Add a device")
+                                    if let next = store.nextDevice {
+                                        Text(PlanCard.text(next.product, store.runningPeriod == "yearly" ? "year" : "month")
+                                             + (next.count > 1 ? " for \(next.count) extra devices" : ""))
+                                            .font(.caption)
+                                    }
+                                }
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(store.busy || d.have >= d.max)
                             Spacer()
-                            Button("Remove one") { store.changeDevices(by: -1) }.disabled(store.busy || d.have == 0)
+                            Button("Remove one") { store.changeDevices(by: -1) }.buttonStyle(.borderless).disabled(store.busy || d.have == 0)
                         }
                         Text("1 device is included. \(d.have) of \(d.max) extra devices bought in the app.").font(.caption).foregroundStyle(Theme.muted)
                     }

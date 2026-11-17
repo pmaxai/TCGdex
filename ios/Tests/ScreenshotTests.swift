@@ -21,7 +21,8 @@ final class FixedPrices: AppStoreBilling {
     func listen(_ handler: @escaping @Sendable (StoreTransaction) async -> Void) {}
 }
 
-/// The prices of the Apple setup guide: the website's monthly prices; the yearly ones 10 % below 12 months.
+/// The prices of the Apple setup guide: the website's monthly prices; yearly 12 months less 10 %, rounded down
+/// to a full euro (€ 75, € 129; a device € 43 or € 75), extra devices that times their number.
 final class ReviewPrices: AppStoreBilling {
     func products(_ ids: [String]) async throws -> [String: StoreProduct] {
         var out: [String: StoreProduct] = [:]
@@ -31,8 +32,8 @@ final class ReviewPrices: AppStoreBilling {
             // oc_<plan>_devices_<n>_<period>: n times the plan's device price
             let parts = id.split(separator: "_")
             let devices = id.contains("_devices_") && parts.count > 3 ? Double(parts[3]) ?? 1 : 0
-            let monthly = devices > 0 ? devices * (creator ? 7 : 4) : (creator ? 12 : 7)
-            let price = yearly ? monthly * 12 * 0.9 : monthly
+            let unit: Double = devices > 0 ? (creator ? 7 : 4) : (creator ? 12 : 7)
+            let price = max(devices, 1) * (yearly ? (unit * 12 * 0.9).rounded(.down) : unit)
             out[id] = StoreProduct(id: id, displayPrice: String(format: "€%.2f", price), price: Decimal(price), period: yearly ? "yearly" : "monthly")
         }
         return out
@@ -157,6 +158,7 @@ final class ScreenshotTests: XCTestCase {
         try await until { a.status?.emailVerified == true && !a.busy }
         await store.loadOffers()
         XCTAssertEqual(store.onSale.map(\.plan), ["collector", "creator"])
+        XCTAssertEqual(store.onSale.compactMap { store.price($0, "yearly")?.displayPrice }, ["€75.00", "€129.00"])
         try await shot("review-plans-top", AccountGateView(account: a, store: store), width: 400, height: 575)
         try await shot("review-plans-bottom", AccountGateView(account: a, store: store), width: 400, height: 575, scrolledToBottom: true)
 
@@ -168,9 +170,13 @@ final class ScreenshotTests: XCTestCase {
             try await until { a.status?.plan == plan && a.status?.active == true && !a.busy }
             await store.loadOffers()
             XCTAssertEqual(store.devices?.max, 4, "4 extra devices on sale for \(plan)")
+            XCTAssertEqual(store.nextDevice?.count, 1)
+            XCTAssertEqual(store.nextDevice?.product.displayPrice, plan == "creator" ? "€7.00" : "€4.00")
             let tab = NavigationStack { AccountView(account: a, store: store).navigationBarTitleDisplayMode(.inline) }
             // scrolled so that the plan, the devices row and its line under it are all in the picture
-            try await shot("review-devices-\(plan)", tab, width: 400, height: 575, scrolledBy: 60)
+            for by in [60, 76] as [CGFloat] {
+                try await shot("review-devices-\(plan)-\(Int(by))", tab, width: 400, height: 575, scrolledBy: by)
+            }
         }
     }
 }
