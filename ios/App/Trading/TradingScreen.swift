@@ -37,6 +37,7 @@ struct TradingScreen: View {
     @State private var dealsOpen = false
     @State private var showOpen = false
     @State private var search = false
+    @State private var settingsOpen = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -80,6 +81,7 @@ struct TradingScreen: View {
         .sheet(isPresented: $cartOpen) { CartSheet(trading: trading) }
         .sheet(isPresented: $dealsOpen) { DealsSheet(trading: trading) }
         .sheet(isPresented: $showOpen) { ShowSheet(trading: trading) }
+        .sheet(isPresented: $settingsOpen) { TradingSettingsView(trading: trading) }
         .sheet(isPresented: $search) {
             CardSearchSheet(resolver: scanner.resolver) { c in
                 search = false
@@ -119,6 +121,7 @@ struct TradingScreen: View {
                 Button { dealsOpen = true } label: { Image(systemName: "clock.arrow.circlepath") }.accessibilityLabel("Deal history")
                 Button { torch.toggle() } label: { Image(systemName: torch ? "flashlight.on.fill" : "flashlight.off.fill") }
                     .foregroundStyle(torch ? Theme.gold : .white).accessibilityLabel("Light")
+                Button { settingsOpen = true } label: { Image(systemName: "gearshape") }.accessibilityLabel("Trading settings")
             }
             if let budget = b.show?.budget, budget > 0 { BudgetBar(book: b, budget: budget) }
         }
@@ -624,6 +627,31 @@ struct DealsSheet: View {
                     ToolbarItem(placement: .confirmationAction) { ShareLink("CSV", item: url) }
                 }
             }
+        }
+    }
+}
+
+/// Trading's settings: which Cardmarket price the market value starts from, the start condition, the price step.
+struct TradingSettingsView: View {
+    @ObservedObject var trading: TradingModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Picker("Market value from", selection: $trading.reference) { ForEach(Reference.allCases) { Text($0.label).tag($0) } }
+                Picker("A new card starts as", selection: $trading.startCondition) { ForEach(Condition.allCases) { Text($0.label).tag($0) } }
+                Picker("− / + changes a price by", selection: $trading.priceStep) {
+                    ForEach([0.1, 0.5, 1.0, 5.0], id: \.self) { Text(Money.eur($0)).tag($0) }
+                }
+                Section {
+                    Text("Conditions count as Cardmarket's scale: NM 100 %, EX 85 %, GD 75 %, LP 65 %, PL 50 %, PO 30 % of the price. Verdicts: up to 80 % of the market value a great deal, 95 % good, 110 % fair, above that expensive.")
+                        .font(.footnote).foregroundStyle(Theme.muted)
+                }
+            }
+            .navigationTitle("Trading")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
     }
 }

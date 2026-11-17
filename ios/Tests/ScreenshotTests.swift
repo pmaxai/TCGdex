@@ -28,7 +28,11 @@ final class FixedPrices: AppStoreBilling {
 @MainActor
 final class ScreenshotTests: XCTestCase {
     private func shot(_ name: String, _ view: some View, height: CGFloat = 852) async throws {
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 393, height: height))
+        // a window of the test host's scene (a window without a scene draws nothing)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first, "no window scene")
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: height)
+        window.windowLevel = .alert + 1
         window.overrideUserInterfaceStyle = .dark
         let host = UIHostingController(rootView: view.preferredColorScheme(.dark).tint(Theme.gold))
         window.rootViewController = host
