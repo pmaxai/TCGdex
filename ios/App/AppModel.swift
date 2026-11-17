@@ -18,9 +18,10 @@ final class AppModel: ObservableObject {
     let account: AccountModel
     let store: StoreModel
 
-    init(account: AccountModel = AccountModel(), billing: AppStoreBilling = StoreKitBilling()) {
+    init(account: AccountModel? = nil, billing: AppStoreBilling? = nil) {
+        let account = account ?? AccountModel()
         self.account = account
-        store = StoreModel(account: account, billing: billing)
+        store = StoreModel(account: account, billing: billing ?? StoreKitBilling())
         account.onConnected = { [weak self] in self?.store.start() }
         account.onAffiliate = { [weak self] result, aff in self?.store.signedInWithCode(result, aff) }
         account.start()
