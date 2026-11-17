@@ -63,6 +63,9 @@ private:
 - (int)entry { return _h.entry; }
 - (int)reading { return _h.reading; }
 + (instancetype)of:(const Hit &)h { CCHit *x = [CCHit new]; x->_h = h; return x; }
++ (CCHit *)hitWithGroup:(int)group score:(float)score entry:(int)entry reading:(int)reading {
+    return [CCHit of:Hit{group, score, entry, reading}];
+}
 @end
 
 @implementation CCRecognition {

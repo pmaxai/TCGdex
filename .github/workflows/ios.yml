@@ -14,7 +14,7 @@ on:
 
 concurrency:
   group: ios
-  cancel-in-progress: true
+  cancel-in-progress: false   # a run building OpenCV finishes (and caches it); the newest push waits
 
 permissions:
   contents: read
@@ -37,7 +37,7 @@ jobs:
 
       - name: OpenCV for iOS (cached)
         id: opencv-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ios/Vendor/opencv2.xcframework
           # core + imgproc only, arm64 device and simulator (bump the suffix when the build options change)
@@ -62,6 +62,14 @@ jobs:
           cp -R "$RUNNER_TEMP/ocv/opencv2.xcframework" ios/Vendor/
           find ios/Vendor/opencv2.xcframework -maxdepth 2
           du -sh ios/Vendor/opencv2.xcframework
+
+      - name: Keep the OpenCV build
+        # saved at once, so a later failing step doesn't throw the 20-minute build away
+        if: steps.opencv-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ios/Vendor/opencv2.xcframework
+          key: ${{ steps.opencv-cache.outputs.cache-primary-key }}
 
       - name: Get the data pack and test photos
         env:

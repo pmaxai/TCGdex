@@ -7,25 +7,37 @@ enum Theme {
     static let panel = Color(red: 0x1A / 255, green: 0x1C / 255, blue: 0x21 / 255)
     static let muted = Color(red: 0x9A / 255, green: 0xA0 / 255, blue: 0xAA / 255)
     static let good = Color(red: 0x9B / 255, green: 0xE3 / 255, blue: 0xB0 / 255)
+    static let sure = Color(red: 0x4C / 255, green: 0xD0 / 255, blue: 0x7D / 255)
+    static let likely = gold
+    static let warn = Color(red: 0xFF / 255, green: 0x8A / 255, blue: 0x3D / 255)
+}
+
+let languageNames: [String: String] = ["en": "English", "de": "Deutsch", "fr": "Français", "es": "Español",
+    "it": "Italiano", "pt": "Português", "ja": "日本語", "zh-tw": "繁體中文", "zh-cn": "简体中文", "ko": "한국어"]
+
+extension CardInfo {
+    /// "Twilight Masquerade · 034/167 · DE · 2024"
+    func setLine(withLang: Bool = true) -> String {
+        [setName.isEmpty ? nil : setName, numberText.isEmpty ? nil : numberText, withLang ? lang.uppercased() : nil, year]
+            .compactMap { $0 }.joined(separator: " · ")
+    }
+}
+
+extension Printing {
+    /// what a printing chip shows: Cardmarket, else TCGplayer
+    var priceText: String { eur != nil ? Money.eur(eur) : Money.usd(usd) }
 }
 
 enum Money {
-    private static let eur: NumberFormatter = {
-        let f = NumberFormatter()
-        f.numberStyle = .currency
-        f.currencyCode = "EUR"
-        f.locale = Locale(identifier: "en_IE")
-        return f
-    }()
-    private static let usd: NumberFormatter = {
-        let f = NumberFormatter()
-        f.numberStyle = .currency
-        f.currencyCode = "USD"
-        f.locale = Locale(identifier: "en_US")
-        return f
-    }()
+    /// "12.34 €" in the phone's number format, as the Android app ("–" without a price)
+    static func eur(_ v: Double?) -> String {
+        guard let v else { return "–" }
+        return String(format: "%.2f €", locale: Locale.current, v)
+    }
 
-    /// "€12.34" ("–" without a price)
-    static func eur(_ v: Double?) -> String { v.flatMap { eur.string(from: NSNumber(value: $0)) } ?? "–" }
-    static func usd(_ v: Double?) -> String { v.flatMap { usd.string(from: NSNumber(value: $0)) } ?? "–" }
+    /// "$4.20", "$120" (whole dollars from 100 on)
+    static func usd(_ v: Double?) -> String {
+        guard let v else { return "–" }
+        return v >= 100 ? String(format: "$%.0f", v) : String(format: "$%.2f", v)
+    }
 }

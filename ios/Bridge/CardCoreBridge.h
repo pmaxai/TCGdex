@@ -24,6 +24,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) int entry;
 /// 0 card, 1 card upside down, 2 artwork, 3 artwork upside down
 @property (nonatomic, readonly) int reading;
+/// a hit read another way (e.g. the artwork upside down)
++ (CCHit *)hitWithGroup:(int)group score:(float)score entry:(int)entry reading:(int)reading
+    NS_SWIFT_NAME(make(group:score:entry:reading:));
 @end
 
 @interface CCRecognition : NSObject

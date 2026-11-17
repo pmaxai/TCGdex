@@ -175,4 +175,131 @@ final class ParityTests: XCTestCase {
         log("excluded \(first.group): now \(again.best?.group ?? "-")")
         XCTAssertFalse(again.hits.contains { $0.group == first.group }, "excluded card was still matched")
     }
+
+    /// What the printed text says (Vision here, ML Kit on Android): the language decides what is shown.
+    func testRealPhotosLanguageAndNumber() throws {
+        let engine = try XCTUnwrap(Self.engine)
+        let cat = Catalog(db: Self.pack.db)
+        let expected = ["Magneton 059-191.jpg": ("de", "59"), "Plusle 69-101.jpg": ("en", "69"),
+                        // Japanese Meganium of M1S (2025): no picture in the data; script, number and printed name find it
+                        "me01-010__Meganium_japanese_shiny_border_screenshot.jpg": ("ja", "5")]
+        let expectedCard = ["me01-010__Meganium_japanese_shiny_border_screenshot.jpg": "M1S-005"]
+        let items = try XCTUnwrap(json()["real"] as? [[String: Any]])
+        let reader = TextReader()
+        var lines: [String] = []
+        var wrong = 0
+        for it in items {
+            let file = it["file"] as? String ?? ""
+            let img = try photo("real/\(file)")
+            let r = engine.recognize(img)
+            guard let hit = r.best else { continue }
+            let t0 = Date()
+            guard let t = engine.readText(img, r, hit, reader: reader) else { continue }
+            let ms = Int(Date().timeIntervalSince(t0) * 1000)
+            let num = TextReader.normNumber(t.number)
+            let exp = expected[file]
+            let ok = exp == nil || t.lang == exp!.0
+            if !ok { wrong += 1 }
+            var verdict = ""
+            if let exp { verdict = (ok ? "language OK" : "language EXPECTED \(exp.0)") + (num == exp.1 ? ", number OK" : ", number expected \(exp.1)") }
+            lines.append("\(file) [\(hit.readingName)]: number=\(t.number ?? "-")/\(t.total ?? "-") lang=\(t.lang ?? "-") (+\(String(format: "%.1f", t.langMargin))) \(ms)ms \(verdict)")
+            lines.append("   scores " + t.langScores.sorted { $0.value > $1.value }.map { "\($0.key)=\(String(format: "%.1f", $0.value))" }.joined(separator: ", "))
+            lines.append("   name bar: \(t.nameText.prefix(60)) | text: \(t.text.replacingOccurrences(of: "\n", with: " / ").prefix(160))")
+            lines.append("   script: \(t.script)")
+            // an Asian print: the exact card by its number and printed name (it has no picture)
+            if let lang = t.lang, ["ja", "ko", "zh-tw", "zh-cn"].contains(lang) {
+                let langs = lang.hasPrefix("zh") ? ["zh-tw", "zh-cn"] : [lang]
+                let cands = cat.byNumber(langs, num, t.total.map { TextReader.normNumber($0) })
+                let known = cat.englishOf(hit.group).map { cat.asianNames($0.name, langs) } ?? []
+                let picked = TextReader.pickPrint(cands, printedName: t.nameText, known: known, totalKnown: t.total != nil)
+                lines.append("   print: \(cands.map { "\($0.id) \($0.name)" }) -> \(picked?.id ?? "-")")
+                if let want = expectedCard[file], picked?.id != want { wrong += 1; lines.append("   PRINT EXPECTED \(want)") }
+            } else if let want = expectedCard[file] {
+                wrong += 1; lines.append("   PRINT EXPECTED \(want) (language not Asian)")
+            }
+        }
+        lines.forEach(log)
+        XCTAssertEqual(wrong, 0, "language/number differ:\n" + lines.joined(separator: "\n"))
+    }
+
+    /// A Korean print isn't in the card data; its set is the Japanese one (same code and number).
+    func testAKoreanPrintIsItsJapaneseOriginal() throws {
+        let cat = Catalog(db: try XCTUnwrap(Self.pack).db)
+        let group = cat.groupOf("me01-010")
+        let dex = cat.dexOfGroup(group)
+        let cands = cat.byNumber(["ja"], "5", "63")
+        log("korean 005/063 of \(group) (dex \(dex.sorted())): \(cands.map { "\($0.id) \($0.name) \(cat.dexOf($0.id).sorted())" })")
+        XCTAssertTrue(cands.contains { $0.id == "M1S-005" }, "candidates 005/063 in Japanese: \(cands.map(\.id))")
+        if dex.isEmpty { log("this data pack has no Pokédex numbers yet"); return }
+        XCTAssertEqual(cands.filter { !cat.dexOf($0.id).isDisjoint(with: dex) }.map(\.id), ["M1S-005"])
+    }
+
+    /// The version the scanner shows for a photo: the artwork's card in the printed language and set.
+    func testShownVersionOfTheRealPhotos() throws {
+        let engine = try XCTUnwrap(Self.engine)
+        let cat = Catalog(db: Self.pack.db)
+        let resolver = CardResolver(catalog: cat, pack: Self.pack)
+        let reader = TextReader()
+        let expected = ["Magneton 059-191.jpg": "de", "Plusle 69-101.jpg": "en"]
+        let items = try XCTUnwrap(json()["real"] as? [[String: Any]])
+        for it in items {
+            let file = it["file"] as? String ?? ""
+            let img = try photo("real/\(file)")
+            let r = engine.recognize(img)
+            guard let hit = r.best else { continue }
+            let text = engine.readText(img, r, hit, reader: reader)
+            let v = try XCTUnwrap(resolver.resolveVersion(group: hit.group, entry: hit.entry, text: text), file)
+            let shown = resolver.build(group: hit.group, version: v, text: text, confidence: .sure, alternatives: [], locked: false,
+                                       fromPhoto: true, scan: nil, serial: 1)
+            log("shown for \(file): \(v.id)/\(v.lang) \(v.name) \(v.setLine()) · \(shown.selected.map { "\($0.kind.rawValue) \($0.priceText)" } ?? "no price") · \(shown.versions.count) versions")
+            if let want = expected[file] { XCTAssertEqual(v.lang, want, file) }
+        }
+    }
+
+    /// The data pack carries price history once the pipeline has built it: a well-known card has a line.
+    func testPackHasPriceHistory() throws {
+        let pack = try XCTUnwrap(Self.pack)
+        let cat = Catalog(db: pack.db)
+        guard let dates = pack.db.query("SELECT value FROM meta WHERE key = 'history_dates'").first?.first?.string else {
+            log("this data pack has no price history yet"); return
+        }
+        let with = ["sv06-034", "sv03.5-006", "base1-4", "swsh7-215", "sv08-059"].compactMap { id in
+            cat.history(id).map { h in "\(id): " + h.series.map { "\($0.key) \($0.value.filter { !$0.isNaN }.count)" }.sorted().joined(separator: ", ") }
+        }
+        log("price history: \(dates.split(separator: ",").count) days in the calendar, points: \(with)")
+        XCTAssertFalse(with.isEmpty, "no card has a price history")
+    }
+
+    func testPackPriceCheck() throws {
+        let pack = try XCTUnwrap(Self.pack)
+        guard pack.db.tableExists("price_check") else { log("this data pack has no price check yet"); return }
+        let cat = Catalog(db: pack.db)
+        // the two cards reported: commons that carried their secret rare's Cardmarket price
+        for id in ["sm12-54", "sm12-68"] {
+            let card = try XCTUnwrap(cat.cardExact(id, "en"))
+            log("\(id): \(card.name): \(card.priceCheck.map { "\($0.status)" } ?? "-"), \(card.printings.map { "\($0.kind.rawValue) \($0.eur ?? -1) / \($0.usdEur ?? -1)" })")
+            XCTAssertTrue(card.printings.allSatisfy { ($0.eur ?? 0) < 5 }, "\(id) still has a Cardmarket price over 5 EUR")
+        }
+    }
+
+    /// The scanner's steadiness rules (ScanTracker): a sure card is taken after the delay, a kept one stays.
+    func testScanTracker() {
+        let t = ScanTracker(sureMargin: 0.085, likelyMargin: 0.038)
+        t.delayMs = 300
+        XCTAssertFalse(t.update("a", margin: 0.1, now: 0))
+        XCTAssertFalse(t.update("a", margin: 0.1, now: 150))
+        XCTAssertTrue(t.update("a", margin: 0.1, now: 320))
+        XCTAssertEqual(t.shown, "a")
+        // only yellow: three agreeing frames and the delay
+        t.reset()
+        XCTAssertFalse(t.update("b", margin: 0.05, now: 1000))
+        XCTAssertFalse(t.update("b", margin: 0.05, now: 1100))
+        XCTAssertTrue(t.update("b", margin: 0.05, now: 1400))
+        // kept by hand: a sure other card needs 700 ms and two sure frames of the last five
+        t.lock("c")
+        XCTAssertFalse(t.update("d", margin: 0.1, now: 2000))
+        XCTAssertFalse(t.update("d", margin: 0.1, now: 2500))
+        XCTAssertTrue(t.update("d", margin: 0.1, now: 2750))
+        XCTAssertEqual(t.shown, "d")
+    }
 }

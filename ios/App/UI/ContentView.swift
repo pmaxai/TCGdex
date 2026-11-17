@@ -23,8 +23,10 @@ struct ContentView: View {
             .background(Theme.ink)
         case .ready:
             TabView {
-                PhotoScanView()
-                    .tabItem { Label("Scan", systemImage: "camera.viewfinder") }
+                if let scanner = model.scanner {
+                    ScannerScreen(model: scanner)
+                        .tabItem { Label("Scanner", systemImage: "camera.viewfinder") }
+                }
                 SearchView()
                     .tabItem { Label("Search", systemImage: "magnifyingglass") }
             }

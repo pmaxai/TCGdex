@@ -14,6 +14,7 @@ final class AppModel: ObservableObject {
     private(set) var pack: Pack?
     private(set) var catalog: Catalog?
     private(set) var engine: ScannerEngine?
+    private(set) var scanner: ScannerModel?
 
     init() {
         Task { await load() }
@@ -30,6 +31,7 @@ final class AppModel: ObservableObject {
                 return (pack, Catalog(db: pack.db), try ScannerEngine(pack: pack))
             }.value
             pack = p; catalog = c; engine = e
+            scanner = ScannerModel(engine: e, catalog: c)
             state = .ready
         } catch {
             state = .failed(error.localizedDescription)

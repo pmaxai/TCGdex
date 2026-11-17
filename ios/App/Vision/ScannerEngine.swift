@@ -105,3 +105,23 @@ final class ScannerEngine {
         CCRecognizer.guideQuadWidth(Int32(width), height: Int32(height), prior: prior).map(\.cgPointValue)
     }
 }
+
+extension ScannerEngine {
+    /**
+     * Read the card's printed text (number, language). When only the artwork box was found, its
+     * orientation is a guess, so the other way round is tried too if the first attempt finds no number.
+     */
+    func readText(_ img: RGBImage, _ r: Scan, _ hit: Match, reader: TextReader) -> CardText? {
+        func attempt(_ h: Match) -> CardText? {
+            guard let card = cardImage(img, r, h, margin: 0.06, width: 720, height: 1006), let cg = card.uiImage?.cgImage else { return nil }
+            return reader.read(cg)
+        }
+        let first = attempt(hit)
+        if first?.number != nil { return first }
+        let other = [1, 0, 3, 2][max(0, min(3, hit.reading))]
+        let raw = CCHit.make(group: hit.raw.group, score: hit.raw.score, entry: hit.raw.entry, reading: Int32(other))
+        guard let second = attempt(Match(group: hit.group, score: hit.score, entry: hit.entry, reading: other, raw: raw)) else { return first }
+        func quality(_ t: CardText?) -> Double { (t?.number != nil ? 3 : 0) + (t?.langMargin ?? 0) }
+        return quality(second) > quality(first) ? second : first
+    }
+}

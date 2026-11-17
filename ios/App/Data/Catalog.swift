@@ -38,6 +38,12 @@ struct CardInfo: Equatable, Identifiable {
     var releaseDate: String? = nil
     var imageAlt: String? = nil
     var imageAltLarge: String? = nil
+    /// the price check's finding for this card (nil: nothing found, or an older pack)
+    var priceCheck: PriceCheck? = nil
+    /// PSA prices per printing (eBay sales are split by printing); key nil = printing not stated
+    var graded: [Printing.Kind?: Graded] = [:]
+    /// PSA population (gem rate) per printing, if the data pack has it
+    var population: [Printing.Kind?: Population] = [:]
 
     var year: String? { releaseDate.map { String($0.prefix(4)) }.flatMap { $0.count == 4 && $0.allSatisfy(\.isNumber) ? $0 : nil } }
     var numberText: String { if let t = setTotal, t > 0 { return "\(number)/\(t)" }; return number }
@@ -45,6 +51,109 @@ struct CardInfo: Equatable, Identifiable {
     var highUrl: String? { imageUrl.map { "\($0)/high.webp" } ?? imageAltLarge ?? imageAlt }
     var bestValue: Double? { printings.compactMap(\.value).max() }
     func printing(_ kind: Printing.Kind?) -> Printing? { printings.first { $0.kind == kind } ?? printings.first }
+
+    /// PSA prices of this printing only; a row without a stated printing counts for the card's main printing
+    func gradedFor(_ kind: Printing.Kind?) -> Graded? {
+        graded[kind] ?? graded[nil].flatMap { kind == nil || kind == printings.first?.kind ? $0 : nil }
+    }
+
+    func populationFor(_ kind: Printing.Kind?) -> Population? {
+        population[kind] ?? population[nil].flatMap { kind == nil || kind == printings.first?.kind ? $0 : nil }
+    }
+}
+
+/// What the data pipeline's price check found (pricecheck.py): TCGdex links some cards to the wrong Cardmarket product.
+struct PriceCheck: Equatable {
+    enum Status { case dropped, uncertain, disagree }
+    let status: Status
+    /// the Cardmarket trend in question, EUR
+    let cmTrend: Double?
+    /// the card's TCGplayer prices (lowest and highest printing, not reverse holo), EUR
+    let tpLo: Double?, tpHi: Double?
+    /// the card(s) the Cardmarket price is shared with, e.g. "Plinfa 239/236"
+    let others: [String]
+
+    /// a sentence for under the price
+    var message: String {
+        switch status {
+        case .dropped:
+            return "No reliable Cardmarket price for this card" + (others.first.map { " (the database gave it the price of \($0))" } ?? "")
+        case .uncertain:
+            let names = others.prefix(2).joined(separator: ", ")
+            return "This Cardmarket price is shared with " + (names.isEmpty ? "another card" : names) + " and may be theirs – check Cardmarket"
+        case .disagree:
+            return "Cardmarket and TCGplayer disagree" + (tpHi.map { " (TCGplayer ≈ " + String(format: "%.2f €", $0) + ")" } ?? "") + " – check before you pay"
+        }
+    }
+}
+
+/// PSA prices: eBay sold averages, USD.
+struct Graded: Equatable {
+    let psa10: Double?, psa10n: Int?, psa9: Double?, psa9n: Int?, psa8: Double?, psa8n: Int?
+    let updated: String?
+}
+
+/// PSA population of one printing: how many copies were graded, how many got a 10 (gem rate).
+struct Population: Equatable {
+    let psaTotal: Int
+    let psa10: Int?, psa9: Int?, psa8: Int?
+    let gemRate: Double?
+    let updated: String?
+}
+
+/**
+ * A card's price history: one shared calendar (weekly for a year, then every day of the last 90
+ * days), a series per price (NaN = no price that day), and the ECB's USD per EUR each day.
+ */
+struct PriceHistory {
+    let dates: [String]
+    let usdPerEur: [Double?]
+    let series: [String: [Float]]
+    var lastRate: Double? { usdPerEur.last { $0 != nil } ?? nil }
+
+    /// Cardmarket trend (EUR) of a printing, picked like the price panel picks its price
+    func eur(_ kind: Printing.Kind?, hasNormal: Bool) -> [Float]? {
+        switch kind {
+        case .reverse: return series["cm_trend_h"]
+        case .holo: return hasNormal ? nil : series["cm_trend"]
+        case .firstEdition: return nil
+        default: return series["cm_trend"]
+        }
+    }
+
+    /// TCGplayer market price (USD) of a printing
+    func usd(_ kind: Printing.Kind?) -> [Float]? {
+        switch kind {
+        case .holo: return series["tp_holo"]
+        case .reverse: return series["tp_reverse"]
+        case .firstEdition: return series["tp_first"]
+        default: return series["tp_normal"]
+        }
+    }
+
+    /// TCGplayer converted to EUR at each day's ECB rate (the latest rate where a day has none)
+    func usdInEur(_ kind: Printing.Kind?) -> [Float]? {
+        guard let a = usd(kind) else { return nil }
+        let fallback = lastRate
+        return a.indices.map { i in
+            let r = (i < usdPerEur.count ? usdPerEur[i] : nil) ?? fallback
+            if let r, r > 0, !a[i].isNaN { return Float(Double(a[i]) / r) }
+            return .nan
+        }
+    }
+
+    /**
+     * zlib-compressed little-endian values (the pipeline's history.write_app_history): float16, or
+     * float32 for a series of size values with a price above float16's range (65,504).
+     */
+    static func decode(_ blob: Data, size: Int) -> [Float] {
+        guard let raw = Inflate.zlib(blob, capacity: max(size * 4, blob.count * 8)) else { return [] }
+        if size > 0 && raw.count == size * 4 {
+            return raw.withUnsafeBytes { b in (0..<size).map { Float(bitPattern: UInt32(littleEndian: b.loadUnaligned(fromByteOffset: $0 * 4, as: UInt32.self))) } }
+        }
+        let n = raw.count / 2
+        return raw.withUnsafeBytes { b in (0..<n).map { Float(Float16(bitPattern: UInt16(littleEndian: b.loadUnaligned(fromByteOffset: $0 * 2, as: UInt16.self)))) } }
+    }
 }
 
 /// The card catalog of the data pack (port of Catalog.kt).
@@ -54,8 +163,12 @@ final class Catalog {
     private var groupCache: [String: [String]] = [:]
     private let lock = NSLock()
     private let hasInfo: Bool, hasTcg: Bool, hasReleaseDate: Bool, hasAltImages: Bool, hasGroups: Bool
+    private let hasGraded: Bool, gradedByPrinting: Bool, hasPopulation: Bool, hasPriceCheck: Bool, hasHistory: Bool, hasDex: Bool
     let hasCategory: Bool
-    private lazy var usdPerEur: Double? = meta("usd_per_eur").flatMap(Double.init).flatMap { $0 > 0 ? $0 : nil }
+    /// USD per EUR of the data pack's day (ECB), for showing TCGplayer prices in euros
+    private let usdPerEur: Double?
+    /// the history calendar and the euro rate on each of its days (nil: the pack has no history)
+    private let historyCalendar: (dates: [String], rates: [Double?])?
 
     init(db: SQLiteDB) {
         self.db = db
@@ -66,6 +179,22 @@ final class Catalog {
         hasReleaseDate = db.columns("sets").contains("release_date")
         hasAltImages = db.columns("cards").contains("image_alt")
         hasGroups = db.columns("entries").contains("grp")
+        let graded = db.tableExists("graded")
+        hasGraded = graded
+        gradedByPrinting = graded && db.columns("graded").contains("printing")
+        hasPopulation = db.tableExists("population")
+        hasPriceCheck = db.tableExists("price_check")
+        hasHistory = db.tableExists("history")
+        hasDex = info && db.columns("card_info").contains("dex")
+        func metaValue(_ key: String) -> String? { db.query("SELECT value FROM meta WHERE key = ?", [key]).first?.first?.string }
+        usdPerEur = metaValue("usd_per_eur").flatMap { Double($0) }.flatMap { $0 > 0 ? $0 : nil }
+        if db.tableExists("history"), let d = metaValue("history_dates") {
+            let dates = d.split(separator: ",").map(String.init)
+            let rates = (metaValue("history_rates") ?? "").split(separator: ",", omittingEmptySubsequences: false).map { Double($0) }
+            historyCalendar = (dates, dates.indices.map { $0 < rates.count ? rates[$0] : nil })
+        } else {
+            historyCalendar = nil
+        }
     }
 
     func meta(_ key: String) -> String? { db.query("SELECT value FROM meta WHERE key = ?", [key]).first?.first?.string }
@@ -215,7 +344,109 @@ final class Catalog {
         return CardInfo(id: cardId, lang: c[1].string ?? "", name: c[2].string ?? "?", number: c[3].string ?? "",
                         setName: c[6].string ?? "", setTotal: c[7].int, series: c[8].string ?? "", rarity: rarity,
                         imageUrl: c[4].string, prices: prices, printings: printings, category: c[19].string,
-                        releaseDate: c[20].string.flatMap { $0.isEmpty ? nil : $0 }, imageAlt: c[21].string, imageAltLarge: c[22].string)
+                        releaseDate: c[20].string.flatMap { $0.isEmpty ? nil : $0 }, imageAlt: c[21].string, imageAltLarge: c[22].string,
+                        priceCheck: priceCheck(cardId, c[1].string), graded: graded(cardId), population: population(cardId))
+    }
+
+    /// The price check's finding for a card, with the other cards named in lang where possible.
+    private func priceCheck(_ id: String, _ lang: String?) -> PriceCheck? {
+        guard hasPriceCheck, let r = db.query("SELECT status, cm_trend, tp_lo, tp_hi, others FROM price_check WHERE id = ?", [id]).first else { return nil }
+        let status: PriceCheck.Status
+        switch r[0].string {
+        case "dropped": status = .dropped
+        case "uncertain": status = .uncertain
+        case "disagree": status = .disagree
+        default: return nil
+        }
+        let others = (r[4].string ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.map { other -> String in
+            guard let o = db.query("""
+                SELECT c.name, c.local_id, s.official FROM cards c LEFT JOIN sets s ON s.id = c.set_id AND s.lang = c.lang
+                WHERE c.id = ? ORDER BY CASE c.lang WHEN ? THEN 0 WHEN 'en' THEN 1 ELSE 2 END LIMIT 1
+                """, [other, lang ?? "en"]).first else { return other }
+            let total = o[2].int
+            return "\(o[0].string ?? "") \(o[1].string ?? "")" + ((total ?? 0) > 0 ? "/\(total!)" : "")
+        }
+        return PriceCheck(status: status, cmTrend: r[1].double, tpLo: r[2].double, tpHi: r[3].double, others: others)
+    }
+
+    private static func kindOf(_ code: String?) -> Printing.Kind? {
+        switch code {
+        case "normal": return .normal
+        case "holo": return .holo
+        case "reverse": return .reverse
+        case "1st": return .firstEdition
+        default: return nil
+        }
+    }
+
+    private func graded(_ id: String) -> [Printing.Kind?: Graded] {
+        guard hasGraded else { return [:] }
+        var out: [Printing.Kind?: Graded] = [:]
+        for c in db.query("SELECT \(gradedByPrinting ? "printing" : "''"), psa10, psa10_n, psa9, psa9_n, psa8, psa8_n, updated FROM graded WHERE id = ?", [id]) {
+            out[Self.kindOf(c[0].string)] = Graded(psa10: c[1].double, psa10n: c[2].int, psa9: c[3].double, psa9n: c[4].int,
+                                                   psa8: c[5].double, psa8n: c[6].int, updated: c[7].string)
+        }
+        return out
+    }
+
+    private func population(_ id: String) -> [Printing.Kind?: Population] {
+        guard hasPopulation else { return [:] }
+        var out: [Printing.Kind?: Population] = [:]
+        for c in db.query("SELECT printing, psa_total, psa10, psa9, psa8, gem_rate, updated FROM population WHERE id = ?", [id]) {
+            guard let total = c[1].int else { continue }
+            out[Self.kindOf(c[0].string)] = Population(psaTotal: total, psa10: c[2].int, psa9: c[3].int, psa8: c[4].int,
+                                                       gemRate: c[5].double, updated: c[6].string)
+        }
+        return out
+    }
+
+    /// The price history of a card (nil: none in this data pack).
+    func history(_ id: String) -> PriceHistory? {
+        guard let cal = historyCalendar else { return nil }
+        var series: [String: [Float]] = [:]
+        for r in db.query("SELECT field, data FROM history WHERE id = ?", [id]) {
+            guard let f = r[0].string, let blob = r[1].data else { continue }
+            let a = PriceHistory.decode(blob, size: cal.dates.count)
+            if a.count == cal.dates.count { series[f] = a }
+        }
+        return series.isEmpty ? nil : PriceHistory(dates: cal.dates, usdPerEur: cal.rates, series: series)
+    }
+
+    /**
+     * Cards in langs with the printed number num (normalised: "5", "TG5") in a set of total cards
+     * (nil: any set): the Asian prints that have no picture, so the camera can't find them.
+     */
+    func byNumber(_ langs: [String], _ num: String, _ total: String?) -> [CardInfo] {
+        if num.isEmpty || langs.isEmpty { return [] }
+        guard let last = num.matches(of: #/\d+/#).last else { return [] }
+        var digits = String(String(num[last.range]).drop { $0 == "0" })
+        if digits.isEmpty { digits = "0" }
+        let q = "SELECT c.id, c.lang, c.local_id FROM cards c JOIN sets s ON s.id = c.set_id AND s.lang = c.lang " +
+            "WHERE c.lang IN (\(langs.map { _ in "?" }.joined(separator: ", "))) AND c.local_id LIKE ?" +
+            (total != nil ? " AND (s.official = ? OR s.total = ?)" : "")
+        let args = langs + ["%" + digits] + (total.map { [$0, $0] } ?? [])
+        return db.query(q, args).compactMap { c in
+            guard let id = c[0].string, let lang = c[1].string, TextReader.normNumber(c[2].string) == num else { return nil }
+            return cardExact(id, lang)
+        }
+    }
+
+    /// The card's National Pokédex numbers (empty: not a Pokémon, or a data pack without them).
+    func dexOf(_ id: String) -> Set<Int> {
+        guard hasDex, let d = db.query("SELECT dex FROM card_info WHERE id = ?", [id]).first?.first?.string else { return [] }
+        return Set(d.split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) })
+    }
+
+    /// The Pokédex numbers of an artwork's cards (the recognised picture's Pokémon).
+    func dexOfGroup(_ group: String) -> Set<Int> { groupMembers(group).reduce(into: Set<Int>()) { $0.formUnion(dexOf($1)) } }
+
+    /// The names the artwork's Pokémon has on Asian prints with a picture (e.g. "メガニウム" for Meganium).
+    func asianNames(_ englishName: String, _ langs: [String]) -> Set<String> {
+        guard hasGroups, !langs.isEmpty else { return [] }
+        let q = "SELECT DISTINCT a.name FROM cards w JOIN entries f ON f.card_id = w.id AND f.lang = 'en' " +
+            "JOIN entries e ON e.grp = f.grp JOIN cards a ON a.id = e.card_id AND a.lang = e.lang " +
+            "WHERE w.lang = 'en' AND w.name = ? AND a.lang IN (\(langs.map { _ in "?" }.joined(separator: ", "))) LIMIT 20"
+        return Set(db.query(q, [englishName] + langs).compactMap { $0[0].string })
     }
 
     /// TCGplayer market price (USD) per printing key, e.g. normal, holofoil, reverse-holofoil, 1st-edition.
