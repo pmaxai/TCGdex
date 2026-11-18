@@ -141,7 +141,9 @@ class PlayBilling(private val ctx: Context) : StoreBilling, PurchasesUpdatedList
         request.items.map { it.offer.productId }.filter { !details.containsKey(it) }.takeIf { it.isNotEmpty() }?.let { offers(it) }
         val items = request.items.map { item ->
             val pd = details[item.offer.productId] ?: return BuyResult.Failed("Google Play doesn't sell ${item.offer.productId}.")
-            BillingFlowParams.ProductDetailsParams.newBuilder().setProductDetails(pd).setOfferToken(item.offer.offerToken).apply {
+            BillingFlowParams.ProductDetailsParams.newBuilder().setProductDetails(pd).apply {
+                // an item kept as it is (KEEP_EXISTING) carries no offer token: Play refuses the whole flow otherwise
+                if (item.mode != Replace.KEEP_EXISTING) setOfferToken(item.offer.offerToken)
                 if (item.replaces != null && item.mode != null) setSubscriptionProductReplacementParams(
                     SubscriptionProductReplacementParams.newBuilder().setOldProductId(item.replaces).setReplacementMode(mode(item.mode)).build())
             }.build()
