@@ -27,6 +27,10 @@ permissions:
 
 env:
   OPENCV_VERSION: "4.12.0"
+  # ONNX Runtime for iOS: Microsoft's framework from its download server (its Swift package on
+  # GitHub disappeared on 17 Nov 2026). The SHA-256 of the archive pins what was downloaded first.
+  ORT_VERSION: "1.24.2"
+  ORT_ZIP_SHA256: ""
 
 jobs:
   build:
@@ -76,6 +80,49 @@ jobs:
         with:
           path: ios/Vendor/opencv2.xcframework
           key: ${{ steps.opencv-cache.outputs.cache-primary-key }}
+
+      - name: ONNX Runtime for iOS (cached)
+        id: ort-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ios/Vendor/onnxruntime.xcframework
+            ios/Vendor/onnxruntime-headers
+          key: onnxruntime-ios-${{ env.ORT_VERSION }}-v1
+
+      - name: Download ONNX Runtime for iOS
+        if: steps.ort-cache.outputs.cache-hit != 'true'
+        run: |
+          zip="$RUNNER_TEMP/onnxruntime.zip"
+          url="https://download.onnxruntime.ai/pod-archive-onnxruntime-c-$ORT_VERSION.zip"
+          curl -fsSL --retry 3 -o "$zip" "$url" || { echo "::error::$url can't be downloaded"; exit 1; }
+          sum=$(shasum -a 256 "$zip" | cut -d' ' -f1)
+          echo "pod-archive-onnxruntime-c-$ORT_VERSION.zip: $(du -h "$zip" | cut -f1), sha256 $sum"
+          if [ -z "$ORT_ZIP_SHA256" ]; then
+            echo "::warning::ORT_ZIP_SHA256 isn't set yet; this download has sha256 $sum"
+          elif [ "$sum" != "$ORT_ZIP_SHA256" ]; then
+            echo "::error::the archive's sha256 $sum isn't the pinned $ORT_ZIP_SHA256"; exit 1
+          fi
+          rm -rf "$RUNNER_TEMP/ort" && mkdir -p "$RUNNER_TEMP/ort"
+          unzip -q "$zip" -d "$RUNNER_TEMP/ort"
+          find "$RUNNER_TEMP/ort" -maxdepth 3 | head -n 40
+          xc=$(find "$RUNNER_TEMP/ort" -name onnxruntime.xcframework -type d | head -n 1)
+          api=$(find "$RUNNER_TEMP/ort" -name onnxruntime_cxx_api.h | head -n 1)
+          if [ -z "$xc" ] || [ -z "$api" ]; then echo "::error::no onnxruntime.xcframework or C++ headers in the archive"; exit 1; fi
+          mkdir -p ios/Vendor/onnxruntime-headers
+          cp -R "$xc" ios/Vendor/
+          cp "$(dirname "$api")"/*.h ios/Vendor/onnxruntime-headers/
+          ls ios/Vendor/onnxruntime.xcframework ios/Vendor/onnxruntime-headers
+          for b in ios/Vendor/onnxruntime.xcframework/*/onnxruntime.framework/onnxruntime; do file "$b"; done
+
+      - name: Keep ONNX Runtime
+        if: steps.ort-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ios/Vendor/onnxruntime.xcframework
+            ios/Vendor/onnxruntime-headers
+          key: ${{ steps.ort-cache.outputs.cache-primary-key }}
 
       - name: Get the data pack and test photos
         env:
@@ -178,6 +225,15 @@ jobs:
         with:
           path: ios/Vendor/opencv2.xcframework
           key: opencv2-xcframework-${{ env.OPENCV_VERSION }}-ios17-core-imgproc-v1
+          fail-on-cache-miss: true
+
+      - name: ONNX Runtime for iOS (cached)
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ios/Vendor/onnxruntime.xcframework
+            ios/Vendor/onnxruntime-headers
+          key: onnxruntime-ios-${{ env.ORT_VERSION }}-v1
           fail-on-cache-miss: true
 
       - name: Get the data pack

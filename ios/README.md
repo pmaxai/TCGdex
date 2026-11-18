@@ -30,8 +30,10 @@ YouTube mode with recording, and Webshop mode, come later.
   C++ on OpenCV (core and imgproc). It is a line-by-line port of the Android app's
   `CardDetector.kt`, `Readings.kt`, `Matcher.kt` and `Recognizer.kt`, so both apps see the same.
 - **Bridge** (`Bridge/`): the Objective-C++ layer through which Swift calls CardCore.
-- **App** (`App/`): Swift. The fingerprint model runs on ONNX Runtime (Swift package
-  `onnxruntime-swift-package-manager`). The catalog is read with SQLite, and the data pack is the
+- **App** (`App/`): Swift. The fingerprint model runs on ONNX Runtime: Microsoft's iOS
+  framework (`Vendor/onnxruntime.xcframework`), called through its C++ API in `Bridge/OnnxModel.mm`.
+  Microsoft's Swift package for it disappeared from GitHub on 17 Nov 2026, so CI downloads the
+  framework from Microsoft's own download server instead. The catalog is read with SQLite, and the data pack is the
   same one the Android app ships (`pack/`, downloaded from the release `data-pack`).
 - **Tests** (`Tests/`), on the iPhone simulator:
   - The same comparison with the Python pipeline as Android's `ParityTest`: the detector, the
@@ -50,7 +52,9 @@ and it isn't stored in Git.
 `.github/workflows/ios.yml` runs on GitHub's macOS runner. It does these steps:
 
 1. It builds OpenCV 4.12 for iOS as `Vendor/opencv2.xcframework` (arm64 device and simulator),
-   and caches it.
+   and caches it. It downloads ONNX Runtime for iOS (`pod-archive-onnxruntime-c-<version>.zip` from
+   download.onnxruntime.ai, checked against its SHA-256) into `Vendor/onnxruntime.xcframework` and
+   `Vendor/onnxruntime-headers`, and caches that too.
 2. It downloads the data pack into `pack/` and the test photos into `Tests/Fixtures/`.
 3. It generates the project, then builds the app for iPhone without signing.
 4. It runs the tests on the iPhone simulator. The log shows the lines starting with `ParityTest:`
@@ -65,6 +69,7 @@ the app, signs it and uploads it to App Store Connect.
 brew install xcodegen
 cd ios
 # OpenCV (once, ~15 minutes): see the step "Build OpenCV" in .github/workflows/ios.yml
+# ONNX Runtime: see the step "Download ONNX Runtime for iOS" there
 # the data pack
 gh release download data-pack -D pack -p model.onnx -p index.f16 -p catalog.sqlite -p pack.json -p texture.u8
 xcodegen generate

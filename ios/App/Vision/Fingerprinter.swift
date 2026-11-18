@@ -1,27 +1,17 @@
 import Accelerate
 import Foundation
-import OnnxRuntimeBindings
 
 /**
  * Runs the exported fingerprint model (model.onnx): input (N, size, size, 3) float RGB 0..255,
  * output (N, dim) unit vectors. Normalisation and PCA are inside the model. CardCore calls it
- * through the CCFingerprinting protocol.
+ * through the CCFingerprinting protocol; ONNX Runtime runs behind CCOnnxModel (Bridge/OnnxModel.mm).
  */
 final class Fingerprinter: NSObject, CCFingerprinting {
-    private let env: ORTEnv
-    private let session: ORTSession
-    private let output: String
+    private let model: CCOnnxModel
     private let lock = NSLock()
 
     init(modelPath: String) throws {
-        let e = try ORTEnv(loggingLevel: .warning)
-        let options = try ORTSessionOptions()
-        try options.setIntraOpNumThreads(Int32(min(4, max(1, ProcessInfo.processInfo.activeProcessorCount))))
-        try options.setGraphOptimizationLevel(.all)
-        let s = try ORTSession(env: e, modelPath: modelPath, sessionOptions: options)
-        env = e
-        session = s
-        output = try s.outputNames().first ?? "embedding"
+        model = try CCOnnxModel(path: modelPath, threads: Int32(min(4, max(1, ProcessInfo.processInfo.activeProcessorCount))))
         super.init()
     }
 
@@ -34,11 +24,7 @@ final class Fingerprinter: NSObject, CCFingerprinting {
         }
         lock.lock(); defer { lock.unlock() }
         do {
-            let input = try ORTValue(tensorData: floats, elementType: .float,
-                                     shape: [count, size, size, 3].map { NSNumber(value: $0) })
-            let out = try session.run(withInputs: ["image": input], outputNames: [output], runOptions: nil)
-            guard let v = out[output] else { return nil }
-            return try v.tensorData() as Data
+            return try model.run(floats: floats as Data, shape: [count, size, size, 3].map { NSNumber(value: $0) }, input: "image")
         } catch {
             NSLog("Fingerprinter: %@", error.localizedDescription)
             return nil

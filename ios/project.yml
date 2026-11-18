@@ -7,11 +7,6 @@ options:
   createIntermediateGroups: true
   developmentLanguage: en
 
-packages:
-  onnxruntime:
-    url: https://github.com/microsoft/onnxruntime-swift-package-manager
-    exactVersion: 1.24.2
-
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -45,8 +40,10 @@ targets:
     dependencies:
       - framework: Vendor/opencv2.xcframework
         embed: false
-      - package: onnxruntime
-        product: onnxruntime
+      # ONNX Runtime (a static framework from Microsoft's download server; CI puts it here)
+      - framework: Vendor/onnxruntime.xcframework
+        embed: false
+      - sdk: CoreML.framework
       - sdk: Accelerate.framework
       - sdk: libsqlite3.tbd
       - sdk: libz.tbd
@@ -78,7 +75,7 @@ targets:
         PRODUCT_NAME: OverpricedCardboard
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_OBJC_BRIDGING_HEADER: Bridge/OverpricedCardboard-Bridging-Header.h
-        HEADER_SEARCH_PATHS: $(SRCROOT)/CardCore/include
+        HEADER_SEARCH_PATHS: $(SRCROOT)/CardCore/include $(SRCROOT)/Vendor/onnxruntime-headers
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         GCC_WARN_INHIBIT_ALL_WARNINGS: NO
