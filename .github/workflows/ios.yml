@@ -30,7 +30,7 @@ env:
   # ONNX Runtime for iOS: Microsoft's framework from its download server (its Swift package on
   # GitHub disappeared on 17 Nov 2026). The SHA-256 of the archive pins what was downloaded first.
   ORT_VERSION: "1.24.2"
-  ORT_ZIP_SHA256: ""
+  ORT_ZIP_SHA256: "f7100a992d2a8135168c8afd831e6a58b465349101982aa58b3e11d36e600b54"
 
 jobs:
   build:
