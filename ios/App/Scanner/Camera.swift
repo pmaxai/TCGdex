@@ -32,22 +32,47 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unc
     }
 
     private var users = 0
+    /// counts acquires and releases, so a delayed stop sees whether a screen came back meanwhile
+    private var generation = 0
 
     /// A screen with the camera appears (the scanner, Trading): the camera runs while at least one is shown.
     func acquire() {
         queue.async { [self] in
             users += 1
+            generation += 1
             if !configured { configure() }
             if !session.isRunning { session.startRunning() }
         }
     }
 
-    /// that screen went away
+    /// That screen went away. The camera stops only when no camera screen is back within a second:
+    /// switching from the scanner to Trading releases one and acquires the other, and stopping and
+    /// starting the camera in between takes a second or two on a phone.
     func release() {
         queue.async { [self] in
             users = max(0, users - 1)
-            if users == 0 && session.isRunning { session.stopRunning() }
+            guard users == 0 else { return }
+            generation += 1
+            let g = generation
+            queue.asyncAfter(deadline: .now() + 1) { [self] in
+                if users == 0 && generation == g && session.isRunning { session.stopRunning() }
+            }
         }
+    }
+
+    /// The one camera picture of the app. A session shows its live image in one preview layer only
+    /// (several need a multi-camera session), so this view moves into whichever camera screen is shown.
+    @MainActor private var sharedPreview: CameraPreviewView?
+
+    @MainActor func previewView() -> CameraPreviewView {
+        if let v = sharedPreview { return v }
+        let v = CameraPreviewView()
+        v.backgroundColor = .black
+        v.preview.videoGravity = .resizeAspectFill
+        v.preview.session = session
+        if let c = v.preview.connection, c.isVideoRotationAngleSupported(90) { c.videoRotationAngle = 90 }
+        sharedPreview = v
+        return v
     }
 
     /// the app went to the background / came back (the screens stay)
@@ -159,25 +184,54 @@ extension RGBImage {
     }
 }
 
-/// The camera picture, filling its box (the scanner cuts frames to the same part).
+/// The view of the camera's one preview layer (see Camera.previewView).
+final class CameraPreviewView: UIView {
+    override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
+    var preview: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+}
+
+/// The camera picture, filling its box (the scanner cuts frames to the same part). Each camera
+/// screen has one of these; the one that comes on screen takes the camera's preview view into it.
 struct CameraPreview: UIViewRepresentable {
     let camera: Camera
 
-    final class PreviewView: UIView {
-        override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
-        var preview: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+    final class Holder: UIView {
+        var camera: Camera?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if window != nil { claim() }
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            subviews.first?.frame = bounds
+        }
+
+        /// moves the camera's preview view in here (out of the screen that had it)
+        func claim() {
+            guard let camera else { return }
+            let v = camera.previewView()
+            if v.superview !== self {
+                v.removeFromSuperview()
+                v.frame = bounds
+                v.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                addSubview(v)
+            }
+            if let c = v.preview.connection, c.isVideoRotationAngleSupported(90), c.videoRotationAngle != 90 { c.videoRotationAngle = 90 }
+        }
     }
 
-    func makeUIView(context: Context) -> PreviewView {
-        let v = PreviewView()
-        v.backgroundColor = .black
-        v.preview.session = camera.session
-        v.preview.videoGravity = .resizeAspectFill
-        if let c = v.preview.connection, c.isVideoRotationAngleSupported(90) { c.videoRotationAngle = 90 }
-        return v
+    func makeUIView(context: Context) -> Holder {
+        let h = Holder()
+        h.backgroundColor = .black
+        h.clipsToBounds = true
+        h.camera = camera
+        return h
     }
 
-    func updateUIView(_ v: PreviewView, context: Context) {
-        if let c = v.preview.connection, c.isVideoRotationAngleSupported(90), c.videoRotationAngle != 90 { c.videoRotationAngle = 90 }
+    func updateUIView(_ h: Holder, context: Context) {
+        h.camera = camera
+        if h.window != nil { h.claim() }
     }
 }
