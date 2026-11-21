@@ -119,6 +119,29 @@ class AccountStore(private val ctx: Context) {
     fun wanted(): JSONArray? = runCatching { JSONArray(wantedFile.readText()) }.getOrNull()
     fun saveWanted(items: JSONArray) { runCatching { wantedFile.writeText(items.toString()) } }
 
+    // ---------------------------------------------------------------- the free version
+    private val localFile = File(ctx.filesDir, "free-collection.json")
+
+    /** the prices revealed (the last hour's count) */
+    fun freeReveals(): List<io.github.pmaxai.cardscanner.ui.FreeReveal> = runCatching {
+        val a = JSONArray(prefs.getString("free_reveals", "[]")); (0 until a.length()).map { io.github.pmaxai.cardscanner.ui.FreeReveal.of(a.getJSONObject(it)) }
+    }.getOrDefault(emptyList())
+
+    fun saveFreeReveals(r: List<io.github.pmaxai.cardscanner.ui.FreeReveal>) {
+        prefs.edit().putString("free_reveals", JSONArray(r.map { it.toJson() }).toString()).apply()
+    }
+
+    /** the collection kept on this phone (the free version's); it stays when the account goes */
+    @Synchronized fun localCollection(): List<io.github.pmaxai.cardscanner.ui.LocalItem> = runCatching {
+        val a = JSONArray(localFile.readText()); (0 until a.length()).map { io.github.pmaxai.cardscanner.ui.LocalItem.of(a.getJSONObject(it)) }
+    }.getOrDefault(emptyList())
+
+    @Synchronized fun saveLocalCollection(items: List<io.github.pmaxai.cardscanner.ui.LocalItem>) {
+        val tmp = File(localFile.path + ".tmp")
+        tmp.writeText(JSONArray(items.map { it.toJson() }).toString())
+        tmp.renameTo(localFile)
+    }
+
     /** The licence of earlier versions is gone: its keys and token are dropped, its device id kept. */
     private fun dropLicence() {
         val old = ctx.getSharedPreferences("licence", Context.MODE_PRIVATE)

@@ -108,11 +108,17 @@ data class AccountUi(
     val resendAt: Long = 0,
     /** buying in the store (Play edition) */
     val store: StoreUi = StoreUi(),
+    /** the free version: the prices revealed lately, and the collection on this phone */
+    val reveals: List<FreeReveal> = emptyList(),
+    val localItems: List<LocalItem> = emptyList(),
 ) {
-    /** a feature unlocked now (builds without an account: everything) */
-    fun has(feature: String): Boolean = !required || (gate == AccountGate.OPEN && status?.has(feature) == true)
-    /** the app can't be used now: connect, subscription ended, or check online once */
-    val locked: Boolean get() = required && gate != AccountGate.OPEN
+    /** a feature unlocked now (builds without an account: everything; the free version: the Scanner) */
+    fun has(feature: String): Boolean = !required || (gate == AccountGate.OPEN && status?.has(feature) == true) ||
+        (isFree && feature == "scanner")
+    /** no running subscription (not connected, ended, or check online once): the free version with its limits */
+    val isFree: Boolean get() = required && gate != AccountGate.OPEN
+    /** the same as [isFree] (before the free version, the app couldn't be used then) */
+    val locked: Boolean get() = isFree
     val portalUrl: String get() = status?.portalUrl ?: (BuildConfig.ACCOUNT_URL.trimEnd('/') + "/account")
 }
 
@@ -162,9 +168,12 @@ class AccountCoordinator(
         val st = store.status()
         publish {
             it.copy(required = BuildConfig.ACCOUNT_REQUIRED, status = st, lastCheck = store.lastCheck, notice = store.notice,
-                gate = AccountGate.of(store.connected, st, System.currentTimeMillis()))
+                gate = AccountGate.of(store.connected, st, System.currentTimeMillis()),
+                reveals = store.freeReveals(), localItems = store.localCollection())
         }
         onStatus(st.takeIf { store.connected })
+        // a plan with a collection: the cards kept on this phone go into it
+        if (current().required && current().gate == AccountGate.OPEN && current().has("collection") && current().localItems.isNotEmpty()) moveLocalCollection()
     }
 
     // ---------------------------------------------------------------- pairing
@@ -516,6 +525,77 @@ class AccountCoordinator(
             .put("purchase_price_cents", purchaseCents ?: JSONObject.NULL).put("note", note?.takeIf { it.isNotBlank() }?.take(500) ?: JSONObject.NULL)
             .put("binder_id", binderId ?: JSONObject.NULL).put("merge", true)
         enqueue(PendingOp("collection_add", UUID.randomUUID().toString(), current().status?.accountId, cardId, body, label = label))
+    }
+
+    // ---------------------------------------------------------------- the free version
+    /** the free version's clock (tests set their own) */
+    @Volatile var now: () -> Long = { System.currentTimeMillis() }
+
+    /** Shows this card's price; false: the hour's 10 are used up. */
+    @Synchronized
+    fun reveal(cardId: String): Boolean {
+        val t = now()
+        val a = current()
+        if (a.revealed(cardId, t)) return true
+        if (a.revealsLeft(t) <= 0) return false
+        val list = a.reveals.filter { it.at > t - Free.HOUR } + FreeReveal(cardId, t)
+        store.saveFreeReveals(list)
+        publish { it.copy(reveals = list) }
+        return true
+    }
+
+    /**
+     * + Collection in the free version: kept on this phone. False: 50 different cards are in it
+     * already (more copies of one of them still go in).
+     */
+    @Synchronized
+    fun addLocally(cardId: String, language: String, finish: String, condition: String, quantity: Int = 1,
+                   purchaseCents: Long? = null, note: String? = null, label: String): Boolean {
+        val items = store.localCollection().toMutableList()
+        val known = items.any { it.cardId == cardId }
+        if (!known && items.map { it.cardId }.toSet().size >= Free.MAX_CARDS) return false
+        val q = quantity.coerceIn(1, 999)
+        val n = note?.takeIf { it.isNotBlank() }?.take(500)
+        val i = if (purchaseCents == null && n == null) items.indexOfFirst {
+            it.cardId == cardId && it.language == language && it.finish == finish && it.condition == condition && it.purchaseCents == null && it.note == null
+        } else -1
+        if (i >= 0) {
+            // another copy of the same: one line more in number (as the account's collection merges them)
+            val merged = items.removeAt(i).let { it.copy(quantity = (it.quantity + q).coerceAtMost(999), added = now()) }
+            items.add(0, merged)
+        } else {
+            items.add(0, LocalItem(cardId = cardId, language = language, finish = finish, condition = condition, quantity = q,
+                purchaseCents = purchaseCents, note = n, label = label, added = now()))
+        }
+        store.saveLocalCollection(items)
+        publish { it.copy(localItems = items) }
+        return true
+    }
+
+    @Synchronized
+    fun removeLocally(id: String) {
+        val items = store.localCollection().filter { it.id != id }
+        store.saveLocalCollection(items)
+        publish { it.copy(localItems = items) }
+    }
+
+    /**
+     * A plan with a collection is running: the cards kept on this phone go into the account's
+     * collection (queued, so they are sent later when offline) and leave the phone's list.
+     */
+    @Synchronized
+    fun moveLocalCollection() {
+        val items = store.localCollection()
+        if (items.isEmpty()) return
+        store.saveLocalCollection(emptyList())
+        publish { it.copy(localItems = emptyList()) }
+        // oldest first, so the account's collection keeps their order
+        items.reversed().forEach { i ->
+            addToCollection(i.cardId, i.language, i.finish, i.condition, i.quantity, i.purchaseCents, null, i.note, i.label)
+        }
+        val cards = items.map { it.cardId }.toSet().size
+        message(if (cards == 1) "The card from this phone is now in your account's collection."
+            else "The $cards cards from this phone are now in your account's collection.")
     }
 
     // ---------------------------------------------------------------- missing cards

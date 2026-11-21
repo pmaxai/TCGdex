@@ -109,10 +109,18 @@ private fun stamp(t: Long): String = DateFormat.getDateTimeInstance(DateFormat.M
  */
 @Composable
 fun AccountGateScreen(state: UiState, vm: ScannerViewModel, camera: @Composable (Modifier) -> Unit = { m -> QrCamera(m) { vm.account.pair(it, scanned = true) } }) {
-    val a = state.account
-    val ctx = LocalContext.current
     Column(Modifier.fillMaxSize().background(Ink).verticalScroll(rememberScrollState()).padding(20.dp),
         horizontalAlignment = Alignment.CenterHorizontally) {
+        AccountGateContent(state, vm, camera)
+    }
+}
+
+/** The sign-in (or connect), the plans, "ended", "check online once": the gate screen's part, also ⚙ → Account in the free version. */
+@Composable
+fun AccountGateContent(state: UiState, vm: ScannerViewModel, camera: @Composable (Modifier) -> Unit = { m -> QrCamera(m) { vm.account.pair(it, scanned = true) } }) {
+    val a = state.account
+    val ctx = LocalContext.current
+    run {
         val st = a.status
         when {
             a.justConnected && st != null -> {
@@ -206,7 +214,17 @@ fun AccountPage(state: UiState, vm: ScannerViewModel) {
     val a = state.account
     val ctx = LocalContext.current
     val st = a.status
-    var confirm by remember { mutableStateOf(false) }
+    if (a.isFree) {
+        // the free version: what it includes, then the sign-in or the plans (signed in: sign out and delete here too)
+        FreeNote()
+        Column(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) { AccountGateContent(state, vm) }
+        if (st != null) {
+            SignOut(a, vm)
+            DeleteAccount(a, vm)
+        }
+        TextButton({ openUrl(ctx, StoreCoordinator.privacyUrl) }, modifier = Modifier.padding(top = 10.dp)) { Text("Privacy policy") }
+        return
+    }
     if (st == null) {
         Text("Not connected to an account", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
         return
@@ -263,21 +281,27 @@ fun AccountPage(state: UiState, vm: ScannerViewModel) {
         }
     }
 
+    SignOut(a, vm)
+    DeleteAccount(a, vm)
+    TextButton({ openUrl(ctx, StoreCoordinator.privacyUrl) }, modifier = Modifier.padding(top = 10.dp)) { Text("Privacy policy") }
+}
+
+/** Sign out (Play edition) or disconnect this phone: asked first; the app goes on as the free version. */
+@Composable
+private fun SignOut(a: AccountUi, vm: ScannerViewModel) {
+    var confirm by remember { mutableStateOf(false) }
     Text(if (storeEdition) "Sign out of this phone" else "Disconnect this phone", color = Color.White, fontSize = 16.sp,
         fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 18.dp))
-    Text(if (storeEdition) "Frees its place for another device. The app asks you to sign in again."
-        else "Frees its place for another device. The app asks for a QR code again.", color = Muted, fontSize = 13.sp)
+    Text(if (storeEdition) "Frees its place for another device. The app goes on as the free version until you sign in again."
+        else "Frees its place for another device. The app goes on as the free version until it is connected again.", color = Muted, fontSize = 13.sp)
     OutlinedButton({ confirm = true }, enabled = !a.busy, modifier = Modifier.padding(top = 8.dp)) {
         Text(if (storeEdition) "Sign out" else "Disconnect this phone", color = Warn)
     }
     if (confirm) AlertDialog(onDismissRequest = { confirm = false }, title = { Text(if (storeEdition) "Sign out of this phone?" else "Disconnect this phone?") },
-        text = { Text(if (storeEdition) "The app on this phone stops until you sign in again. The subscription goes on."
-            else "The app on this phone stops until it is connected again with a QR code from the portal.") },
+        text = { Text(if (storeEdition) "The app on this phone goes back to the free version until you sign in again. The subscription goes on."
+            else "The app on this phone goes back to the free version until it is connected again with a QR code from the portal.") },
         confirmButton = { Button({ confirm = false; vm.account.disconnect() }) { Text(if (storeEdition) "Sign out" else "Disconnect") } },
         dismissButton = { TextButton({ confirm = false }) { Text("Cancel") } })
-
-    DeleteAccount(a, vm)
-    TextButton({ openUrl(ctx, StoreCoordinator.privacyUrl) }, modifier = Modifier.padding(top = 10.dp)) { Text("Privacy policy") }
 }
 
 /** Delete the account (both stores require it in the app): asked first. */
@@ -524,6 +548,7 @@ private val CONDITIONS = listOf("M", "NM", "EX", "GD", "LP", "PL", "PO")
 @Composable
 fun CollectionBar(state: UiState, vm: ScannerViewModel, s: Shown, condition: String = "NM") {
     val a = state.account
+    if (a.isFree) { FreeCollectionBar(a, vm, s, condition); return }
     val coll = a.has("collection"); val want = a.has("wanted")
     if (!coll && !want) return
     val ctx = LocalContext.current
@@ -563,6 +588,31 @@ fun CollectionBar(state: UiState, vm: ScannerViewModel, s: Shown, condition: Str
     if (sheet) CollectionSheet(a, condition, onClose = { sheet = false }) { c, q, cents, binder, note ->
         vm.addShownToCollection(c, q, cents, binder, note)
     }
+}
+
+/** The free version: + Collection keeps the card on this phone (50 different cards); ☆ Missing is shown locked. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FreeCollectionBar(a: AccountUi, vm: ScannerViewModel, s: Shown, condition: String) {
+    var sheet by remember { mutableStateOf(false) }
+    fun add(cond: String, qty: Int, cents: Long?, note: String?) {
+        if (!vm.addShownLocally(cond, qty, cents, note)) vm.showLocked(LockedFeature.COLLECTION_FULL)
+    }
+    Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("+ Collection", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+            modifier = Modifier.background(Gold, RoundedCornerShape(20.dp))
+                .combinedClickable(onClick = { add(condition, 1, null, null) }, onLongClick = { sheet = true })
+                .padding(horizontal = 14.dp, vertical = 8.dp))
+        Text("🔒 Missing", color = Muted, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+            modifier = Modifier.border(1.dp, Muted, RoundedCornerShape(20.dp))
+                .clickable { vm.showLocked(LockedFeature.MISSING) }.padding(horizontal = 14.dp, vertical = 7.dp))
+    }
+    val lines = a.localLines(s.version.id)
+    val have = lines.sumOf { it.quantity }
+    if (have > 0) Text("In collection: $have (" + lines.joinToString(" · ") { "${it.quantity} × ${it.language} ${ShopTerms.finishLabel(it.finish)} ${it.condition}" } + ")",
+        color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+    // no binders without an account
+    if (sheet) CollectionSheet(a.copy(binders = emptyList()), condition, onClose = { sheet = false }) { c, q, cents, _, note -> add(c, q, cents, note) }
 }
 
 /** Long press on + Collection (and the missing cards' Found it): the details of the copy. */

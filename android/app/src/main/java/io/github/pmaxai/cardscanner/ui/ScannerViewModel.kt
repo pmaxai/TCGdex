@@ -375,6 +375,8 @@ data class UiState(
     val settingsPage: SettingsPage? = null,
     /** the collection page is open on this tab (null: closed) */
     val collectionPage: CollectionPart? = null,
+    /** the free version: a locked feature's message is shown */
+    val locked: LockedFeature? = null,
     /** Webshop Mode: the connection, the shown card in the shop, the booking form */
     val shop: ShopState = ShopState(),
     /** a newer app with newer prices is out (null: none, or not checked yet) */
@@ -1323,11 +1325,12 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun applyAccount(st: AccountStatus?) {
         val a = _state.value.account
-        if (a.required && a.gate == AccountGate.OPEN) {
+        if (a.required && (a.gate == AccountGate.OPEN || a.isFree)) {
             val m = _state.value.settings.mode
             if (m != AppMode.SCANNER && !a.has(featureOf(m))) {
                 updateSettings { it.withMode(AppMode.SCANNER) }
-                _state.update { it.copy(message = "${m.label} mode isn't in your plan any more – back to Scanner") }
+                _state.update { it.copy(message = if (a.isFree) "${m.label} mode needs a subscription – back to Scanner"
+                    else "${m.label} mode isn't in your plan any more – back to Scanner") }
             }
             st?.webshopHost?.takeIf { a.has("webshop") && shopStore.host.isBlank() }?.let { h ->
                 shopStore.save(h, shopStore.keyId, null); loadShopConnection()
@@ -1341,6 +1344,25 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val s = _state.value.shown ?: return
         account.addToCollection(s.version.id, ShopTerms.languageOf(s.printedOnly ?: s.version.lang), ShopTerms.finishOf(s.printing),
             condition, quantity, purchaseCents, binderId, note, label = "${s.version.name} · ${s.version.setName} ${s.version.numberText}")
+    }
+
+    /** + Collection in the free version: the shown card kept on this phone. False: the 50 different cards are reached. */
+    fun addShownLocally(condition: String = "NM", quantity: Int = 1, purchaseCents: Long? = null, note: String? = null): Boolean {
+        val s = _state.value.shown ?: return true
+        return account.addLocally(s.version.id, ShopTerms.languageOf(s.printedOnly ?: s.version.lang), ShopTerms.finishOf(s.printing),
+            condition, quantity, purchaseCents, note, label = "${s.version.name} · ${s.version.setName} ${s.version.numberText}")
+    }
+
+    /** The free version: a locked feature's message (what it does, the way to the plans). */
+    fun showLocked(f: LockedFeature) = _state.update { it.copy(locked = f, search = null, picks = null) }
+
+    fun lockedSeen() = _state.update { it.copy(locked = null) }
+
+    /** "See the plans": ⚙ → Account, with the sign-in or the plans. */
+    fun showPlans() {
+        _state.update { it.copy(locked = null, search = null, picks = null, collectionPage = null) }
+        openSettings(SettingsPage.ACCOUNT)
+        if (store.sells) store.refresh()
     }
 
     /** ☆ Missing for the shown card (a second tap takes it off the list). */
@@ -1429,7 +1451,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
      * plans to buy); the direct edition opens the portal.
      */
     fun morePlan(ctx: android.content.Context) {
-        if (store.sells) { openSettings(SettingsPage.ACCOUNT); store.refresh() }
+        if (store.sells || _state.value.account.isFree) showPlans()
         else openUrl(ctx, _state.value.account.portalUrl)
     }
 
@@ -2120,7 +2142,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun maybeAlert(sh: Shown) {
-        if (_state.value.settings.youtube || sh.confidence == Confidence.UNSURE) return
+        // the free version: no price alerts (they would tell the price)
+        if (_state.value.settings.youtube || sh.confidence == Confidence.UNSURE || _state.value.account.isFree) return
         val threshold = _state.value.settings.threshold
         if (threshold <= 0) return
         // any printing above the threshold: a valuable reverse holo must not slip through

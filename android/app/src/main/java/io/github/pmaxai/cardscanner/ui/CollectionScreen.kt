@@ -3,6 +3,7 @@ package io.github.pmaxai.cardscanner.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -63,7 +64,8 @@ enum class CollectionPart(val title: String) { COLLECTION("Collection"), MISSING
 @Composable
 fun CollectionScreen(state: UiState, vm: ScannerViewModel, start: CollectionPart) {
     val a = state.account
-    val parts = buildList {
+    // the free version: its collection on this phone, and the missing cards shown locked
+    val parts = if (a.isFree) listOf(CollectionPart.COLLECTION, CollectionPart.MISSING) else buildList {
         if (a.has("collection")) add(CollectionPart.COLLECTION)
         if (a.has("wanted")) add(CollectionPart.MISSING)
     }
@@ -77,7 +79,7 @@ fun CollectionScreen(state: UiState, vm: ScannerViewModel, start: CollectionPart
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
             Text(shown.title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            IconButton(onClick = { if (shown == CollectionPart.COLLECTION) vm.account.loadItems() else vm.account.check(force = true) },
+            if (!a.isFree) IconButton(onClick = { if (shown == CollectionPart.COLLECTION) vm.account.loadItems() else vm.account.check(force = true) },
                 enabled = !(shown == CollectionPart.COLLECTION && a.itemsLoading)) {
                 Icon(Icons.Filled.Refresh, contentDescription = "Load again", tint = Color.White)
             }
@@ -86,15 +88,21 @@ fun CollectionScreen(state: UiState, vm: ScannerViewModel, start: CollectionPart
             parts.forEach { p ->
                 val on = p == shown
                 Column(Modifier.weight(1f).clickable { part = p }, horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(if (p == CollectionPart.MISSING) "Missing (${a.wanted.size})" else "Collection", color = if (on) Gold else Muted,
+                    Text(when {
+                        p == CollectionPart.COLLECTION -> "Collection"
+                        a.isFree -> "Missing 🔒"
+                        else -> "Missing (${a.wanted.size})"
+                    }, color = if (on) Gold else Muted,
                         fontSize = 15.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 10.dp))
                     Box(Modifier.fillMaxWidth().height(3.dp).background(if (on) Gold else Color.Transparent))
                 }
             }
         }
-        when (shown) {
-            CollectionPart.COLLECTION -> CollectionList(state, vm, Modifier.weight(1f))
-            CollectionPart.MISSING -> MissingList(state, vm, Modifier.weight(1f))
+        when {
+            a.isFree && shown == CollectionPart.COLLECTION -> LocalCollectionList(state, vm, Modifier.weight(1f))
+            a.isFree -> LockedPage(LockedFeature.MISSING, "☆", onPlans = vm::showPlans, modifier = Modifier.weight(1f))
+            shown == CollectionPart.COLLECTION -> CollectionList(state, vm, Modifier.weight(1f))
+            else -> MissingList(state, vm, Modifier.weight(1f))
         }
     }
 }
@@ -131,6 +139,64 @@ private fun CollectionList(state: UiState, vm: ScannerViewModel, modifier: Modif
                 }
             }
         }
+    }
+}
+
+/** The free version's collection, kept on this phone: up to 50 different cards, newest first, with a filter. Values come with a subscription. */
+@Composable
+private fun LocalCollectionList(state: UiState, vm: ScannerViewModel, modifier: Modifier) {
+    val a = state.account
+    var filter by rememberSaveable { mutableStateOf("") }
+    /** the card whose Remove is asked */
+    var removing by remember { mutableStateOf<LocalItem?>(null) }
+    val all = a.localItems
+    val words = filter.lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }
+    val shown = if (words.isEmpty()) all else all.filter { item -> words.all { item.searchText.contains(it) } }
+    Column(modifier) {
+        OutlinedTextField(filter, { filter = it }, singleLine = true, placeholder = { Text("Filter the collection") },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
+        if (all.isNotEmpty()) Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("${a.localCardCount} of ${Free.MAX_CARDS} cards · ${all.sumOf { it.quantity }} copies", color = Muted, fontSize = 14.sp,
+                modifier = Modifier.weight(1f))
+            Text("🔒 Value", color = Gold, fontSize = 15.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.clickable { vm.showLocked(LockedFeature.VALUES) }.padding(4.dp))
+        }
+        when {
+            all.isEmpty() -> Text("No cards in the collection yet. Tap + Collection on a scanned card to add it – the free version keeps up to " +
+                "${Free.MAX_CARDS} different cards on this phone.", color = Muted, textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(24.dp))
+            shown.isEmpty() -> Text("No card matches “$filter”.", color = Muted, modifier = Modifier.padding(24.dp))
+            else -> LazyColumn(Modifier.weight(1f)) {
+                items(shown, key = { it.id }) { item -> LocalRow(item, vm) { removing = item } }
+            }
+        }
+    }
+    removing?.let { item ->
+        AlertDialog(onDismissRequest = { removing = null }, title = { Text(item.label) },
+            text = { Text("Remove it from the collection on this phone?") },
+            confirmButton = { TextButton({ removing = null; vm.account.removeLocally(item.id) }) { Text("Remove", color = Warn) } },
+            dismissButton = { TextButton({ removing = null }) { Text("Cancel") } })
+    }
+}
+
+/** a card of the phone's collection: tap shows it; long press removes it (asked first) */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun LocalRow(item: LocalItem, vm: ScannerViewModel, onRemove: () -> Unit) {
+    val lang = ShopTerms.appLang(item.language)
+    val c by produceState<Candidate?>(null, item.cardId, lang) { value = vm.candidate(item.cardId, lang) }
+    Row(Modifier.fillMaxWidth().combinedClickable(onClick = { c?.let(vm::showFromCollection) }, onLongClick = onRemove)
+        .padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Thumb(c?.image, item.label)
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(c?.info?.name ?: item.label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            c?.info?.let { Text("${it.setName} · ${it.numberText}", color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            Text(listOf(item.language, ShopTerms.finishLabel(item.finish), item.condition).filter { it.isNotBlank() }.joinToString(" · "),
+                color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Text("× ${item.quantity}", color = Color.White, fontSize = 14.sp)
+        Text("✕", color = Muted, fontSize = 16.sp, modifier = Modifier.padding(start = 10.dp).clickable(onClick = onRemove).padding(6.dp))
     }
 }
 
@@ -233,6 +299,14 @@ private fun Thumb(url: String?, name: String) {
 @Composable
 fun CollectionLinks(state: UiState, vm: ScannerViewModel, modifier: Modifier = Modifier) {
     val a = state.account
+    if (a.isFree) {
+        // the free version: its collection on this phone; the missing cards shown locked
+        FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton({ vm.openCollection(CollectionPart.COLLECTION) }) { Text("Collection", maxLines = 1) }
+            OutlinedButton({ vm.showLocked(LockedFeature.MISSING) }) { Text("🔒 Missing cards", maxLines = 1, color = Muted) }
+        }
+        return
+    }
     if (a.status == null) return
     val coll = a.has("collection"); val want = a.has("wanted")
     if (!coll && !want) return

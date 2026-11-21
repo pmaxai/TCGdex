@@ -13,6 +13,12 @@ import io.github.pmaxai.cardscanner.account.PairCode
 import io.github.pmaxai.cardscanner.ui.AccountCoordinator
 import io.github.pmaxai.cardscanner.shop.ShopTerms
 import io.github.pmaxai.cardscanner.ui.AccountUi
+import io.github.pmaxai.cardscanner.ui.Free
+import io.github.pmaxai.cardscanner.ui.localCardCount
+import io.github.pmaxai.cardscanner.ui.localLines
+import io.github.pmaxai.cardscanner.ui.nextRevealAt
+import io.github.pmaxai.cardscanner.ui.revealed
+import io.github.pmaxai.cardscanner.ui.revealsLeft
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -159,6 +165,8 @@ class AccountTest {
         server = MockWebServer().apply { dispatcher = fake; start() }
         AccountStore(app).forget(null)
         AccountStore(app).saveQueue(emptyList())
+        AccountStore(app).saveLocalCollection(emptyList())
+        AccountStore(app).saveFreeReveals(emptyList())
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         account = AccountCoordinator(app, scope, { f -> ui.update(f) }, { ui.value }, { m -> synchronized(messages) { messages += m } }, {}, {})
         // a short read timeout, so "the answer comes too late" doesn't take long
@@ -170,6 +178,8 @@ class AccountTest {
         scope.cancel()
         AccountStore(app).forget(null)
         AccountStore(app).saveQueue(emptyList())
+        AccountStore(app).saveLocalCollection(emptyList())
+        AccountStore(app).saveFreeReveals(emptyList())
         server.shutdown()
     }
 
@@ -395,6 +405,69 @@ class AccountTest {
         waitUntil("the German one off") { AccountStore(app).queue().isEmpty() && fake.wanted.size == 1 && ui.value.wanted.size == 1 }
         assertEquals("EN", ui.value.wanted.single().language)
         assertEquals("EN", fake.wanted.values.single().optString("language"))
+    }
+
+    /** The free version: 10 prices in any 60 minutes; a card revealed stays revealed for that hour. */
+    @Test
+    fun tenPricesInAnySixtyMinutes() {
+        assertTrue("not connected: the free version", ui.value.isFree)
+        val t0 = 1_800_000_000_000L
+        var t = t0
+        account.now = { t }
+        for (i in 0 until 10) { assertTrue("reveal ${i + 1}", account.reveal("card-$i")); t += 60_000 }
+        assertEquals(0, ui.value.revealsLeft(t))
+        assertFalse("the 11th within the hour", account.reveal("card-10"))
+        assertFalse(ui.value.revealed("card-10", t))
+        assertTrue("a card revealed this hour stays revealed", account.reveal("card-3"))
+        assertEquals("the next one when the first is an hour old", t0 + Free.HOUR, ui.value.nextRevealAt(t))
+        assertEquals("kept on the phone", 10, AccountStore(app).freeReveals().size)
+        Log.i("Account", "free: 10 revealed, next at ${ui.value.nextRevealAt(t)}")
+        // rolling: an hour after the first, one is free again (and the first card is hidden again)
+        t = t0 + Free.HOUR + 1_000
+        assertEquals(1, ui.value.revealsLeft(t))
+        assertFalse(ui.value.revealed("card-0", t))
+        assertTrue(account.reveal("card-10"))
+        assertEquals(0, ui.value.revealsLeft(t))
+    }
+
+    /** The free version's collection on the phone: 50 different cards, copies don't count. */
+    @Test
+    fun theLocalCollectionHoldsFiftyDifferentCards() {
+        for (i in 0 until 50) assertTrue(account.addLocally("card-$i", "EN", "normal", "NM", label = "Card $i"))
+        assertEquals(50, ui.value.localCardCount)
+        assertFalse("a 51st card", account.addLocally("card-50", "EN", "normal", "NM", label = "Card 50"))
+        assertTrue("another copy of one in it", account.addLocally("card-7", "EN", "normal", "NM", label = "Card 7"))
+        assertTrue(account.addLocally("card-7", "DE", "holo", "EX", 2, 450, label = "Card 7"))
+        assertEquals("copies don't count", 50, ui.value.localCardCount)
+        assertEquals("NM merged into one line; the German one on its own", listOf(2, 2), ui.value.localLines("card-7").map { it.quantity }.sorted())
+        assertEquals("newest first", "card-7", ui.value.localItems.first().cardId)
+        account.removeLocally(ui.value.localItems.first { it.cardId == "card-0" }.id)
+        assertEquals(49, ui.value.localCardCount)
+        assertTrue("room again", account.addLocally("card-50", "EN", "normal", "NM", label = "Card 50"))
+        assertEquals("kept on the phone", ui.value.localItems, AccountStore(app).localCollection())
+    }
+
+    /** With a plan that has a collection, the phone's cards move into the account's; signed out, the app is the free version again. */
+    @Test
+    fun theLocalCardsMoveIntoTheAccountWithAPlan() {
+        account.addLocally("base1-4", "EN", "holo", "GD", purchaseCents = 25000, note = "from the flea market", label = "Charizard")
+        account.addLocally("sv08-059", "DE", "normal", "NM", quantity = 2, label = "Pikachu-ex")
+        assertTrue(ui.value.isFree)
+        pair()
+        waitUntil("moved") { fake.items.size == 2 && ui.value.localItems.isEmpty() && AccountStore(app).queue().isEmpty() }
+        Log.i("Account", "moved: ${fake.items.values.map { "${it.optInt("quantity")} × ${it.optString("card_id")} ${it.optString("language")} ${it.optString("condition")}" }}")
+        val charizard = fake.items.values.single { it.optString("card_id") == "base1-4" }
+        assertEquals("holo", charizard.optString("finish"))
+        assertEquals("GD", charizard.optString("condition"))
+        assertEquals(25000, charizard.optInt("purchase_price_cents"))
+        assertEquals("from the flea market", charizard.optString("note"))
+        assertEquals(2, fake.items.values.single { it.optString("card_id") == "sv08-059" }.optInt("quantity"))
+        assertTrue(messages.toString(), synchronized(messages) { messages.contains("The 2 cards from this phone are now in your account's collection.") })
+        assertFalse(ui.value.isFree)
+        assertTrue("nothing left on the phone", AccountStore(app).localCollection().isEmpty())
+        account.disconnect()
+        waitUntil("signed out") { ui.value.gate == AccountGate.CONNECT && !ui.value.busy }
+        assertTrue("signed out: the free version again", ui.value.isFree)
     }
 
     /** The shop's card languages back to the data pack's. */

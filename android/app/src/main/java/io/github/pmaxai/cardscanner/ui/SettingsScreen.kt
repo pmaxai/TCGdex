@@ -218,7 +218,12 @@ private fun CameraPage(state: UiState, vm: ScannerViewModel) {
 @Composable
 private fun PricesPage(state: UiState, vm: ScannerViewModel) {
     val s = state.settings
-    Setting("Alert / HIT for cards worth at least", "Scanner: the result turns gold with a sound; YouTube: the HIT reveal") {
+    if (state.account.isFree) {
+        // the free version: price alerts would tell the price
+        Setting("Alert / HIT for cards worth at least", "🔒 needs a subscription") {
+            TextButton({ vm.showLocked(LockedFeature.ALERT) }) { Text("What's included?") }
+        }
+    } else Setting("Alert / HIT for cards worth at least", "Scanner: the result turns gold with a sound; YouTube: the HIT reveal") {
         Choices(listOf(0.0, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0), s.threshold, label = { if (it == 0.0) "off" else "${it.toInt()} €" }) { v ->
             vm.updateSettings { it.copy(threshold = v) }
         }

@@ -188,15 +188,16 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
         Column(Modifier.fillMaxSize()) {
             // a newer app with newer prices (not over the YouTube picture)
             state.update?.takeIf { !state.loading && !state.settings.youtube && state.settingsPage == null && state.collectionPage == null &&
-                !state.account.locked }?.let { u ->
+                !state.account.justConnected }?.let { u ->
                 UpdateBanner(u, state.pricesDate, onUpdate = vm::startUpdate, onLater = vm::dismissUpdate)
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     !openCvReady -> Message("OpenCV could not be loaded on this phone.")
                     state.error != null -> Message("Could not start: ${state.error}")
-                    // not connected to an account, the subscription ended, or the saved answer ran out offline
-                    state.account.locked || state.account.justConnected -> AccountGateScreen(state, vm)
+                    // just connected: the account and plan, then Continue (without a running subscription the app is
+                    // the free version; sign-in and plans are in ⚙ → Account)
+                    state.account.justConnected -> AccountGateScreen(state, vm)
                     state.loading -> Loading(state.loadingText)
                     // over the settings when opened from there (Back returns to them)
                     state.collectionPage != null -> CollectionScreen(state, vm, state.collectionPage ?: CollectionPart.COLLECTION)
@@ -210,9 +211,12 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
             }
         }
         // after a double tap: the most likely cards to pick from
-        state.picks?.let { PickList(it, state.shown, onPick = vm::pick, onSearch = { vm.openSearch(SearchMode.REPLACE) },
+        state.picks?.let { PickList(it, state.shown, showPrices = !state.account.isFree, searchLocked = state.account.isFree, onPick = vm::pick,
+            onSearch = { if (state.account.isFree) vm.showLocked(LockedFeature.SEARCH) else vm.openSearch(SearchMode.REPLACE) },
             onClose = vm::closePicks) }
         state.search?.let { SearchDialog(it, vm) }
+        // the free version: a locked feature's message
+        state.locked?.let { LockedDialog(it, onPlans = vm::showPlans, onClose = vm::lockedSeen) }
         // Trading: a cart just paid – its cards into the collection?
         CartCollectionOffer(state, vm)
     }
@@ -249,16 +253,23 @@ private fun Scanner(state: UiState, vm: ScannerViewModel) {
 
     val topBar: @Composable () -> Unit = {
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            // look up any card, without it in front of the camera
-            Text("🔍  Search cards", color = Muted, fontSize = 15.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+            // look up any card, without it in front of the camera (the free version: shown locked, as are alerts and photos)
+            val free = state.account.isFree
+            Text(if (free) "🔒  Search cards" else "🔍  Search cards", color = Muted, fontSize = 15.sp, maxLines = 1, softWrap = false,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(end = 6.dp).weight(1f).background(Panel, RoundedCornerShape(20.dp))
-                    .clickable { vm.openSearch(SearchMode.LOOK_UP) }.padding(horizontal = 12.dp, vertical = 8.dp))
-            AssistChip(onClick = { vm.openSettings(SettingsPage.PRICES) }, label = {
-                Text(if (state.settings.threshold > 0) "Alert ≥ ${state.settings.threshold.toInt()} €" else "Alert off", maxLines = 1)
+                    .clickable { if (free) vm.showLocked(LockedFeature.SEARCH) else vm.openSearch(SearchMode.LOOK_UP) }
+                    .padding(horizontal = 12.dp, vertical = 8.dp))
+            AssistChip(onClick = { if (free) vm.showLocked(LockedFeature.ALERT) else vm.openSettings(SettingsPage.PRICES) }, label = {
+                Text(when {
+                    free -> "🔒 Alert"
+                    state.settings.threshold > 0 -> "Alert ≥ ${state.settings.threshold.toInt()} €"
+                    else -> "Alert off"
+                }, maxLines = 1, color = if (free) Muted else Color.Unspecified)
             })
             TextButton({ torch = !torch }) { Text("Light", color = if (torch) Gold else Color.White, maxLines = 1) }
-            TextButton({ pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
-                Text("Photo", color = Color.White, maxLines = 1)
+            TextButton({ if (free) vm.showLocked(LockedFeature.PHOTO) else pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
+                Text(if (free) "🔒 Photo" else "Photo", color = if (free) Muted else Color.White, maxLines = 1)
             }
             TextButton({ vm.openSettings() }) { Text("⚙", color = Color.White, fontSize = 20.sp) }
         }
@@ -282,7 +293,9 @@ private fun Scanner(state: UiState, vm: ScannerViewModel) {
         Column(m.verticalScroll(rememberScrollState()).padding(12.dp)) {
             val s = state.shown
             if (s == null) {
-                Text("Hold a card inside the frame. Its name and Cardmarket price appear here; " +
+                Text(if (state.account.isFree) "Hold a card inside the frame. Its name appears here – reveal its Cardmarket price with a tap " +
+                        "(${Free.REVEALS_PER_HOUR} per hour in the free version). Not recognised? Double-tap the picture to take it anyway. Pinch to zoom."
+                    else "Hold a card inside the frame. Its name and Cardmarket price appear here; " +
                         "the phone vibrates when any printing of it is worth at least your alert price. " +
                         "Not recognised? Double-tap the picture to take it anyway. Pinch to zoom.", color = Muted)
                 CollectionLinks(state, vm, Modifier.padding(top = 12.dp))
@@ -348,10 +361,13 @@ fun CameraArea(state: UiState, vm: ScannerViewModel, torch: Boolean, video: Bool
 }
 
 @Composable
-private fun ResultCard(s: Shown, state: UiState, vm: ScannerViewModel) {
+internal fun ResultCard(s: Shown, state: UiState, vm: ScannerViewModel) {
     val settings = state.settings
     val ctx = LocalContext.current
     val c = s.version
+    // the free version: the prices only once revealed (10 cards in any 60 minutes)
+    val free = state.account.isFree
+    val priced = state.account.revealed(s.priceCard.id)
     Row {
         CardImage(s, Modifier.width(96.dp).aspectRatio(63f / 88f))
         Spacer(Modifier.width(12.dp))
@@ -377,25 +393,30 @@ private fun ResultCard(s: Shown, state: UiState, vm: ScannerViewModel) {
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             s.priceCard.printings.forEach { p ->
                 FilterChip(selected = p.kind == s.selected?.kind, onClick = { vm.choosePrinting(p.kind) },
-                    label = { Text("${p.kind.label} ${printingPrice(p)}", fontSize = 12.sp) })
+                    label = { Text(if (priced) "${p.kind.label} ${printingPrice(p)}" else p.kind.label, fontSize = 12.sp) })
             }
         }
         FoilLine(s)
     }
     s.richerPrinting?.let { r ->
-        Text("⚠ The ${r.kind.label.lowercase()} of this card is worth ${printingPrice(r)} – check the finish!",
+        Text(if (priced) "⚠ The ${r.kind.label.lowercase()} of this card is worth ${printingPrice(r)} – check the finish!"
+            else "⚠ The ${r.kind.label.lowercase()} of this card is worth more – check the finish!",
             color = Warn, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
     }
     PrintedOnlyHint(s)
 
     Spacer(Modifier.height(8.dp))
-    PriceBlock(s)
-    PriceHistoryLine(s)
+    if (priced) {
+        PriceBlock(s)
+        PriceHistoryLine(s)
+    } else {
+        RevealPrice(state.account, s.priceCard.id, vm)
+    }
     // the account: + Collection, ☆ Missing
     CollectionBar(state, vm, s)
     if (settings.showPsa) {
         val printing = s.selected?.kind?.takeIf { s.priceCard.printings.size > 1 }
-        s.graded?.let { PsaLine(it, printing = printing) }
+        if (priced) s.graded?.let { PsaLine(it, printing = printing) }
         s.population?.let { GemLine(it) }
         if (s.gradedOnlyOtherPrintings && printing != null)
             Text("No PSA sales for the ${printing.label.lowercase()} yet", color = Muted, fontSize = 12.sp,
@@ -420,10 +441,11 @@ private fun ResultCard(s: Shown, state: UiState, vm: ScannerViewModel) {
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             s.alternatives.forEach { alt ->
                 FilterChip(selected = false, onClick = { vm.choose(alt) }, label = {
-                    Text("${alt.info.name} ${alt.info.numberText} · ${eur(alt.info.bestValue)}", fontSize = 12.sp)
+                    Text("${alt.info.name} ${alt.info.numberText}" + if (free) "" else " · ${eur(alt.info.bestValue)}", fontSize = 12.sp)
                 })
             }
-            FilterChip(selected = false, onClick = { vm.openSearch(SearchMode.REPLACE) }, label = { Text("🔍 Search…", fontSize = 12.sp) })
+            FilterChip(selected = false, onClick = { if (free) vm.showLocked(LockedFeature.SEARCH) else vm.openSearch(SearchMode.REPLACE) },
+                label = { Text(if (free) "🔒 Search…" else "🔍 Search…", fontSize = 12.sp) })
         }
     }
     Spacer(Modifier.height(8.dp))
