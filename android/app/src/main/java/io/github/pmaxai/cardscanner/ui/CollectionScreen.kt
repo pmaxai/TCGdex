@@ -6,6 +6,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -226,14 +228,15 @@ private fun Thumb(url: String?, name: String) {
     }
 }
 
-/** On the scanner's start text and the Account page: the way to the collection page. */
+/** On the scanner's start text and the Account page: the way to the collection page (the buttons wrap where it's narrow). */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CollectionLinks(state: UiState, vm: ScannerViewModel, modifier: Modifier = Modifier) {
     val a = state.account
     if (a.status == null) return
     val coll = a.has("collection"); val want = a.has("wanted")
     if (!coll && !want) return
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         if (coll) OutlinedButton({ vm.openCollection(CollectionPart.COLLECTION) }) { Text("Collection", maxLines = 1) }
         if (want) OutlinedButton({ vm.openCollection(CollectionPart.MISSING) }) {
             Text("☆ Missing cards (${a.wanted.size})", maxLines = 1)
