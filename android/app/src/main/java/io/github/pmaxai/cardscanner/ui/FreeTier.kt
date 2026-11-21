@@ -106,20 +106,25 @@ fun AccountUi.localLines(cardId: String): List<CollectionLine> =
 /** A feature the free version shows but doesn't include. */
 enum class LockedFeature(val title: String, val text: String) {
     SEARCH("Search needs a subscription", "Find any card by name, number or set, in any language, with its prices."),
-    MODES("This mode needs a subscription", "Trading Mode for buying, selling and trading at shows, YouTube Mode for recording your openings, and Webshop Mode for your shop."),
+    MODES("This mode needs a subscription", "YouTube Mode for recording your openings, and Webshop Mode for your shop."),
+    TRADING("Carts and deals need a subscription", "Carts for buying, selling and trading at shows, with conditions, asking prices and your deal history."),
     MISSING("Missing cards need a subscription", "Keep a list of the cards you're looking for – the shop tells you when one comes in."),
     PHOTO("Scanning photos needs a subscription", "Recognise cards on photos from your gallery."),
     ALERT("Price alerts need a subscription", "The phone vibrates when a scanned card is worth at least your alert price."),
     SHARE("Sharing needs a subscription", "Send friends a link to your collection – they see your cards and what they're worth."),
     COLLECTION_FULL("The free collection is full", "The free version keeps ${Free.MAX_CARDS} different cards on this phone. With a subscription your collection has no limit, is saved in your account, and these cards move into it."),
     VALUES("Collection values need a subscription", "See what each card and your whole collection is worth."),
+    PSA("PSA prices are an add-on", "What PSA 10, 9 and 8 copies of a card sold for on eBay – an add-on for Collector and Creator, monthly or yearly.");
+
+    /** the way forward: the plans, or (an add-on) Settings › Price data & add-ons */
+    val isAddon: Boolean get() = this == PSA
 }
 
 /** A locked feature's message: what it does, and the way to the plans. */
 @Composable
 fun LockedDialog(f: LockedFeature, onPlans: () -> Unit, onClose: () -> Unit) {
     AlertDialog(onDismissRequest = onClose, title = { Text(f.title) }, text = { Text(f.text) },
-        confirmButton = { Button(onPlans) { Text("See the plans") } },
+        confirmButton = { Button(onPlans) { Text(if (f.isAddon) "See the add-on" else "See the plans") } },
         dismissButton = { TextButton(onClose) { Text("Not now") } })
 }
 
@@ -160,14 +165,14 @@ fun RevealPrice(a: AccountUi, cardId: String, vm: ScannerViewModel) {
     }
 }
 
-/** ⚙ → Account in the free version, above the sign-in or the plans: what Free includes and what a plan adds. */
+/** Settings › Account in the free version, above the sign-in or the plans: what Free includes and what a plan adds. */
 @Composable
 fun FreeNote(modifier: Modifier = Modifier) {
     Column(modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text("Free version", color = Gold, fontSize = 16.sp, fontWeight = FontWeight.Bold)
         Line("✓", "Scanner: scan as many cards as you like, ${Free.REVEALS_PER_HOUR} prices per hour")
         Line("✓", "A collection of ${Free.MAX_CARDS} cards on this phone")
-        Line("🔒", "Search, Trading, YouTube and Webshop Mode, missing cards, photo scans, price alerts and collection values come with a plan")
+        Line("🔒", "Search, carts and deals, YouTube and Webshop Mode, missing cards, photo scans, price alerts and collection values come with a plan; PSA prices as an add-on")
         Text("Sign in and choose a plan for everything; your cards move into your account's collection.", color = Muted, fontSize = 12.sp,
             modifier = Modifier.padding(top = 2.dp))
     }

@@ -100,7 +100,7 @@ fun CardRow(c: Candidate, rank: Int? = null, current: Boolean = false, rel: Floa
                 .background(if (rank == 1) Sure else Muted.copy(alpha = 0.6f), RoundedCornerShape(2.dp)))
         }
         Spacer(Modifier.width(8.dp))
-        if (showPrice) Text(eur(c.info.bestValue), color = Gold, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        if (showPrice) Text(c.info.bestPriceText, color = Gold, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
         trailing?.invoke()
     }
 }

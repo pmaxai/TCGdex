@@ -19,16 +19,51 @@ data class Printing(
     val kind: Kind,
     /** Cardmarket EUR: trend (or 30-day / average), 30-day average, lowest offer */
     val eur: Double?, val eur30: Double?, val eurLow: Double?,
-    /** TCGplayer market price, USD */
+    /** TCGplayer price (market, else mid or low), USD */
     val usd: Double?,
     /** the TCGplayer price in EUR at the data pack's exchange rate (null: no rate in the pack) */
     val usdEur: Double? = null,
+    /** the single sources (Settings › Prices): Cardmarket trend and average sell price, TCGplayer market, mid and low */
+    val cmTrend: Double? = null, val cmAvg: Double? = null,
+    val tcgMarket: Double? = null, val tcgMid: Double? = null, val tcgLow: Double? = null,
+    /** the data pack's USD per EUR */
+    val usdPerEur: Double? = null,
+    /** made with the single sources (the data pack); without them the trend is [eur] and the market price [usd] */
+    val sourced: Boolean = false,
 ) {
     enum class Kind(val label: String) {
         NORMAL("Normal"), HOLO("Holo"), REVERSE("Reverse holo"), FIRST_EDITION("1st Edition")
     }
-    /** the price to judge this printing by: Cardmarket, else TCGplayer (in EUR where the rate is known) */
-    val value: Double? get() = eur ?: usdEur ?: usd
+
+    /** a source's price as it gives it (EUR or USD), null without one */
+    fun raw(s: PriceSource): Double? = when (s) {
+        PriceSource.CM_TREND -> if (sourced) cmTrend else eur
+        PriceSource.CM_AVG30 -> eur30
+        PriceSource.CM_AVG -> cmAvg
+        PriceSource.CM_LOW -> eurLow
+        PriceSource.TCG_MARKET -> if (sourced) tcgMarket else usd
+        PriceSource.TCG_MID -> tcgMid
+        PriceSource.TCG_LOW -> tcgLow
+    }?.takeIf { it > 0 }
+
+    /** a source's price in EUR (TCGplayer at the data pack's rate; null without one) */
+    fun eurValue(s: PriceSource): Double? {
+        val v = raw(s) ?: return null
+        if (!s.isUsd) return v
+        val r = usdPerEur?.takeIf { it > 0 } ?: return null
+        return Math.round(v / r * 100) / 100.0
+    }
+
+    /** The price to show for a source: that one, else the next one with a price ([PriceSource.FALLBACK]). */
+    fun shown(s: PriceSource): PriceShown? {
+        for (src in listOf(s) + PriceSource.FALLBACK) {
+            raw(src)?.let { return PriceShown(src, it, eurValue(src)) }
+        }
+        return null
+    }
+
+    /** the price to judge this printing by: the default source's (in EUR where it can be), else the next one with a price */
+    val value: Double? get() = shown(PriceSource.current)?.let { it.eur ?: it.native }
 }
 
 /**
@@ -397,7 +432,7 @@ class Catalog(private val db: SQLiteDatabase) {
                 prices = prices,
                 printings = printings(c.getString(18), rarity, prices, tcgplayer(cardId)).map { pr ->
                     val r = usdPerEur
-                    if (pr.usd != null && r != null) pr.copy(usdEur = Math.round(pr.usd / r * 100) / 100.0) else pr
+                    (if (pr.usd != null && r != null) pr.copy(usdEur = Math.round(pr.usd / r * 100) / 100.0) else pr).copy(usdPerEur = r)
                 },
                 priceCheck = priceCheck(cardId, c.getString(1)),
                 graded = graded(cardId),
@@ -436,21 +471,21 @@ class Catalog(private val db: SQLiteDatabase) {
         return PriceCheck(status, row[1] as Double?, row[2] as Double?, row[3] as Double?, others)
     }
 
-    /** TCGplayer market price (USD) per printing key, e.g. normal, holofoil, reverse-holofoil, 1st-edition. */
-    private fun tcgplayer(id: String): Map<String, Double> {
+    /** TCGplayer's prices (USD) per printing key, e.g. normal, holofoil, reverse-holofoil, 1st-edition: market, mid, low. */
+    private fun tcgplayer(id: String): Map<String, TcgPrice> {
         if (!hasTcg) return emptyMap()
         val json = db.rawQuery("SELECT data FROM tcgplayer WHERE id = ?", arrayOf(id)).use { c ->
             if (c.moveToFirst()) c.getString(0) else null
         } ?: return emptyMap()
-        val out = HashMap<String, Double>()
+        val out = HashMap<String, TcgPrice>()
         runCatching {
             val o = JSONObject(json)
             for (k in o.keys()) {
                 val nested = o.optJSONObject(k)
-                val p = if (nested != null) listOf("marketPrice", "midPrice", "lowPrice").firstNotNullOfOrNull { f ->
-                    nested.optDouble(f).takeIf { !it.isNaN() && it > 0 }
-                } else o.optDouble(k).takeIf { !it.isNaN() && it > 0 }
-                if (p != null) out[k.lowercase()] = p
+                fun num(f: String): Double? = nested?.optDouble(f)?.takeIf { !it.isNaN() && it > 0 }
+                val p = if (nested != null) TcgPrice(num("marketPrice"), num("midPrice"), num("lowPrice"))
+                    else TcgPrice(market = o.optDouble(k).takeIf { !it.isNaN() && it > 0 })
+                if (p.best != null) out[k.lowercase()] = p
             }
         }
         return out
@@ -523,7 +558,35 @@ class Catalog(private val db: SQLiteDatabase) {
      * variants fill in where TCGplayer has nothing. Cardmarket's price guide has the
      * standard printing plus reverse holo (its "holo" columns).
      */
-    private fun printings(variantsJson: String?, rarity: String?, p: Prices?, tcg: Map<String, Double>): List<Printing> {
+    private fun printings(variantsJson: String?, rarity: String?, p: Prices?, tcgAll: Map<String, TcgPrice>): List<Printing> =
+        Companion.printings(variantsJson, rarity, p, tcgAll)
+
+    private fun columns(table: String): Set<String> = db.rawQuery("PRAGMA table_info($table)", null).use { c ->
+        val s = HashSet<String>()
+        while (c.moveToNext()) s.add(c.getString(1))
+        s
+    }
+
+    private fun tableExists(name: String): Boolean =
+        db.rawQuery("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", arrayOf(name)).use { it.moveToFirst() }
+
+    private fun Cursor.doubleOrNull(i: Int): Double? = if (isNull(i)) null else getDouble(i)
+    private fun Cursor.intOrNull(i: Int): Int? = if (isNull(i)) null else getInt(i)
+
+    companion object {
+    /**
+     * Which printings exist and their prices. TCGplayer lists every printing it sells
+     * separately, which is the more reliable "does a reverse holo exist" source; TCGdex
+     * variants fill in where TCGplayer has nothing. Cardmarket's price guide has the
+     * standard printing plus reverse holo (its "holo" columns). Every printing keeps its single
+     * sources (Settings › Prices).
+     */
+    fun printings(variantsJson: String?, rarity: String?, p: Prices?, tcgAll: Map<String, TcgPrice>): List<Printing> {
+        val tcg = tcgAll.mapNotNull { (k, v) -> v.best?.let { k to it } }.toMap()
+        fun all(vararg keys: String): TcgPrice? = keys.firstNotNullOfOrNull { tcgAll[it] }
+        /** the single sources of a printing */
+        fun Printing.withSources(trend: Double?, avg: Double?, tp: TcgPrice?) =
+            copy(sourced = true, cmTrend = trend, cmAvg = avg, tcgMarket = tp?.market, tcgMid = tp?.mid, tcgLow = tp?.low)
         val v = runCatching { variantsJson?.let { JSONObject(it) } }.getOrNull()
         fun has(k: String) = v?.optBoolean(k, false) == true
         val holoRarity = rarity?.contains("holo", ignoreCase = true) == true
@@ -539,26 +602,20 @@ class Catalog(private val db: SQLiteDatabase) {
         val first = has("firstEdition") || tcgFirst != null
         val out = ArrayList<Printing>()
         if (normal) out += Printing(Printing.Kind.NORMAL, p?.headline, p?.avg30, p?.low, tcgNormal)
+            .withSources(p?.trend, p?.avg, all("normal", "unlimited"))
         if (holo) {
             // Cardmarket's standard price is the holo price when the card has no non-holo printing
             out += Printing(Printing.Kind.HOLO, if (!normal) p?.headline else null, if (!normal) p?.avg30 else null,
                 if (!normal) p?.low else null, tcgHolo)
+                .withSources(if (!normal) p?.trend else null, if (!normal) p?.avg else null, all("holofoil", "unlimited-holofoil"))
         }
         if (reverse) out += Printing(Printing.Kind.REVERSE, p?.headlineHolo, p?.avg30Holo, p?.lowHolo, tcgReverse)
+            .withSources(p?.trendHolo, p?.avgHolo, all("reverse-holofoil", "reverseholofoil"))
         if (first) out += Printing(Printing.Kind.FIRST_EDITION, null, null, null, tcgFirst)
+            .withSources(null, null, all("1st-edition-holofoil", "1st-edition", "1stedition", "1st-edition-normal"))
         if (out.isEmpty()) out += Printing(Printing.Kind.NORMAL, p?.headline, p?.avg30, p?.low, tcg.values.maxOrNull())
+            .withSources(p?.trend, p?.avg, tcgAll.values.maxByOrNull { it.best ?: 0.0 })
         return out
     }
-
-    private fun columns(table: String): Set<String> = db.rawQuery("PRAGMA table_info($table)", null).use { c ->
-        val s = HashSet<String>()
-        while (c.moveToNext()) s.add(c.getString(1))
-        s
     }
-
-    private fun tableExists(name: String): Boolean =
-        db.rawQuery("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", arrayOf(name)).use { it.moveToFirst() }
-
-    private fun Cursor.doubleOrNull(i: Int): Double? = if (isNull(i)) null else getDouble(i)
-    private fun Cursor.intOrNull(i: Int): Int? = if (isNull(i)) null else getInt(i)
 }

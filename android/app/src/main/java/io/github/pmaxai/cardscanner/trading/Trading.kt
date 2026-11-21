@@ -1,5 +1,6 @@
 package io.github.pmaxai.cardscanner.trading
 
+import io.github.pmaxai.cardscanner.data.PriceSource
 import io.github.pmaxai.cardscanner.data.Printing
 import org.json.JSONArray
 import org.json.JSONObject
@@ -33,12 +34,8 @@ enum class Side(val label: String) { GET("I get"), GIVE("I give") }
 data class ShowInfo(val id: Long, val name: String, val started: Long, val budget: Double? = null)
 
 /** Which Cardmarket price the market value starts from. */
-enum class Reference(val label: String) {
-    TREND("Trend"), AVG30("30-day average"), LOW("Lowest price")
-}
-
 /**
- * The numbers of Trading Mode, in one place: market value for a condition, the verdict on
+ * The numbers of carts and deals, in one place: market value for a condition, the verdict on
  * a price, the opening offer and the walk-away price. Defaults agreed in the concept.
  */
 object TradingMath {
@@ -62,12 +59,11 @@ object TradingMath {
 
     fun round2(v: Double): Double = (v * 100).roundToLong() / 100.0
 
-    /** The Cardmarket price of a printing the market value starts from (falls back to the trend). */
-    fun reference(p: Printing?, ref: Reference): Double? = when (ref) {
-        Reference.TREND -> p?.eur
-        Reference.AVG30 -> p?.eur30 ?: p?.eur
-        Reference.LOW -> p?.eurLow ?: p?.eur
-    }?.takeIf { it > 0 }
+    /**
+     * The price of a printing the market value starts from, in EUR: the default price source
+     * (Settings › Prices), else the next one with a price; TCGplayer at the data pack's rate.
+     */
+    fun reference(p: Printing?, source: PriceSource): Double? = p?.shown(source)?.eur?.takeIf { it > 0 }
 
     fun market(reference: Double, condition: Condition, languageFactor: Double = 1.0): Double =
         round2(reference * condition.share * languageFactor)

@@ -227,7 +227,7 @@ private fun Reveal(state: UiState, vm: ScannerViewModel, modifier: Modifier) {
                     SwipeToRemove(serial, onRemove = vm::dismissShown) {
                         val s = state.shown ?: shown
                         RevealCard(s, state.settings, state.session.count { it.group == s.group }, vm::choosePrinting,
-                            vm::stepVersion, vm::chooseVersion, vm::choose) { vm.openSearch(SearchMode.REPLACE) }
+                            vm::stepVersion, vm::chooseVersion, vm::choose, psaPrices = state.account.has("psa_prices")) { vm.openSearch(SearchMode.REPLACE) }
                     }
                 }
                 }
@@ -238,7 +238,7 @@ private fun Reveal(state: UiState, vm: ScannerViewModel, modifier: Modifier) {
 
 @Composable
 private fun RevealCard(s: Shown, settings: Settings, copies: Int, onPrinting: (Printing.Kind) -> Unit, onStep: (Int) -> Unit,
-                       onVersion: (CardInfo) -> Unit, onOther: (Candidate) -> Unit, onSearch: () -> Unit) {
+                       onVersion: (CardInfo) -> Unit, onOther: (Candidate) -> Unit, psaPrices: Boolean = true, onSearch: () -> Unit) {
     val value = s.value
     val hit = isHit(value, settings.threshold)
     val count = remember(s.serial) { Animatable(0f) }
@@ -274,7 +274,8 @@ private fun RevealCard(s: Shown, settings: Settings, copies: Int, onPrinting: (P
                     // sized for the final price, so it doesn't jump while counting up
                     FitText(if (value == null) "–" else eur(count.value.toDouble()), 46.sp, if (hit) Gold else Color.White,
                         weight = FontWeight.Black, sizing = if (value == null) "–" else eur(value))
-                    if (settings.showPsa) s.graded?.let { PsaLine(it, big = true) }
+                    // PSA prices are an add-on
+                    if (settings.showPsa && psaPrices) s.graded?.let { PsaLine(it, big = true) }
                     if (settings.showPsa) s.population?.let { GemLine(it, big = true) }
                 }
             }

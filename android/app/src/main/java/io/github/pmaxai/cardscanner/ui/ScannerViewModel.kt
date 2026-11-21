@@ -17,11 +17,11 @@ import io.github.pmaxai.cardscanner.data.Population
 import io.github.pmaxai.cardscanner.data.Pack
 import io.github.pmaxai.cardscanner.data.Printing
 import io.github.pmaxai.cardscanner.data.PriceHistory
+import io.github.pmaxai.cardscanner.data.PriceSource
 import io.github.pmaxai.cardscanner.trading.Cart
 import io.github.pmaxai.cardscanner.trading.CartLine
 import io.github.pmaxai.cardscanner.trading.Condition
 import io.github.pmaxai.cardscanner.trading.LineStatus
-import io.github.pmaxai.cardscanner.trading.Reference
 import io.github.pmaxai.cardscanner.trading.Side
 import io.github.pmaxai.cardscanner.trading.TradingBook
 import io.github.pmaxai.cardscanner.trading.TradingCsv
@@ -80,6 +80,9 @@ import kotlin.math.roundToInt
 enum class Confidence { SURE, LIKELY, UNSURE }
 
 enum class SearchMode { LOOK_UP, REPLACE }
+
+/** The bottom bar: the Scanner (or Webshop Mode), Search, Collection, Settings (with the account). */
+enum class AppTab { SCANNER, SEARCH, COLLECTION, SETTINGS }
 
 /** Another artwork the scanner considered. [image]: thumbnail of it (this version or another one with a picture). */
 data class Candidate(val group: String, val info: CardInfo, val score: Float, val reading: String, val image: String? = null)
@@ -185,12 +188,10 @@ data class Settings(
     val zoom: Float = 1f,
     /** height of the capture frame, percent of the camera picture */
     val guideSize: Int = 70,
-    /** Trading Mode (card shows): price check, carts per booth, deals */
-    val trading: Boolean = false,
-    /** condition a newly scanned card starts with in Trading Mode */
+    /** condition a card starts with in Add to cart */
     val tradingCondition: Condition = Condition.NM,
-    /** Cardmarket price the market value starts from */
-    val reference: Reference = Reference.TREND,
+    /** the price shown first (Settings › Prices): the headline, the lists, the alert, the market value in Add to cart */
+    val priceSource: PriceSource = PriceSource.CM_TREND,
     /** Webshop Mode: look cards up in the Pokeshop and book copies into its stock */
     val webshop: Boolean = false,
     /** what one tap on − / + beside a price changes it by (EUR) */
@@ -198,14 +199,13 @@ data class Settings(
 ) {
     val guideFraction: Double get() = guideSize / 100.0
     val mode: AppMode get() = when {
-        youtube -> AppMode.YOUTUBE; trading -> AppMode.TRADING; webshop -> AppMode.WEBSHOP; else -> AppMode.SCANNER
+        youtube -> AppMode.YOUTUBE; webshop -> AppMode.WEBSHOP; else -> AppMode.SCANNER
     }
-    fun withMode(m: AppMode) = copy(youtube = m == AppMode.YOUTUBE, trading = m == AppMode.TRADING, webshop = m == AppMode.WEBSHOP)
+    fun withMode(m: AppMode) = copy(youtube = m == AppMode.YOUTUBE, webshop = m == AppMode.WEBSHOP)
 }
 
 enum class AppMode(val label: String, val about: String) {
-    SCANNER("Scanner", "flea market: spot the valuable card fast"),
-    TRADING("Trading", "card show: judge prices, negotiate, carts per booth"),
+    SCANNER("Scanner", "spot the valuable card fast; Add to cart prices it for a deal, carts per booth at shows"),
     WEBSHOP("Webshop", "your Pokeshop: see what's in stock, add copies with price and box, sell a customer's order"),
     YOUTUBE("YouTube", "full screen, price reveal, pack value"),
 }
@@ -330,7 +330,7 @@ data class UpdateState(
     val error: String? = null,
 )
 
-/** Trading Mode: what the user set for the shown card before it goes into a cart. */
+/** Add to cart: what the user set for the card before it goes into a cart. */
 data class DealDraft(val condition: Condition = Condition.NM, val asking: Double? = null)
 
 data class DebugInfo(val preview: Bitmap?, val lines: List<String>)
@@ -363,14 +363,18 @@ data class UiState(
     val picks: List<Candidate>? = null,
     /** the card search is open: LOOK_UP shows any card, REPLACE puts it in place of the shown one */
     val search: SearchMode? = null,
-    /** Trading Mode: the last scanned cards, newest last */
-    val tray: List<SessionItem> = emptyList(),
-    /** Trading Mode: carts (open ones and the paid deal history) */
+    /** carts (open ones and the paid deal history) */
     val book: TradingBook = TradingBook(),
-    /** Trading Mode: condition and asking price of the shown card */
+    /** Add to cart: the card in the popup (from the scanner or the search), null when it's closed */
+    val deal: Shown? = null,
+    /** Add to cart: condition and asking price of [deal] */
     val draft: DealDraft = DealDraft(),
-    /** Trading Mode: + Cart puts the card on this side (I get: buying, I give: your card for a trade or sale) */
+    /** Add to cart puts the card on this side (I get: buying, I give: your card for a trade or sale); stays for the next card */
     val scanTarget: Side = Side.GET,
+    /** the Search tab is shown (the bottom bar) */
+    val searchTab: Boolean = false,
+    /** the card opened on the Search tab (null: the search list) */
+    val searchCard: Shown? = null,
     /** the settings screen is open on this page (null: closed) */
     val settingsPage: SettingsPage? = null,
     /** the collection page is open on this tab (null: closed) */
@@ -391,6 +395,14 @@ data class UiState(
     val packVersion: String? = null,
 ) {
     val sessionValue: Double get() = session.sumOf { it.value ?: 0.0 }
+
+    /** the bottom bar's page shown now */
+    val tab: AppTab get() = when {
+        settingsPage != null -> AppTab.SETTINGS
+        collectionPage != null -> AppTab.COLLECTION
+        searchTab -> AppTab.SEARCH
+        else -> AppTab.SCANNER
+    }
 }
 
 class ScannerViewModel(app: Application) : AndroidViewModel(app) {
@@ -436,7 +448,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     private var lastAlerted: String? = null
     private var lastText: CardText? = null
     @Volatile private var lastFill: Double? = null
-    /** Trading Mode's carts on the phone; written one after the other on their own thread */
+    /** the carts on the phone; written one after the other on their own thread */
     private val tradingStore = TradingStore(java.io.File(app.filesDir, "trading.json"))
     /** the account on overpricedcardboard.com: pairing, status, collection and missing cards */
     val account = AccountCoordinator(app, viewModelScope, { f -> _state.update { it.copy(account = f(it.account)) } }, { _state.value.account },
@@ -465,16 +477,15 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                     ?: if (prefs.getBoolean("youtube", false)) "auto" else "portrait",
                 zoom = prefs.getFloat("zoom", 1f),
                 guideSize = prefs.getInt("guide_size", 70),
-                trading = prefs.getBoolean("trading", false),
                 tradingCondition = runCatching { Condition.valueOf(prefs.getString("trade_condition", null) ?: "NM") }
                     .getOrDefault(Condition.NM),
-                reference = runCatching { Reference.valueOf(prefs.getString("trade_reference", null) ?: "TREND") }
-                    .getOrDefault(Reference.TREND),
+                priceSource = PriceSource.of(prefs.getString(PriceSource.KEY, null)),
                 webshop = prefs.getBoolean("webshop", false),
                 priceStep = (Math.round(prefs.getFloat("price_step", 0.5f) * 100.0) / 100.0).takeIf { it > 0 } ?: 0.5,
             ), draft = DealDraft(runCatching { Condition.valueOf(prefs.getString("trade_condition", null) ?: "NM") }
                 .getOrDefault(Condition.NM)))
         }
+        PriceSource.current = _state.value.settings.priceSource
         viewModelScope.launch(Dispatchers.IO) {
             val book = tradingStore.load()
             _state.update { it.copy(book = book) }
@@ -492,6 +503,11 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         // the collection's lines of the shown card ("In collection: 2")
         viewModelScope.launch {
             state.map { s -> s.shown?.version?.id?.takeIf { s.account.has("collection") } }.distinctUntilChanged()
+                .collect { id -> if (id != null) account.loadCollection(id) }
+        }
+        // the same for the card opened on the Search tab
+        viewModelScope.launch {
+            state.map { s -> s.searchCard?.version?.id?.takeIf { s.account.has("collection") } }.distinctUntilChanged()
                 .collect { id -> if (id != null) account.loadCollection(id) }
         }
         // Webshop Mode: a new card (or language, printing) -> look it up in the shop, fill in the form
@@ -674,7 +690,51 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     private var lastSettingsPage = SettingsPage.MODE
 
     /** The settings screen, on [page] (or where it was left last time). */
-    fun openSettings(page: SettingsPage? = null) = _state.update { it.copy(settingsPage = page ?: lastSettingsPage) }
+    fun openSettings(page: SettingsPage? = null) =
+        _state.update { it.copy(settingsPage = page ?: lastSettingsPage, collectionPage = null, searchTab = false, search = null, picks = null) }
+
+    /** A page of the bottom bar; the one shown again: its start (the search list, the collection's first tab). */
+    fun selectTab(t: AppTab) {
+        val st = _state.value
+        when (t) {
+            AppTab.SCANNER -> _state.update { it.copy(settingsPage = null, collectionPage = null, searchTab = false) }
+            AppTab.SEARCH -> _state.update { it.copy(settingsPage = null, collectionPage = null, searchTab = true, search = null, picks = null,
+                searchCard = if (st.tab == AppTab.SEARCH) null else it.searchCard) }
+            AppTab.COLLECTION -> openCollection(st.collectionPage ?: CollectionPart.COLLECTION)
+            AppTab.SETTINGS -> openSettings()
+        }
+    }
+
+    /** A card picked on the Search tab: its page there (prices, chart, PSA, + Collection, ☆ Missing, Add to cart). */
+    fun openSearchCard(c: Candidate) {
+        val shown = synchronized(lock) {
+            build(c.group, c.info, null, Confidence.SURE, emptyList(), locked = true, fromPhoto = true, preview = null, scan = null)
+        }.copy(versionByUser = true, fromSearch = true)
+        _state.update { it.copy(searchCard = shown) }
+    }
+
+    fun closeSearchCard() = _state.update { it.copy(searchCard = null) }
+
+    /** The search card page's printing or version. */
+    fun chooseSearchPrinting(kind: Printing.Kind) = _state.update { st ->
+        st.copy(searchCard = st.searchCard?.copy(printing = kind, printingByUser = true))
+    }
+
+    fun chooseSearchVersion(info: CardInfo) {
+        val s = _state.value.searchCard ?: return
+        val shown = synchronized(lock) {
+            build(s.group, info, null, Confidence.SURE, emptyList(), locked = true, fromPhoto = true, preview = null, scan = null)
+        }.copy(versionByUser = true, fromSearch = true)
+            .let { if (it.priceCard.printing(s.printing)?.kind == s.printing) it.copy(printing = s.printing) else it }
+        _state.update { it.copy(searchCard = shown) }
+    }
+
+    /** a locked add-on's "See the add-on": Settings › Price data & add-ons */
+    fun showAddons() {
+        _state.update { it.copy(locked = null, search = null, picks = null, deal = null) }
+        openSettings(SettingsPage.PRICE_DATA)
+        if (store.sells) store.refresh()
+    }
 
     fun settingsPageShown(page: SettingsPage) { lastSettingsPage = page; _state.update { if (it.settingsPage != null) it.copy(settingsPage = page) else it } }
 
@@ -889,7 +949,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** [substitute]: another print's picture and the label to put across it, when the product has none */
     private fun send(w: PendingWrite, label: String, delta: Int, box: String, substitute: Pair<String, String>? = null) {
-        val c = client() ?: run { updateShop { it.copy(error = "Connect the shop first (⚙ → Webshop)", retryable = false) }; return }
+        val c = client() ?: run { updateShop { it.copy(error = "Connect the shop first (Settings › Webshop)", retryable = false) }; return }
         updateShop { it.copy(busy = true, error = null) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -1082,7 +1142,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     fun retrySale() { pendingSale?.let { (w, lines) -> sendSale(w, lines) } }
 
     private fun sendSale(w: PendingWrite, lines: List<ShopOrderLine>) {
-        val c = client() ?: run { updateShop { it.copy(orderError = "Connect the shop first (⚙ → Webshop)", orderRetryable = false) }; return }
+        val c = client() ?: run { updateShop { it.copy(orderError = "Connect the shop first (Settings › Webshop)", orderRetryable = false) }; return }
         updateShop { it.copy(orderBusy = true, orderError = null) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -1316,7 +1376,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** a mode's feature in the account */
     fun featureOf(m: AppMode): String = when (m) {
-        AppMode.SCANNER -> "scanner"; AppMode.TRADING -> "trading"; AppMode.YOUTUBE -> "youtube"; AppMode.WEBSHOP -> "webshop"
+        AppMode.SCANNER -> "scanner"; AppMode.YOUTUBE -> "youtube"; AppMode.WEBSHOP -> "webshop"
     }
 
     /**
@@ -1340,15 +1400,17 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** + Collection for the shown card: its language, the selected printing, NM (or what the sheet says). */
-    fun addShownToCollection(condition: String = "NM", quantity: Int = 1, purchaseCents: Long? = null, binderId: Long? = null, note: String? = null) {
-        val s = _state.value.shown ?: return
+    fun addShownToCollection(condition: String = "NM", quantity: Int = 1, purchaseCents: Long? = null, binderId: Long? = null, note: String? = null,
+                             target: Shown? = null) {
+        val s = target ?: _state.value.shown ?: return
         account.addToCollection(s.version.id, ShopTerms.languageOf(s.printedOnly ?: s.version.lang), ShopTerms.finishOf(s.printing),
             condition, quantity, purchaseCents, binderId, note, label = "${s.version.name} · ${s.version.setName} ${s.version.numberText}")
     }
 
     /** + Collection in the free version: the shown card kept on this phone. False: the 50 different cards are reached. */
-    fun addShownLocally(condition: String = "NM", quantity: Int = 1, purchaseCents: Long? = null, note: String? = null): Boolean {
-        val s = _state.value.shown ?: return true
+    fun addShownLocally(condition: String = "NM", quantity: Int = 1, purchaseCents: Long? = null, note: String? = null,
+                        target: Shown? = null): Boolean {
+        val s = target ?: _state.value.shown ?: return true
         return account.addLocally(s.version.id, ShopTerms.languageOf(s.printedOnly ?: s.version.lang), ShopTerms.finishOf(s.printing),
             condition, quantity, purchaseCents, note, label = "${s.version.name} · ${s.version.setName} ${s.version.numberText}")
     }
@@ -1360,14 +1422,14 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** "See the plans": ⚙ → Account, with the sign-in or the plans. */
     fun showPlans() {
-        _state.update { it.copy(locked = null, search = null, picks = null, collectionPage = null) }
+        _state.update { it.copy(locked = null, search = null, picks = null, collectionPage = null, deal = null) }
         openSettings(SettingsPage.ACCOUNT)
         if (store.sells) store.refresh()
     }
 
     /** ☆ Missing for the shown card (a second tap takes it off the list). */
-    fun toggleShownWanted() {
-        val s = _state.value.shown ?: return
+    fun toggleShownWanted(target: Shown? = null) {
+        val s = target ?: _state.value.shown ?: return
         account.toggleWanted(s.version.id, ShopTerms.languageOf(s.printedOnly ?: s.version.lang), ShopTerms.finishOf(s.printing),
             "${s.version.name} · ${s.version.setName} ${s.version.numberText}")
     }
@@ -1387,7 +1449,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ------------------------------------------------------------------ the collection page
     fun openCollection(part: CollectionPart = CollectionPart.COLLECTION) =
-        _state.update { it.copy(collectionPage = part, search = null, picks = null) }
+        _state.update { it.copy(collectionPage = part, settingsPage = null, searchTab = false, search = null, picks = null) }
 
     fun closeCollection() = _state.update { it.copy(collectionPage = null) }
 
@@ -1649,8 +1711,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val first = shown
         _state.update { s -> s.copy(shown = first, picks = null,
             session = if (s.settings.youtube && !fromPhoto) addToSession(s, first) else s.session,
-            tray = if (s.settings.trading) addToTray(s.tray, first) else s.tray,
-            draft = DealDraft(s.settings.tradingCondition)) }
+            ) }
         logPack(EventLog.Reason.SHOWN, if (fromPhoto) "photo" else source)
         if (hit == null) { maybeAlert(first); return }
         val frame = rgb.clone()
@@ -1678,7 +1739,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             val keep = cur.printing.takeIf { cur.printingByUser && b.priceCard.printings.any { it.kind == cur.printing } }
             b.copy(serial = cur.serial, foil = cur.foil, printing = keep ?: b.printing, printingByUser = keep != null)
         }
-        _state.update { s -> s.copy(shown = updated, session = replaceInSession(s.session, updated), tray = replaceInSession(s.tray, updated)) }
+        _state.update { s -> s.copy(shown = updated, session = replaceInSession(s.session, updated)) }
         logPack(EventLog.Reason.TEXT_READ)
         maybeAlert(updated)
     }
@@ -1732,7 +1793,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { s ->
             val sh = s.shown?.takeIf { it.serial == current.serial } ?: return@update s
             val updated = sh.copy(foil = est, printing = printing)
-            s.copy(shown = updated, session = replaceInSession(s.session, updated), tray = replaceInSession(s.tray, updated))
+            s.copy(shown = updated, session = replaceInSession(s.session, updated))
         }
         if (printing != current.printing) logPack(EventLog.Reason.PRINTING)
     }
@@ -1785,19 +1846,11 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         logPack(EventLog.Reason.RESET)
     }
 
-    // ------------------------------------------------------------------ Trading Mode
-    private fun addToTray(tray: List<SessionItem>, sh: Shown): List<SessionItem> {
-        if (tray.lastOrNull()?.group == sh.group) return tray
-        return (tray + SessionItem(sh.serial, System.currentTimeMillis(), sh.copy(preview = null, scan = null))).takeLast(TRAY_SIZE)
-    }
+    // ------------------------------------------------------------------ carts and deals
+    /** Add to cart: the popup for this card (the scanned one, or the one opened in the search), a fresh draft. */
+    fun startDeal(s: Shown) = _state.update { it.copy(deal = s, draft = DealDraft(it.settings.tradingCondition)) }
 
-    /** A card from the tray back in the price panel; it stays until another card is clearly in front of the camera. */
-    fun showFromTray(item: SessionItem) = synchronized(lock) {
-        tracker.lock(item.group)
-        kept = item.group
-        rejected = emptySet()
-        _state.update { it.copy(shown = item.shown, picks = null, draft = DealDraft(it.settings.tradingCondition)) }
-    }
+    fun closeDeal() = _state.update { it.copy(deal = null) }
 
     fun setCondition(c: Condition) = _state.update { it.copy(draft = it.draft.copy(condition = c)) }
     fun setScanTarget(side: Side) = _state.update { it.copy(scanTarget = side) }
@@ -1813,17 +1866,17 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** + Cart: the shown card with its printing, condition and asking price into the active cart. */
+    /** Add to cart: the popup's card with its printing, condition and asking price into the active cart. */
     fun addToCart() {
         val st = _state.value
-        val s = st.shown ?: return
+        val s = st.deal ?: st.shown ?: return
         val now = System.currentTimeMillis()
         var cartName = ""
         updateBook { b0 ->
             val (b, cart) = b0.withActive(now)
             cartName = cart.name
             val printing = s.selected?.kind?.name
-            val ref = TradingMath.reference(s.selected, st.settings.reference)
+            val ref = TradingMath.reference(s.selected, st.settings.priceSource)
             val side = st.scanTarget
             val last = cart.lines.lastOrNull()
             val same = last != null && last.status == LineStatus.CONSIDERING && last.cardId == s.version.id &&
@@ -1837,7 +1890,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             b.replace(cart.copy(lines = lines, trade = cart.trade || side == Side.GIVE))
         }
         val where = if (st.scanTarget == Side.GIVE) "I give ($cartName)" else cartName
-        _state.update { it.copy(draft = it.draft.copy(asking = null), message = "Added to $where") }
+        _state.update { it.copy(deal = null, draft = it.draft.copy(asking = null), message = "Added to $where") }
     }
 
     fun selectCart(id: Long) = updateBook { it.copy(activeId = id) }
@@ -1991,7 +2044,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         lastText = null
         val shown = build(c.group, c.info, null, Confidence.SURE, emptyList(), locked = true, fromPhoto = true,
             preview = null, scan = null).copy(versionByUser = true, fromSearch = true)
-        _state.update { it.copy(shown = shown, paused = true, picks = null, draft = DealDraft(it.settings.tradingCondition)) }
+        _state.update { it.copy(shown = shown, paused = true, picks = null) }
         logPack(EventLog.Reason.SHOWN, "search")
     }
 
@@ -2004,7 +2057,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         val alternatives = (listOf(Candidate(s.group, s.version, 0f, "")) + s.alternatives).filter { it.group != c.group }
         val shown = build(c.group, c.info, lastText, Confidence.SURE, alternatives, locked = true, fromPhoto = s.fromPhoto,
             preview = s.preview, scan = s.scan).copy(versionByUser = true, fromSearch = s.fromSearch)
-        _state.update { st -> st.copy(shown = shown, picks = null, session = replaceInSession(st.session, shown, oldSerial = s.serial), tray = replaceInSession(st.tray, shown, oldSerial = s.serial)) }
+        _state.update { st -> st.copy(shown = shown, picks = null, session = replaceInSession(st.session, shown, oldSerial = s.serial)) }
         logPack(EventLog.Reason.SEARCH_REPLACE)
         maybeAlert(shown)
     }
@@ -2030,7 +2083,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         // another artwork: the picture of the scanned card still shows what was in front of the camera
         val shown = build(c.group, version, lastText, Confidence.SURE, alternatives, locked = true, fromPhoto = s.fromPhoto,
             preview = s.preview, scan = s.scan).copy(versionByUser = true)
-        _state.update { st -> st.copy(shown = shown, session = replaceInSession(st.session, shown, oldSerial = s.serial), tray = replaceInSession(st.tray, shown, oldSerial = s.serial)) }
+        _state.update { st -> st.copy(shown = shown, session = replaceInSession(st.session, shown, oldSerial = s.serial)) }
         logPack(EventLog.Reason.OTHER_CARD)
         maybeAlert(shown)
     }
@@ -2053,7 +2106,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
                 .copy(serial = s.serial, printing = s.printing, printingByUser = s.printingByUser, foil = s.foil, versionByUser = true)
                 .let { if (it.priceCard.printing(s.printing)?.kind != s.printing) it.copy(printing = defaultPrinting(it.priceCard)) else it }
             tracker.lock(s.group)
-            st.copy(shown = shown, session = replaceInSession(st.session, shown), tray = replaceInSession(st.tray, shown))
+            st.copy(shown = shown, session = replaceInSession(st.session, shown))
         }
         logPack(EventLog.Reason.VERSION)
     }
@@ -2063,7 +2116,7 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             val s = st.shown ?: return@update st
             val updated = s.copy(printing = kind, printingByUser = true, locked = true)
             tracker.lock(s.group)
-            st.copy(shown = updated, session = replaceInSession(st.session, updated), tray = replaceInSession(st.tray, updated))
+            st.copy(shown = updated, session = replaceInSession(st.session, updated))
         }
         logPack(EventLog.Reason.PRINTING)
     }
@@ -2096,11 +2149,12 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
             .putInt("trigger_delay", new.triggerDelayMs)
             .putInt("energy_filter", new.energyFilter).putInt("min_fill", new.minFillPercent)
             .putString("orientation", new.orientation).putFloat("zoom", new.zoom).putInt("guide_size", new.guideSize)
-            .putBoolean("trading", new.trading).putString("trade_condition", new.tradingCondition.name)
-            .putString("trade_reference", new.reference.name).putBoolean("webshop", new.webshop)
+            .putString("trade_condition", new.tradingCondition.name)
+            .putString(PriceSource.KEY, new.priceSource.name).putBoolean("webshop", new.webshop)
             .putFloat("price_step", new.priceStep.toFloat())
             .apply()
         tracker.delayMs = new.triggerDelayMs.toLong()
+        PriceSource.current = new.priceSource
         if (new.energyFilter != _state.value.settings.energyFilter) applyEnergyFilter(new.energyFilter)
         if (new.threshold != _state.value.settings.threshold) lastAlerted = null
         _state.update { it.copy(settings = new) }
@@ -2177,8 +2231,6 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
         const val SEARCH_LIMIT = 150
         /** further than this the analysed picture gets too coarse */
         const val MAX_ZOOM = 5f
-        /** scanned cards kept in Trading Mode's tray */
-        const val TRAY_SIZE = 20
         /** languages with their own set ids and script */
         val ASIAN = setOf("ja", "ko", "zh-tw", "zh-cn", "th")
     }

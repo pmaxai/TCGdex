@@ -258,7 +258,7 @@ class RecordingEndToEndTest {
             scenario.onActivity { vm.rec.discard(dir.id) }
             waitUntil(10_000, "deleted") { !dir.dir.exists() && vm.state.value.recording.toDecide == null }
         } finally {
-            modeBefore?.let { m -> runCatching { scenario.onActivity { vm.updateSettings { it.copy(youtube = m.youtube, trading = m.trading, webshop = m.webshop) } } } }
+            modeBefore?.let { m -> runCatching { scenario.onActivity { vm.updateSettings { it.copy(youtube = m.youtube, webshop = m.webshop) } } } }
             scenario.close()
             TestAccount.disconnect(ctx)
             shell("appops reset $pkg")

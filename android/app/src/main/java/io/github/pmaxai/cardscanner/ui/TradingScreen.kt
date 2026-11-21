@@ -30,7 +30,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -110,107 +115,6 @@ fun sellColor(v: SellVerdict?): Color = when (v) {
     null -> Muted
 }
 
-/**
- * Trading Mode (card shows): scan a card, see its market value for its condition, type the
- * vendor's price for a verdict, collect cards per booth in a cart with the negotiated price.
- */
-@Composable
-fun TradingScreen(state: UiState, vm: ScannerViewModel) {
-    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-    var torch by rememberSaveable { mutableStateOf(false) }
-    var cartOpen by rememberSaveable { mutableStateOf(false) }
-    var dealsOpen by rememberSaveable { mutableStateOf(false) }
-    var showOpen by rememberSaveable { mutableStateOf(false) }
-    var pad by remember { mutableStateOf<PadRequest?>(null) }
-
-    val topBar: @Composable () -> Unit = {
-        TradingTopBar(state, vm, torch, onTorch = { torch = it }, onCart = { cartOpen = true }, onDeals = { dealsOpen = true },
-            onShow = { showOpen = true }, onSettings = { vm.openSettings(SettingsPage.TRADING) })
-    }
-    val camera: @Composable (Modifier) -> Unit = { m ->
-        CameraArea(state, vm, torch, video = false, modifier = m) {
-            // which side + Cart puts the next card on: the vendor's cards, or yours for a trade or sale
-            val give = state.scanTarget == Side.GIVE
-            Text(if (give) "Scanning: I give ⇄" else "Scanning: I get ⇄", color = if (give) Ink else Color.White, fontSize = 13.sp,
-                fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.TopCenter).padding(8.dp)
-                    .background(if (give) GiveBlue else Color(0x99000000), RoundedCornerShape(14.dp))
-                    .clickable { vm.setScanTarget(if (give) Side.GET else Side.GIVE) }.padding(horizontal = 12.dp, vertical = 5.dp))
-            if (!state.paused) {
-                val hint = when {
-                    state.shown?.locked == true -> "Kept – show the next card"
-                    state.liveConfidence == Confidence.SURE -> "Got it"
-                    state.liveConfidence == Confidence.LIKELY -> "Probably…"
-                    else -> "Fit the card into the frame"
-                }
-                Text(hint, color = Color.White, fontSize = 14.sp, maxLines = 1,
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(10.dp)
-                        .background(Color(0x88000000), RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 4.dp))
-            }
-        }
-    }
-    val panel: @Composable (Modifier) -> Unit = { m -> PricePanel(state, vm, m) { pad = it } }
-
-    if (landscape) {
-        Row(Modifier.fillMaxSize()) {
-            camera(Modifier.weight(1f).fillMaxHeight())
-            Column(Modifier.weight(1f).fillMaxHeight()) {
-                topBar()
-                panel(Modifier.weight(1f).fillMaxWidth())
-            }
-        }
-    } else {
-        Column(Modifier.fillMaxSize()) {
-            topBar()
-            camera(Modifier.fillMaxWidth().weight(0.85f))
-            panel(Modifier.fillMaxWidth().weight(1.15f))
-        }
-    }
-    if (cartOpen) CartDialog(state, vm, onPad = { pad = it }) { cartOpen = false }
-    if (dealsOpen) DealsDialog(state, vm) { dealsOpen = false }
-    if (showOpen) ShowDialog(state, vm) { showOpen = false }
-    pad?.let { r -> NumberPad(r) { pad = null } }
-}
-
-@Composable
-private fun TradingTopBar(state: UiState, vm: ScannerViewModel, torch: Boolean, onTorch: (Boolean) -> Unit, onCart: () -> Unit,
-                          onDeals: () -> Unit, onShow: () -> Unit, onSettings: () -> Unit) {
-    var menu by remember { mutableStateOf(false) }
-    val cart = state.book.active
-    Column {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("🔍  Search", color = Muted, fontSize = 15.sp, maxLines = 1, softWrap = false,
-            modifier = Modifier.padding(end = 6.dp).background(Panel, RoundedCornerShape(20.dp))
-                .clickable { vm.openSearch(SearchMode.LOOK_UP) }.padding(horizontal = 12.dp, vertical = 8.dp))
-        // the active cart: tap to open it
-        Row(Modifier.weight(1f).background(Gold.copy(alpha = 0.14f), RoundedCornerShape(20.dp)).clickable(onClick = onCart)
-            .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("🛒 ", fontSize = 14.sp)
-            FitText(when {
-                cart == null -> "No cart yet"
-                cart.isTrade -> "${cart.name} · trade · ${if (cart.settle >= 0) "pay" else "get"} ${eur(kotlin.math.abs(cart.settle))}"
-                else -> "${cart.name} · ${cart.cards} · ${eur(cart.payTotal)}"
-            }, 15.sp, Color.White, Modifier.weight(1f), weight = FontWeight.Bold)
-        }
-        Box {
-            TextButton({ menu = true }) { Text("⚙", color = Color.White, fontSize = 20.sp) }
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(text = { Text("Deal history") }, onClick = { menu = false; onDeals() })
-                DropdownMenuItem(text = { Text(state.book.show?.let { "Show: ${it.name}" } ?: "Show & budget…") },
-                    onClick = { menu = false; onShow() })
-                DropdownMenuItem(text = { Text("New cart (next booth)") }, onClick = { menu = false; vm.newCart() })
-                if (state.account.status != null && (state.account.has("collection") || state.account.has("wanted")))
-                    DropdownMenuItem(text = { Text(if (state.account.has("collection")) "Collection" else "Missing cards") },
-                        onClick = { menu = false; vm.openCollection(if (state.account.has("collection")) CollectionPart.COLLECTION else CollectionPart.MISSING) })
-                DropdownMenuItem(text = { Text(if (torch) "Light off" else "Light on") }, onClick = { menu = false; onTorch(!torch) })
-                HorizontalDivider()
-                DropdownMenuItem(text = { Text("Settings…") }, onClick = { menu = false; onSettings() })
-            }
-        }
-    }
-    BudgetBar(state.book, Modifier.padding(horizontal = 12.dp), thin = true)
-    }
-}
-
 /** The show's budget: spent (paid deals) and agreed (not paid yet) against it; orange from 90 %. */
 @Composable
 fun BudgetBar(book: TradingBook, modifier: Modifier = Modifier, thin: Boolean = false) {
@@ -232,166 +136,131 @@ private fun priceAgeDays(updated: String?): Long? = runCatching {
     ChronoUnit.DAYS.between(LocalDate.parse(updated!!.take(10)), LocalDate.now())
 }.getOrNull()
 
+/**
+ * Add to cart: the card priced for its condition (in the default price source), I get or I give,
+ * the vendor's price with the verdict and what to offer – then into the active cart.
+ */
 @Composable
-private fun PricePanel(state: UiState, vm: ScannerViewModel, modifier: Modifier, onPad: (PadRequest) -> Unit) {
-    Column(modifier.verticalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp)) {
-        val s = state.shown
-        if (s == null) {
-            Text("Show a card: its market value for its condition appears here. Type the vendor's price for a verdict, " +
-                "then + Cart. Not recognised? Double-tap the picture, or search.", color = Muted)
-        } else {
-            CardPrice(s, state, vm, onPad)
-        }
-        if (state.tray.size > 1) Tray(state, vm)
-    }
-}
-
-@Composable
-private fun CardPrice(s: Shown, state: UiState, vm: ScannerViewModel, onPad: (PadRequest) -> Unit) {
+fun DealDialog(s: Shown, state: UiState, vm: ScannerViewModel) {
+    var pad by remember { mutableStateOf<PadRequest?>(null) }
     val draft = state.draft
     val p = s.selected
-    val ref = TradingMath.reference(p, state.settings.reference)
+    val source = state.settings.priceSource
+    val shown = p?.shown(source)
+    val ref = TradingMath.reference(p, source)
     val market = ref?.let { TradingMath.market(it, draft.condition) }
+    val give = state.scanTarget == Side.GIVE
+    val check = s.priceCard.priceCheck
+    Dialog(onDismissRequest = vm::closeDeal, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(color = Ink, modifier = Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize().padding(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Add to cart", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    CloseButton(vm::closeDeal)
+                }
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                    Row(Modifier.padding(top = 8.dp)) {
+                        CardImage(s, Modifier.width(72.dp).aspectRatio(63f / 88f))
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            FitText(s.version.name, 22.sp, Color.White, weight = FontWeight.Bold, minSize = 14.sp)
+                            FitText(s.version.setLine(), 13.sp, Muted)
+                            p?.let { Text(it.kind.label, color = Color.White, fontSize = 13.sp) }
+                        }
+                    }
+                    // the side: a card you get (buying), or yours for a trade or sale; it stays for the next card
+                    Row(Modifier.padding(top = 12.dp).fillMaxWidth().background(Panel, RoundedCornerShape(12.dp)).padding(3.dp)) {
+                        listOf(Side.GET to "I get · buy", Side.GIVE to "I give · sell or trade").forEach { (side, label) ->
+                            val on = state.scanTarget == side
+                            Text(label, color = if (on) Ink else Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
+                                maxLines = 1, modifier = Modifier.weight(1f)
+                                    .background(if (on) (if (side == Side.GIVE) GiveBlue else Gold) else Color.Transparent, RoundedCornerShape(10.dp))
+                                    .clickable { vm.setScanTarget(side) }.padding(vertical = 8.dp))
+                        }
+                    }
+                    // condition: the camera can't judge it, so it's one tap here
+                    Text("Condition", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp))
+                    Row(Modifier.padding(top = 4.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Condition.values().forEach { c ->
+                            val sel = c == draft.condition
+                            Text(c.label, color = if (sel) Ink else Color.White, fontSize = 14.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
+                                modifier = Modifier.background(if (sel) Gold else Color(0xFF2A2D34), RoundedCornerShape(8.dp))
+                                    .clickable { vm.setCondition(c) }.padding(horizontal = 11.dp, vertical = 6.dp))
+                        }
+                    }
+                    // market value for this condition, and where it comes from
+                    Spacer(Modifier.height(8.dp))
+                    if (market == null || shown == null) {
+                        Text(if (check?.status == PriceCheck.Status.DROPPED) "No reliable price to judge by" else "No price to judge by",
+                            color = Warn, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    } else {
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text(eur(market), color = Gold, fontSize = 30.sp, fontWeight = FontWeight.Black, maxLines = 1)
+                            Spacer(Modifier.width(10.dp))
+                            val t = TradingMath.trend(p)
+                            if (t != null && abs(t) >= 0.005) {
+                                Text("${if (t > 0) "▲" else "▼"} ${(abs(t) * 100).roundToInt()} % vs 30 days", color = if (t > 0) Sure else Warn,
+                                    fontSize = 13.sp, modifier = Modifier.padding(bottom = 6.dp))
+                            }
+                        }
+                        Text("market value · ${draft.condition.label} = ${(draft.condition.share * 100).roundToInt()} % of the " +
+                            "${shown.source.label} ${eur(ref)}", color = Muted, fontSize = 11.sp)
+                    }
+                    // warnings: a thin price is not to be trusted blindly
+                    val warnings = buildList {
+                        check?.let { add(it.message) }
+                        if (TradingMath.fewSales(p)) add("Few sales – check Cardmarket before you pay")
+                        if (s.pricedFromEnglish) add("Price of the English version (none for this language)")
+                        priceAgeDays(s.priceCard.prices?.updated)?.takeIf { it > 3 }?.let { add("Prices are $it days old – update the app before a show") }
+                    }
+                    warnings.forEach { Text("⚠ $it", color = Warn, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp)) }
 
-    Row {
-        CardImage(s, Modifier.width(84.dp).aspectRatio(63f / 88f))
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            FitText(s.version.name, 22.sp, Color.White, weight = FontWeight.Bold, minSize = 14.sp)
-            FitText(s.version.setLine(), 13.sp, Muted)
-            PrintedOnlyHint(s)
-            s.english?.let { e -> FitText("English: ${e.name}", 12.sp, Color.White) }
-            // condition: the camera can't judge it, so it's one tap here
-            Row(Modifier.padding(top = 6.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Condition.values().forEach { c ->
-                    val sel = c == draft.condition
-                    Text(c.label, color = if (sel) Ink else Color.White, fontSize = 13.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
-                        modifier = Modifier.background(if (sel) Gold else Color(0xFF2A2D34), RoundedCornerShape(8.dp))
-                            .clickable { vm.setCondition(c) }.padding(horizontal = 9.dp, vertical = 4.dp))
+                    // the vendor's price and the verdict (your own card: the vendor's offer for it)
+                    Spacer(Modifier.height(10.dp))
+                    val asking = draft.asking
+                    val badge: Pair<String, Color>? = if (asking != null && market != null) {
+                        when {
+                            check != null -> "Check price" to Muted          // no deal verdict on a doubtful price
+                            give -> TradingMath.sellVerdict(asking, market)?.let { it.label to sellColor(it) }
+                            else -> TradingMath.verdict(asking, market)?.let { it.label to verdictColor(it) }
+                        }
+                    } else null
+                    PriceSteps(state.settings.priceStep, asking, { vm.setAsking(it) }) { m ->
+                        Row(m.border(1.dp, if (give) GiveBlue else Color(0xFF3A3D45), RoundedCornerShape(10.dp))
+                            .clickable { pad = PadRequest(if (give) "Vendor's offer for your card" else "Asking price", asking, market, verdicts = check == null) { vm.setAsking(it) } }
+                            .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(when {
+                                asking == null && give -> "Type the vendor's offer"
+                                asking == null -> "Type the asking price"
+                                give -> "Vendor offers ${eur(asking)}"
+                                else -> "Asking ${eur(asking)}"
+                            }, color = if (asking == null) Muted else Color.White, fontSize = 17.sp, modifier = Modifier.weight(1f))
+                            if (badge != null) {
+                                Text(badge.first, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1,
+                                    modifier = Modifier.background(badge.second, RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 4.dp))
+                            }
+                        }
+                    }
+                    if (market != null) {
+                        val pct = asking?.let { " · ${if (give) "offer" else "asking"} = ${(it / market * 100).roundToInt()} % of market" } ?: ""
+                        val line = if (give) {
+                            val (lo, hi) = TradingMath.sellRange(market)
+                            val rate = state.book.active?.takeIf { it.isTrade }?.giveRate ?: TradingMath.GIVE_RATE
+                            "Vendors usually pay ${eur(lo)} – ${eur(hi)} · in a trade at ${(rate * 100).roundToInt()} %: ${eur(TradingMath.round2(market * rate))}$pct"
+                        } else "Offer ${eur(TradingMath.offer(market))} · walk away above ${eur(TradingMath.walkAway(market))}$pct"
+                        Text(line, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                    }
+                    BudgetBar(state.book, Modifier.padding(top = 10.dp))
+                }
+                Button(onClick = { vm.addToCart() }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(52.dp),
+                    colors = if (give) ButtonDefaults.buttonColors(containerColor = GiveBlue) else ButtonDefaults.buttonColors()) {
+                    Text((if (give) "Add to I give" else "Add to cart") + " · " + (state.book.active?.name ?: "new cart"), fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold, maxLines = 1)
                 }
             }
         }
     }
-    if (s.priceCard.printings.size > 1) {
-        Row(Modifier.padding(top = 8.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            s.priceCard.printings.forEach { pr ->
-                FilterChip(selected = pr.kind == p?.kind, onClick = { vm.choosePrinting(pr.kind) },
-                    label = { Text("${pr.kind.label} ${printingPrice(pr)}", fontSize = 12.sp, maxLines = 1) })
-            }
-        }
-    }
-
-    // market value for this condition, and where it comes from
-    Spacer(Modifier.height(6.dp))
-    val check = s.priceCard.priceCheck
-    if (market == null) {
-        val head = if (check?.status == PriceCheck.Status.DROPPED) "No reliable Cardmarket price" else "No Cardmarket price"
-        val tcg = p?.usd?.let { u -> " · TCGplayer ${usd(u)}" + (p.usdEur?.let { " ≈ ${eur(it)}" } ?: "") } ?: ""
-        Text(head + tcg, color = Warn, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-    } else {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(eur(market), color = Gold, fontSize = 30.sp, fontWeight = FontWeight.Black, maxLines = 1)
-            Spacer(Modifier.width(10.dp))
-            val t = TradingMath.trend(p)
-            if (t != null && abs(t) >= 0.005) {
-                Text("${if (t > 0) "▲" else "▼"} ${(abs(t) * 100).roundToInt()} % vs 30 days", color = if (t > 0) Sure else Warn,
-                    fontSize = 13.sp, modifier = Modifier.padding(bottom = 6.dp))
-            }
-        }
-        Text("market value · ${draft.condition.label} = ${(draft.condition.share * 100).roundToInt()} % of the " +
-            "${state.settings.reference.label.lowercase()} ${eur(ref)}", color = Muted, fontSize = 11.sp)
-    }
-    val parts = buildList {
-        p?.eur?.let { add("trend ${eur(it)}") }
-        p?.eur30?.let { add("30-day ${eur(it)}") }
-        p?.eurLow?.let { add("from ${eur(it)}") }
-        if (market != null) p?.usd?.let { add("TCGplayer ${usd(it)}") }
-    }
-    if (parts.isNotEmpty()) Text(parts.joinToString(" · "), color = Color.White, fontSize = 12.sp)
-    PriceHistoryLine(s)
-    if (state.settings.showPsa) s.graded?.let { PsaLine(it, printing = p?.kind?.takeIf { s.priceCard.printings.size > 1 }) }
-
-    // warnings: a thin price is not to be trusted blindly
-    val warnings = buildList {
-        check?.let { add(it.message) }
-        if (TradingMath.fewSales(p)) add("Few sales – check Cardmarket before you pay")
-        if (s.pricedFromEnglish) add("Price of the English version (none for this language)")
-        priceAgeDays(s.priceCard.prices?.updated)?.takeIf { it > 3 }?.let { add("Prices are $it days old – update the app before a show") }
-    }
-    warnings.forEach { Text("⚠ $it", color = Warn, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp)) }
-
-    // the vendor's price and the verdict (your own card: the vendor's offer for it)
-    Spacer(Modifier.height(8.dp))
-    val give = state.scanTarget == Side.GIVE
-    val asking = draft.asking
-    val badge: Pair<String, Color>? = if (asking != null && market != null) {
-        when {
-            check != null -> "Check price" to Muted          // no deal verdict on a doubtful Cardmarket price
-            give -> TradingMath.sellVerdict(asking, market)?.let { it.label to sellColor(it) }
-            else -> TradingMath.verdict(asking, market)?.let { it.label to verdictColor(it) }
-        }
-    } else null
-    PriceSteps(state.settings.priceStep, asking, { vm.setAsking(it) }) { m ->
-        Row(m.border(1.dp, if (give) GiveBlue else Color(0xFF3A3D45), RoundedCornerShape(10.dp))
-            .clickable { onPad(PadRequest(if (give) "Vendor's offer for your card" else "Asking price", asking, market, verdicts = check == null) { vm.setAsking(it) }) }
-            .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(when {
-                asking == null && give -> "Type the vendor's offer"
-                asking == null -> "Type the asking price"
-                give -> "Vendor offers ${eur(asking)}"
-                else -> "Asking ${eur(asking)}"
-            }, color = if (asking == null) Muted else Color.White, fontSize = 17.sp, modifier = Modifier.weight(1f))
-            if (badge != null) {
-                Text(badge.first, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1,
-                    modifier = Modifier.background(badge.second, RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 4.dp))
-            }
-        }
-    }
-    if (market != null) {
-        val pct = asking?.let { " · ${if (give) "offer" else "asking"} = ${(it / market * 100).roundToInt()} % of market" } ?: ""
-        val line = if (give) {
-            val (lo, hi) = TradingMath.sellRange(market)
-            val rate = state.book.active?.takeIf { it.isTrade }?.giveRate ?: TradingMath.GIVE_RATE
-            "Vendors usually pay ${eur(lo)} – ${eur(hi)} · in a trade at ${(rate * 100).roundToInt()} %: ${eur(TradingMath.round2(market * rate))}$pct"
-        } else "Offer ${eur(TradingMath.offer(market))} · walk away above ${eur(TradingMath.walkAway(market))}$pct"
-        Text(line, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
-    }
-
-    Row(Modifier.padding(top = 6.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-        Text("Not this card?", color = Muted, fontSize = 12.sp)
-        if (!s.fromSearch) s.alternatives.forEach { alt ->
-            FilterChip(selected = false, onClick = { vm.choose(alt) }, label = { Text(alt.info.name, fontSize = 12.sp, maxLines = 1) })
-        }
-        FilterChip(selected = false, onClick = { vm.openSearch(SearchMode.REPLACE) }, label = { Text("🔍 Search…", fontSize = 12.sp) })
-    }
-    Spacer(Modifier.height(8.dp))
-    Button(onClick = { vm.addToCart() }, modifier = Modifier.fillMaxWidth().height(48.dp),
-        colors = if (give) androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = GiveBlue) else androidx.compose.material3.ButtonDefaults.buttonColors()) {
-        Text((if (give) "+ I give" else "+ Cart") + (state.book.active?.let { " (${it.name})" } ?: ""), fontSize = 17.sp,
-            fontWeight = FontWeight.Bold, maxLines = 1)
-    }
-    // a card you get: + Collection (in its chosen condition), ☆ Missing
-    if (!give) CollectionBar(state, vm, s, condition = draft.condition.label)
-}
-
-/** The last scanned cards; tap one to bring it back. */
-@Composable
-private fun Tray(state: UiState, vm: ScannerViewModel) {
-    Spacer(Modifier.height(10.dp))
-    Text("Last scans", color = Muted, fontSize = 12.sp)
-    Row(Modifier.padding(top = 4.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        val blank = remember { ColorPainter(Color(0xFF2A2D34)) }
-        state.tray.asReversed().forEach { item ->
-            val current = item.serial == state.shown?.serial
-            Column(Modifier.width(52.dp).clickable { vm.showFromTray(item) }, horizontalAlignment = Alignment.CenterHorizontally) {
-                AsyncImage(model = item.shown.imageCard?.thumbnailUrl, contentDescription = item.name, placeholder = blank, error = blank,
-                    fallback = blank, modifier = Modifier.width(48.dp).aspectRatio(63f / 88f).clip(RoundedCornerShape(4.dp))
-                        .border(if (current) 2.dp else 0.dp, if (current) Gold else Color.Transparent, RoundedCornerShape(4.dp)))
-                Text(item.name, color = Color.White, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-    }
+    pad?.let { r -> NumberPad(r) { pad = null } }
 }
 
 // ---------------------------------------------------------------------------------- number pad
@@ -486,8 +355,23 @@ internal fun NumberPadContent(r: PadRequest, wide: Boolean, compact: Boolean = f
 }
 
 // ---------------------------------------------------------------------------------- cart
+/** The active cart (the cart button in the camera picture): its cards, totals, a trade, paid; the deal history and the show in its menu. */
 @Composable
-private fun CartDialog(state: UiState, vm: ScannerViewModel, onPad: (PadRequest) -> Unit, onClose: () -> Unit) {
+fun CartDialog(state: UiState, vm: ScannerViewModel, onClose: () -> Unit) {
+    var pad by remember { mutableStateOf<PadRequest?>(null) }
+    var dealsOpen by rememberSaveable { mutableStateOf(false) }
+    var showOpen by rememberSaveable { mutableStateOf(false) }
+    var menu by remember { mutableStateOf(false) }
+    CartContent(state, vm, onPad = { pad = it }, onMenu = { menu = true }, menu = menu, onMenuClose = { menu = false },
+        onDeals = { dealsOpen = true }, onShow = { showOpen = true }, onClose = onClose)
+    if (dealsOpen) DealsDialog(state, vm) { dealsOpen = false }
+    if (showOpen) ShowDialog(state, vm) { showOpen = false }
+    pad?.let { r -> NumberPad(r) { pad = null } }
+}
+
+@Composable
+private fun CartContent(state: UiState, vm: ScannerViewModel, onPad: (PadRequest) -> Unit, onMenu: () -> Unit, menu: Boolean,
+                        onMenuClose: () -> Unit, onDeals: () -> Unit, onShow: () -> Unit, onClose: () -> Unit) {
     val cart = state.book.active
     var switcher by remember { mutableStateOf(false) }
     var rename by remember { mutableStateOf(false) }
@@ -527,11 +411,20 @@ private fun CartDialog(state: UiState, vm: ScannerViewModel, onPad: (PadRequest)
                             }
                         }
                     }
+                    Box {
+                        IconButton(onMenu) { Icon(Icons.Filled.MoreVert, contentDescription = "Deals, show and carts", tint = Color.White) }
+                        DropdownMenu(expanded = menu, onDismissRequest = onMenuClose) {
+                            DropdownMenuItem(text = { Text("Deal history") }, onClick = { onMenuClose(); onDeals() })
+                            DropdownMenuItem(text = { Text(state.book.show?.let { "Show: ${it.name}" } ?: "Show & budget…") },
+                                onClick = { onMenuClose(); onShow() })
+                            DropdownMenuItem(text = { Text("New cart (next booth)") }, onClick = { onMenuClose(); vm.newCart() })
+                        }
+                    }
                     CloseButton(onClose)
                 }
                 if (cart == null || cart.lines.isEmpty()) {
-                    Text("Nothing in this cart yet. Scan a card and tap + Cart. For a trade, switch the camera's target to " +
-                        "\"I give\" and scan your cards too. A new booth gets its own cart (Next booth).",
+                    Text("Nothing in this cart yet. Scan a card and tap Add to cart. For a trade, choose I give there and add " +
+                        "your cards too. A new booth gets its own cart (Next booth).",
                         color = Muted, modifier = Modifier.padding(vertical = 16.dp))
                 }
                 if (cart != null) {
@@ -557,7 +450,7 @@ private fun CartDialog(state: UiState, vm: ScannerViewModel, onPad: (PadRequest)
                             item { SideHeader("I give", cart.giveCards, cart.giveValue, cart.marketGive, GiveBlue) }
                             items(gives, key = { it.id }) { row(it) }
                             if (gives.isEmpty()) item {
-                                Text("Switch the camera's target to \"I give\" (top of the picture) and scan your cards.", color = Muted,
+                                Text("Scan your cards, tap Add to cart and choose I give.", color = Muted,
                                     fontSize = 13.sp, modifier = Modifier.padding(vertical = 8.dp))
                             }
                         }

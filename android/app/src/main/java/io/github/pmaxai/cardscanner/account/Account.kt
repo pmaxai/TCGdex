@@ -88,6 +88,8 @@ data class AccountStatus(
     val devicesOnWeb: Int = 0,
     /** how it is billed: monthly or yearly (null: not known, or given by the shop) */
     val basePlan: String? = null,
+    /** the add-ons the account has (`addons`), by id; what they unlock is in [features] (psa_prices) */
+    val addons: Map<String, AddonState> = emptyMap(),
 ) {
     /** a feature the server unlocked (an inactive answer unlocks nothing) */
     fun has(feature: String): Boolean = active && features[feature] == true
@@ -140,12 +142,47 @@ data class AccountStatus(
                 devicesInStore = dev.optInt("in_store", 0),
                 devicesOnWeb = dev.optInt("on_web", 0),
                 basePlan = str(sub, "base_plan"),
+                addons = o.optJSONArray("addons")?.let { a ->
+                    (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let(AddonState::parse) }.associateBy { it.id }
+                }.orEmpty(),
             )
         }
 
         internal fun str(o: JSONObject, k: String): String? = if (o.isNull(k)) null else o.optString(k).takeIf { it.isNotBlank() }
         internal fun time(o: JSONObject, k: String): Long? = str(o, k)?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() }
         fun day(t: Long): String = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(t))
+    }
+}
+
+/** An add-on of the account (PSA prices): running or not, where it is billed, until when. */
+data class AddonState(
+    val id: String,
+    /** active, canceled (runs until [endsAt]), past_due, complimentary, ended */
+    val state: String?,
+    /** app_store, google_play, web */
+    val source: String?,
+    val basePlan: String?,
+    val renewsAt: Long?,
+    val endsAt: Long?,
+) {
+    val running: Boolean get() = state == "active" || state == "canceled" || state == "past_due" || state == "complimentary"
+
+    /** "renews on 15 Dec 2026", "ends on …" */
+    val stateText: String get() = when (state) {
+        "active" -> renewsAt?.let { "renews on ${AccountStatus.day(it)}" } ?: "active"
+        "canceled" -> endsAt?.let { "ends on ${AccountStatus.day(it)}" } ?: "cancelled"
+        "past_due" -> "payment failed – please update your payment method"
+        "complimentary" -> "given by the shop" + (endsAt?.let { " until ${AccountStatus.day(it)}" } ?: "")
+        "ended" -> "ended"
+        else -> state ?: "–"
+    }
+
+    companion object {
+        fun parse(o: JSONObject): AddonState? {
+            val id = AccountStatus.str(o, "id") ?: return null
+            return AddonState(id, AccountStatus.str(o, "state"), AccountStatus.str(o, "source"), AccountStatus.str(o, "base_plan"),
+                AccountStatus.time(o, "renews_at"), AccountStatus.time(o, "ends_at"))
+        }
     }
 }
 
@@ -233,5 +270,6 @@ fun unpairedText(reason: String?, since: Long?, deviceName: String?): String = w
 fun featureNeeds(feature: String): String = when (feature) {
     "youtube", "recording", "s3_upload", "pipeline" -> "Creator"
     "webshop" -> "With a connected webshop"
+    "psa_prices" -> "Add-on"
     else -> "Collector"
 }

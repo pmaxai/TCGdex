@@ -45,7 +45,7 @@ class SettingsScreenshotTest {
         vm = TestVm.shared
         val state = UiState(loading = false, packInfo = "21094 card images · data 2026-11-06 · PSA prices",
             hasPsaData = true, hasCategories = true, pricesDate = "2026-11-05T22:54:32Z",
-            settings = Settings(threshold = 5.0, trading = true),
+            settings = Settings(threshold = 5.0),
             account = TestAccount.ui())
         var page by mutableStateOf(SettingsPage.MODE)
         var shown by mutableStateOf(state)

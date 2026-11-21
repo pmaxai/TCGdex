@@ -137,6 +137,38 @@ data class PlanOffer(
     }
 }
 
+/**
+ * An add-on on sale (`GET /store/offers` › `addons`): price data on top of a plan (PSA prices now;
+ * eBay listings and more later). In Google Play it is a subscription of its own beside the plan's
+ * purchase, with a monthly and a yearly base plan.
+ */
+data class AddonOffer(
+    /** "psa_prices" */
+    val id: String,
+    val name: String,
+    /** what it unlocks in the status's features (the add-on's id when the shop gives none) */
+    val feature: String,
+    /** the plans it can be added to (empty: any) */
+    val plans: List<String>,
+    /** null while the shop has no Play product for it */
+    val productId: String?,
+    /** "monthly" → the base plan id */
+    val basePlans: Map<String, String>,
+) {
+    companion object {
+        fun parse(a: JSONArray?): List<AddonOffer> = (0 until (a?.length() ?: 0)).mapNotNull { i -> a!!.optJSONObject(i) }.mapNotNull { o ->
+            val id = o.optString("id").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val g = o.optJSONObject("google")
+            val bp = g?.optJSONObject("base_plans")
+            val plans = o.optJSONArray("plans")
+            AddonOffer(id, o.optString("name").ifBlank { id }, o.optString("feature").ifBlank { id },
+                (0 until (plans?.length() ?: 0)).map { plans!!.optString(it) }.filter { it.isNotBlank() },
+                g?.optString("product_id")?.takeIf { it.isNotBlank() },
+                bp?.let { b -> b.keys().asSequence().associateWith { b.optString(it) } }.orEmpty())
+        }
+    }
+}
+
 /** The direct edition (and a phone without Play): nothing is sold in a store. */
 object NoBilling : StoreBilling {
     override val sells = false

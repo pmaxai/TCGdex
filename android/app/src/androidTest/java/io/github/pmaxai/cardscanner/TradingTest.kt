@@ -8,7 +8,7 @@ import io.github.pmaxai.cardscanner.trading.CartLine
 import io.github.pmaxai.cardscanner.trading.Condition
 import io.github.pmaxai.cardscanner.trading.LineStatus
 import io.github.pmaxai.cardscanner.trading.DealSummary
-import io.github.pmaxai.cardscanner.trading.Reference
+import io.github.pmaxai.cardscanner.data.PriceSource
 import io.github.pmaxai.cardscanner.trading.SellVerdict
 import io.github.pmaxai.cardscanner.trading.Side
 import io.github.pmaxai.cardscanner.trading.TradingBook
@@ -52,15 +52,21 @@ class TradingTest {
     @Test
     fun marketValueFollowsConditionAndReference() {
         val p = Printing(Printing.Kind.NORMAL, eur = 61.18, eur30 = 50.0, eurLow = 20.0, usd = 70.0)
-        assertEquals(61.18, TradingMath.reference(p, Reference.TREND)!!, 1e-9)
-        assertEquals(50.0, TradingMath.reference(p, Reference.AVG30)!!, 1e-9)
-        assertEquals(20.0, TradingMath.reference(p, Reference.LOW)!!, 1e-9)
+        assertEquals(61.18, TradingMath.reference(p, PriceSource.CM_TREND)!!, 1e-9)
+        assertEquals(50.0, TradingMath.reference(p, PriceSource.CM_AVG30)!!, 1e-9)
+        assertEquals(20.0, TradingMath.reference(p, PriceSource.CM_LOW)!!, 1e-9)
+        // no average sell price: the next source with one (the trend)
+        assertEquals(61.18, TradingMath.reference(p, PriceSource.CM_AVG)!!, 1e-9)
         assertEquals(52.0, TradingMath.market(61.18, Condition.EX), 1e-9)
         assertEquals(18.35, TradingMath.market(61.18, Condition.PO), 1e-9)
         assertEquals(0.2236, TradingMath.trend(p)!!, 1e-4)
         assertTrue("lowest under half the trend", TradingMath.fewSales(p))
         assertFalse(TradingMath.fewSales(p.copy(eurLow = 40.0)))
-        assertNull("no Cardmarket price", TradingMath.reference(p.copy(eur = null, eur30 = null, eurLow = null), Reference.TREND))
+        assertNull("only USD and no rate: no market value in EUR", TradingMath.reference(p.copy(eur = null, eur30 = null, eurLow = null), PriceSource.CM_TREND))
+        // TCGplayer as the default: its market price in EUR at the pack's rate
+        val t = p.copy(sourced = true, cmTrend = 61.18, tcgMarket = 80.0, usdPerEur = 1.25)
+        assertEquals(64.0, TradingMath.reference(t, PriceSource.TCG_MARKET)!!, 1e-9)
+        assertEquals("no mid price: the fallback order", PriceSource.CM_TREND, t.shown(PriceSource.TCG_MID)?.source)
     }
 
     private fun line(id: Long, name: String, ref: Double, c: Condition, asking: Double?, negotiated: Double?,

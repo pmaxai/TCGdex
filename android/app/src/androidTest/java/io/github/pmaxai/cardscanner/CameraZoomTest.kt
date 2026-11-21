@@ -124,7 +124,7 @@ class CameraZoomTest {
             runCatching { CameraRecording.stop() }
             runCatching { scenario.onActivity { vm.setZoom(1f) } }
             Thread.sleep(800)           // the zoom is saved when it rests
-            modeBefore?.let { m -> runCatching { scenario.onActivity { vm.updateSettings { it.copy(youtube = m.youtube, trading = m.trading, webshop = m.webshop) } } } }
+            modeBefore?.let { m -> runCatching { scenario.onActivity { vm.updateSettings { it.copy(youtube = m.youtube, webshop = m.webshop) } } } }
             scenario.close()
             TestAccount.disconnect(ctx)
             dir.deleteRecursively()

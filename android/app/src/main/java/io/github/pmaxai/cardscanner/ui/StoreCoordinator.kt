@@ -7,6 +7,7 @@ import android.util.Log
 import io.github.pmaxai.cardscanner.BuildConfig
 import io.github.pmaxai.cardscanner.account.AccountException
 import io.github.pmaxai.cardscanner.account.AccountStatus
+import io.github.pmaxai.cardscanner.store.AddonOffer
 import io.github.pmaxai.cardscanner.store.Affiliate
 import io.github.pmaxai.cardscanner.store.BuyItem
 import io.github.pmaxai.cardscanner.store.BuyRequest
@@ -43,7 +44,25 @@ data class StoreUi(
     val waiting: Int = 0,
     /** the account's creator code with its discount on the first subscription */
     val affiliate: Affiliate? = null,
+    /** price data add-ons on sale (PSA prices) */
+    val addons: List<AddonOffer> = emptyList(),
 ) {
+    /** an add-on's price for a period ("monthly"), null when the store doesn't sell it */
+    fun price(addon: AddonOffer, period: String): StoreOffer? =
+        addon.productId?.let { p -> addon.basePlans[period]?.let { prices[p]?.get(it) } }
+
+    /**
+     * Why the add-on can't be bought now (null: it can): it needs a running plan it is for, and
+     * isn't bought twice.
+     */
+    fun addonBlocked(addon: AddonOffer, st: AccountStatus?): String? = when {
+        st == null || !st.active -> "${addon.name} is an add-on for a running plan – choose a plan first."
+        addon.plans.isNotEmpty() && st.plan !in addon.plans ->
+            "${addon.name} is an add-on for " + addon.plans.joinToString(" and ") { p -> st.copy(plan = p).planName } + "."
+        st.addons[addon.id]?.running == true -> "${addon.name} is already running."
+        else -> null
+    }
+
     /** a plan's price for a period ("monthly"), null when the store doesn't sell it */
     fun price(offer: PlanOffer, period: String): StoreOffer? =
         offer.productId?.let { p -> offer.basePlans[period]?.let { prices[p]?.get(it) } }
@@ -107,10 +126,11 @@ class StoreCoordinator(
         return try {
             val o = account.api()!!.offers(token)
             val offers = PlanOffer.parse(o.optJSONArray("offers") ?: org.json.JSONArray())
-            val ids = offers.flatMap { p -> listOfNotNull(p.productId) + p.deviceProductIds }
+            val addons = AddonOffer.parse(o.optJSONArray("addons"))
+            val ids = offers.flatMap { p -> listOfNotNull(p.productId) + p.deviceProductIds } + addons.mapNotNull { it.productId }
             val prices = billing.offers(ids)
             val aff = Affiliate.parse(o.optJSONObject("affiliate"))
-            publish { it.copy(offers = offers, prices = prices, affiliate = aff, loading = false) }
+            publish { it.copy(offers = offers, prices = prices, affiliate = aff, addons = addons, loading = false) }
             true
         } catch (e: AccountException) {
             publish { it.copy(loading = false, error = e.friendly) }
@@ -207,6 +227,14 @@ class StoreCoordinator(
     fun removeDevice(activity: Activity) = changeDevices(activity, -1)
 
     private fun running(): Triple<PlanOffer, StorePurchase, List<String>>? = current().running(status())
+
+    /** Buy an add-on for a period ("monthly", "yearly"): its own Play subscription beside the plan's. */
+    fun buyAddon(activity: Activity, addon: AddonOffer, period: String) {
+        current().addonBlocked(addon, status())?.let { why -> publish { it.copy(error = why) }; return }
+        val ref = status()?.storeRef ?: return publish { it.copy(error = "The account has no store reference yet. Check again.") }
+        val o = current().price(addon, period) ?: return publish { it.copy(error = "Google Play doesn't sell ${addon.name} right now.") }
+        launchFlow(activity, BuyRequest(listOf(BuyItem(o)), ref), addon.productId!!, period)
+    }
 
     private fun changeDevices(activity: Activity, by: Int) {
         val (plan, p, have) = running() ?: return publish { it.copy(error = "No running Google Play subscription on this phone. Try Restore purchases.") }

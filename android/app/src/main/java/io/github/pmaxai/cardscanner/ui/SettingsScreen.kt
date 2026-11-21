@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -49,6 +50,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -66,7 +68,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.pmaxai.cardscanner.trading.Condition
-import io.github.pmaxai.cardscanner.trading.Reference
+import io.github.pmaxai.cardscanner.data.PriceSource
 import io.github.pmaxai.cardscanner.BuildConfig
 import io.github.pmaxai.cardscanner.update.AppUpdate
 import androidx.activity.result.contract.ActivityResultContracts
@@ -81,7 +83,8 @@ enum class SettingsPage(val short: String, val title: String, val icon: ImageVec
     MODE("Mode", "Mode", Icons.Filled.Home),
     CAMERA("Camera", "Camera & scanning", Icons.Filled.Search),
     PRICES("Prices", "Prices & alerts", Icons.Filled.Notifications),
-    TRADING("Trading", "Trading Mode", Icons.Filled.ShoppingCart),
+    PRICE_DATA("Data", "Price data & add-ons", Icons.Filled.Star),
+    TRADING("Carts", "Carts & deals", Icons.Filled.ShoppingCart),
     WEBSHOP("Webshop", "Webshop", Icons.AutoMirrored.Filled.List),
     YOUTUBE("YouTube", "YouTube Mode", Icons.Filled.PlayArrow),
     RECORDING("Record", "Recording & upload", Icons.Filled.Share),
@@ -149,6 +152,7 @@ fun SettingsScreen(state: UiState, vm: ScannerViewModel, start: SettingsPage) {
                     SettingsPage.MODE -> ModePage(state, vm)
                     SettingsPage.CAMERA -> CameraPage(state, vm)
                     SettingsPage.PRICES -> PricesPage(state, vm)
+                    SettingsPage.PRICE_DATA -> PriceDataPage(state, vm)
                     SettingsPage.TRADING -> TradingPage(state, vm)
                     SettingsPage.WEBSHOP -> WebshopPage(state, vm)
                     SettingsPage.YOUTUBE -> YouTubePage(state, vm)
@@ -169,7 +173,7 @@ fun SettingsScreen(state: UiState, vm: ScannerViewModel, start: SettingsPage) {
 private fun ModePage(state: UiState, vm: ScannerViewModel) {
     val s = state.settings
     val ctx = LocalContext.current
-    Hint("What the app is for right now. ⚙ brings you back here from every mode.")
+    Hint("What the Scanner tab is for right now: the Scanner (with Add to cart and the carts), or a mode of its own.")
     AppMode.values().forEach { m ->
         val selected = m == s.mode
         val included = state.account.has(vm.featureOf(m))
@@ -218,6 +222,25 @@ private fun CameraPage(state: UiState, vm: ScannerViewModel) {
 @Composable
 private fun PricesPage(state: UiState, vm: ScannerViewModel) {
     val s = state.settings
+    // the default price: shown first for every card, in the lists, for the alert and as the market value in Add to cart
+    Text("Default price", color = Color.White, fontSize = 15.sp, modifier = Modifier.padding(top = 4.dp))
+    Text("Shown first for every card and in the lists, sets off the alert and is the market value in Add to cart. " +
+        "A card without it shows the next price it has; every price stays in the card's price table.", color = Muted, fontSize = 12.sp)
+    PriceSource.PROVIDERS.forEach { (name, sources) ->
+        Text(if (name == "Cardmarket") "Cardmarket (€)" else "TCGplayer ($, shown in € as well)", color = Muted, fontSize = 12.sp,
+            fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
+        Column(Modifier.fillMaxWidth().padding(top = 4.dp).background(Panel, RoundedCornerShape(12.dp))) {
+            sources.forEach { src ->
+                val on = src == s.priceSource
+                Row(Modifier.fillMaxWidth().clickable { vm.updateSettings { it.copy(priceSource = src) } }
+                    .padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(src.title, color = if (on) Gold else Color.White, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                    if (on) Text("✓", color = Gold, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+    Heading("Alert")
     if (state.account.isFree) {
         // the free version: price alerts would tell the price
         Setting("Alert / HIT for cards worth at least", "🔒 needs a subscription") {
@@ -228,18 +251,18 @@ private fun PricesPage(state: UiState, vm: ScannerViewModel) {
             vm.updateSettings { it.copy(threshold = v) }
         }
     }
-    Setting("− / + beside a price", "one tap changes the price by this much (Trading and Webshop)") {
+    Setting("− / + beside a price", "one tap changes the price by this much (Add to cart and Webshop)") {
         Choices(PRICE_STEPS, s.priceStep, label = { eur(it) }) { v -> vm.updateSettings { it.copy(priceStep = v) } }
     }
-    SettingSwitch("PSA 10 / 9 / 8 prices", if (state.hasPsaData) "graded prices: eBay sold averages, USD" else "not in this data pack yet",
-        s.showPsa) { v -> vm.updateSettings { it.copy(showPsa = v) } }
+    SettingSwitch("PSA prices and gem rate", if (state.hasPsaData) "PSA 10 / 9 / 8 eBay sold prices (USD, an add-on: Price data) and the gem rate"
+        else "not in this data pack yet", s.showPsa) { v -> vm.updateSettings { it.copy(showPsa = v) } }
     Heading("Where the prices come from")
-    Hint("Cardmarket trend (EUR) first, TCGplayer (USD, shown in € where Cardmarket has none). " +
+    Hint("Cardmarket (EUR) and TCGplayer (USD, also in € at the day's rate): every price is in a card's price table, the default first. " +
         "Prices of ${AppUpdate.day(state.pricesDate) ?: "–"}" +
         if (BuildConfig.SELF_UPDATE) "; a new app with that day's prices comes every night at about 01:15."
         else "; the app downloads the newest prices every night when there is a connection and uses them from its next start.")
     Hint("Price check: some cards carry another card's Cardmarket price in the card database. The app removes " +
-        "those (TCGplayer is shown instead) or warns, and Trading Mode gives no deal verdict on them.")
+        "those (the next price is shown instead) or warns, and Add to cart gives no deal verdict on them.")
 }
 
 /** the steps − / + can have */
@@ -248,17 +271,111 @@ internal val PRICE_STEPS = listOf(0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0
 @Composable
 private fun TradingPage(state: UiState, vm: ScannerViewModel) {
     val s = state.settings
-    if (!s.trading) Hint("Used in Trading Mode (Mode page).")
-    Setting("Condition of a new scan", "you change it per card while trading") {
+    if (!state.account.has("trading")) {
+        Setting("Carts and deals", "🔒 needs a subscription") { TextButton({ vm.showLocked(LockedFeature.TRADING) }) { Text("What's included?") } }
+        return
+    }
+    Hint("Add to cart on a scanned card (or one opened in the search) prices it for its condition against the vendor's price; " +
+        "the cart is in the camera picture's top right corner.")
+    Setting("Condition a card starts with", "you change it per card in Add to cart") {
         Choices(Condition.values().toList(), s.tradingCondition, label = { it.label }) { v -> vm.updateSettings { it.copy(tradingCondition = v) } }
     }
-    Setting("Market value starts from Cardmarket's", null) {
-        Choices(Reference.values().toList(), s.reference, label = { it.label }) { v -> vm.updateSettings { it.copy(reference = v) } }
-    }
     Heading("How prices are judged")
+    Hint("Market value: the default price (Prices: ${s.priceSource.label}) for the card's condition.")
     Hint("Condition: NM 100 · EX 85 · GD 75 · LP 65 · PL 50 · PO 30 % of that price.")
     Hint("Verdict: up to 80 % of the market value great, 95 % good, 110 % fair, above expensive. Opening offer 85 %.")
-    Hint("Show budget and the deal history are in Trading Mode's ⚙ menu.")
+    Hint("Show budget and the deal history are in the cart's ⋮ menu.")
+}
+
+/**
+ * Price data & add-ons: Cardmarket and TCGplayer come with every plan; more price data (PSA prices
+ * now, eBay listings and others later) is an add-on, its own Google Play subscription beside the plan.
+ */
+@Composable
+private fun PriceDataPage(state: UiState, vm: ScannerViewModel) {
+    val a = state.account
+    val store = a.store
+    val ctx = LocalContext.current
+    LaunchedEffect(a.status?.accountId) { if (vm.store.sells) vm.store.refresh() }
+    Heading("In every plan")
+    Included("Cardmarket", "Trend, 30-day average, average sell price and lowest offer (€)")
+    Included("TCGplayer", "Market, mid and low price ($, shown in € as well)")
+    if (!a.required) return
+    Heading("Add-ons")
+    Hint("An add-on is for Collector and Creator and runs as its own subscription beside the plan, monthly or yearly. " +
+        "eBay listings and more price data will follow.")
+    val addons = store.addons
+    if (addons.isEmpty()) {
+        AddonCard("PSA prices", addonAbout("psa_prices"), a.has("psa_prices")) {
+            Text(when {
+                store.loading -> "Loading…"
+                !vm.store.sells -> "Sold in the Google Play edition of the app."
+                a.isFree -> "Choose a plan first."
+                else -> "Not on sale in the app yet."
+            }, color = Muted, fontSize = 13.sp)
+        }
+    }
+    addons.forEach { addon ->
+        val has = a.has(addon.feature)
+        val st = a.status?.addons?.get(addon.id)
+        AddonCard(addon.name, addonAbout(addon.id), has) {
+            val blocked = store.addonBlocked(addon, a.status)
+            when {
+                st?.running == true -> {
+                    Text("Running · ${st.stateText}" + when (st.source) { "web" -> " · managed on the website"; "app_store" -> " · App Store"; else -> "" },
+                        color = Sure, fontSize = 13.sp)
+                    // the plan ended, the add-on's own subscription still runs (and bills) in the store
+                    if (!has && st.source == "google_play" && st.state != "canceled")
+                        Text("It works only with a running plan. Without one, cancel it in Google Play's subscriptions (Account › Manage subscription).",
+                            color = Warn, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                }
+                !vm.store.sells -> Text("Sold in the Google Play edition of the app.", color = Muted, fontSize = 13.sp)
+                blocked != null -> Text(blocked, color = Muted, fontSize = 13.sp)
+                else -> {
+                    val offers = listOf("monthly" to "month", "yearly" to "year").mapNotNull { (period, unit) ->
+                        store.price(addon, period)?.let { Triple(period, unit, it) }
+                    }
+                    if (offers.isEmpty()) Text("Google Play doesn't sell it right now.", color = Muted, fontSize = 13.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        offers.forEach { (period, unit, o) ->
+                            Button({ ctx.activity()?.let { vm.store.buyAddon(it, addon, period) } }, enabled = !store.busy) {
+                                Text("${o.price} / $unit")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (a.isFree) TextButton({ vm.showPlans() }) { Text("See the plans") }
+    StoreLines(store)
+}
+
+/** what an add-on brings (the shop's name for it comes with the offer) */
+private fun addonAbout(id: String): String = when (id) {
+    "psa_prices" -> "What PSA 10, 9 and 8 copies of a card sold for on eBay, per printing, for every card that has sales."
+    else -> "More price data for every card."
+}
+
+@Composable
+private fun Included(name: String, what: String) {
+    Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.Top) {
+        Text("✓", color = Sure, fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(26.dp))
+        Column {
+            Text(name, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            Text(what, color = Muted, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun AddonCard(name: String, about: String, has: Boolean, content: @Composable () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(top = 12.dp).background(Panel, RoundedCornerShape(14.dp)).padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text((if (has) "✓ " else "+ ") + name, color = if (has) Sure else Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+        Text(about, color = Muted, fontSize = 13.sp)
+        content()
+    }
 }
 
 @Composable

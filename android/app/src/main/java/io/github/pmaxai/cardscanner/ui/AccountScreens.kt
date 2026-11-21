@@ -425,7 +425,7 @@ private fun OffersPanel(state: UiState, vm: ScannerViewModel) {
 }
 
 @Composable
-private fun StoreLines(s: StoreUi) {
+internal fun StoreLines(s: StoreUi) {
     s.error?.let { Text("⚠ $it", color = Warn, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp)) }
     s.note?.let { Text(it, color = Sure, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp)) }
     if (s.waiting > 0) Text("A purchase waits to be confirmed: it is sent again as soon as there is a connection.", color = Muted,
@@ -560,12 +560,12 @@ fun CollectionBar(state: UiState, vm: ScannerViewModel, s: Shown, condition: Str
     Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         if (coll) Text("+ Collection", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold,
             modifier = Modifier.background(Gold, RoundedCornerShape(20.dp))
-                .combinedClickable(onClick = { vm.addShownToCollection(condition) }, onLongClick = { vm.account.loadBinders(); sheet = true })
+                .combinedClickable(onClick = { vm.addShownToCollection(condition, target = s) }, onLongClick = { vm.account.loadBinders(); sheet = true })
                 .padding(horizontal = 14.dp, vertical = 8.dp))
         if (want) Text(if (wanted != null) "★ Missing" else "☆ Missing", color = if (wanted != null) Gold else Color.White, fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.border(1.dp, if (wanted != null) Gold else Muted, RoundedCornerShape(20.dp))
-                .clickable { vm.toggleShownWanted() }.padding(horizontal = 14.dp, vertical = 7.dp))
+                .clickable { vm.toggleShownWanted(s) }.padding(horizontal = 14.dp, vertical = 7.dp))
     }
     if (coll) {
         val lines = a.collection[cardId]
@@ -586,7 +586,7 @@ fun CollectionBar(state: UiState, vm: ScannerViewModel, s: Shown, condition: Str
             modifier = Modifier.clickable { openUrl(ctx, a.portalUrl.trimEnd('/') + "/missing") }.padding(vertical = 4.dp))
     }
     if (sheet) CollectionSheet(a, condition, onClose = { sheet = false }) { c, q, cents, binder, note ->
-        vm.addShownToCollection(c, q, cents, binder, note)
+        vm.addShownToCollection(c, q, cents, binder, note, target = s)
     }
 }
 
@@ -596,7 +596,7 @@ fun CollectionBar(state: UiState, vm: ScannerViewModel, s: Shown, condition: Str
 private fun FreeCollectionBar(a: AccountUi, vm: ScannerViewModel, s: Shown, condition: String) {
     var sheet by remember { mutableStateOf(false) }
     fun add(cond: String, qty: Int, cents: Long?, note: String?) {
-        if (!vm.addShownLocally(cond, qty, cents, note)) vm.showLocked(LockedFeature.COLLECTION_FULL)
+        if (!vm.addShownLocally(cond, qty, cents, note, target = s)) vm.showLocked(LockedFeature.COLLECTION_FULL)
     }
     Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         Text("+ Collection", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold,

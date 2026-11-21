@@ -246,7 +246,8 @@ private fun CardAndPrices(s: Shown, state: UiState, vm: ScannerViewModel) {
         p?.usd?.let { add("TCGplayer ${usd(it)}") }
     }
     if (parts.isNotEmpty()) Text(parts.joinToString(" · "), color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
-    if (state.settings.showPsa) s.graded?.let { PsaLine(it, printing = p?.kind?.takeIf { s.priceCard.printings.size > 1 }) }
+    // PSA prices are an add-on
+    if (state.settings.showPsa && state.account.has("psa_prices")) s.graded?.let { PsaLine(it, printing = p?.kind?.takeIf { s.priceCard.printings.size > 1 }) }
     s.priceCard.priceCheck?.let { Text("⚠ ${it.message}", color = Warn, fontSize = 12.sp) }
     Row(Modifier.padding(top = 4.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically) {

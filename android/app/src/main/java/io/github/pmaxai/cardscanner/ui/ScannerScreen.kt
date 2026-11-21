@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -91,6 +92,23 @@ import io.github.pmaxai.cardscanner.camera.FrameAnalyzer
 import io.github.pmaxai.cardscanner.camera.loadPhoto
 import io.github.pmaxai.cardscanner.data.CardInfo
 import android.widget.Toast
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -109,7 +127,6 @@ import kotlin.math.roundToInt
 import androidx.compose.ui.input.pointer.pointerInput
 import io.github.pmaxai.cardscanner.data.Graded
 import io.github.pmaxai.cardscanner.trading.Condition
-import io.github.pmaxai.cardscanner.trading.Reference
 import io.github.pmaxai.cardscanner.data.Population
 import io.github.pmaxai.cardscanner.data.Printing
 import io.github.pmaxai.cardscanner.vision.FoilEstimate
@@ -185,9 +202,11 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
     }
 
     Surface(Modifier.fillMaxSize(), color = Ink) {
+        val ready = openCvReady && state.error == null && !state.account.justConnected && !state.loading
+        val keyboard = WindowInsets.ime.getBottom(LocalDensity.current) > 0
         Column(Modifier.fillMaxSize()) {
-            // a newer app with newer prices (not over the YouTube picture)
-            state.update?.takeIf { !state.loading && !state.settings.youtube && state.settingsPage == null && state.collectionPage == null &&
+            // a newer app with newer prices (on the Scanner, not over the YouTube picture)
+            state.update?.takeIf { !state.loading && !state.settings.youtube && state.tab == AppTab.SCANNER &&
                 !state.account.justConnected }?.let { u ->
                 UpdateBanner(u, state.pricesDate, onUpdate = vm::startUpdate, onLater = vm::dismissUpdate)
             }
@@ -196,31 +215,70 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
                     !openCvReady -> Message("OpenCV could not be loaded on this phone.")
                     state.error != null -> Message("Could not start: ${state.error}")
                     // just connected: the account and plan, then Continue (without a running subscription the app is
-                    // the free version; sign-in and plans are in ⚙ → Account)
+                    // the free version; sign-in and plans are in Settings › Account)
                     state.account.justConnected -> AccountGateScreen(state, vm)
                     state.loading -> Loading(state.loadingText)
-                    // over the settings when opened from there (Back returns to them)
-                    state.collectionPage != null -> CollectionScreen(state, vm, state.collectionPage ?: CollectionPart.COLLECTION)
-                    state.settingsPage != null -> SettingsScreen(state, vm, state.settingsPage ?: SettingsPage.MODE)
-                    !granted -> Message("The scanner needs the camera.") { Button({ ask.launch(Manifest.permission.CAMERA) }) { Text("Allow camera") } }
-                    state.settings.youtube -> YouTubeScreen(state, vm)
-                    state.settings.trading -> TradingScreen(state, vm)
-                    state.settings.webshop -> WebshopScreen(state, vm)
-                    else -> Scanner(state, vm)
+                    else -> Pages(state, vm, granted) { ask.launch(Manifest.permission.CAMERA) }
                 }
             }
+            // the bottom bar (not over YouTube Mode's full-screen picture, nor while typing)
+            if (ready && !keyboard && !(state.settings.youtube && state.tab == AppTab.SCANNER)) BottomBar(state, vm)
         }
         // after a double tap: the most likely cards to pick from
         state.picks?.let { PickList(it, state.shown, showPrices = !state.account.isFree, searchLocked = state.account.isFree, onPick = vm::pick,
             onSearch = { if (state.account.isFree) vm.showLocked(LockedFeature.SEARCH) else vm.openSearch(SearchMode.REPLACE) },
             onClose = vm::closePicks) }
         state.search?.let { SearchDialog(it, vm) }
+        // Add to cart: the card priced for a deal
+        state.deal?.let { DealDialog(it, state, vm) }
         // the free version: a locked feature's message
-        state.locked?.let { LockedDialog(it, onPlans = vm::showPlans, onClose = vm::lockedSeen) }
-        // Trading: a cart just paid – its cards into the collection?
+        state.locked?.let { f -> LockedDialog(f, onPlans = { if (f.isAddon) vm.showAddons() else vm.showPlans() }, onClose = vm::lockedSeen) }
+        // a cart just paid – its cards into the collection?
         CartCollectionOffer(state, vm)
     }
 }
+
+/** The bottom bar's pages; each keeps what it showed (the search, the scroll) while another is open. */
+@Composable
+private fun Pages(state: UiState, vm: ScannerViewModel, granted: Boolean, askCamera: () -> Unit) {
+    val holder = rememberSaveableStateHolder()
+    val tab = state.tab
+    holder.SaveableStateProvider(tab.name) {
+        when (tab) {
+            AppTab.SETTINGS -> SettingsScreen(state, vm, state.settingsPage ?: SettingsPage.MODE)
+            AppTab.COLLECTION -> CollectionScreen(state, vm, state.collectionPage ?: CollectionPart.COLLECTION)
+            AppTab.SEARCH -> if (state.account.isFree) LockedPage(LockedFeature.SEARCH, "🔍", onPlans = vm::showPlans) else SearchPage(state, vm)
+            AppTab.SCANNER -> when {
+                !granted -> Message("The scanner needs the camera.") { Button(askCamera) { Text("Allow camera") } }
+                state.settings.youtube -> YouTubeScreen(state, vm)
+                state.settings.webshop -> WebshopScreen(state, vm)
+                else -> Scanner(state, vm)
+            }
+        }
+    }
+}
+
+/** The bottom bar: the Scanner (or Webshop Mode), Search, Collection, Settings. */
+@Composable
+fun BottomBar(state: UiState, vm: ScannerViewModel) {
+    val a = state.account
+    // the free version has its collection on this phone
+    val hasCollection = a.isFree || (a.status != null && (a.has("collection") || a.has("wanted")))
+    NavigationBar(containerColor = Panel, tonalElevation = 0.dp, windowInsets = WindowInsets(0), modifier = Modifier.height(64.dp)) {
+        BarItem(state, vm, AppTab.SCANNER, if (state.settings.webshop) "Webshop" else "Scanner", AppIcons.Camera)
+        BarItem(state, vm, AppTab.SEARCH, "Search", Icons.Filled.Search)
+        if (hasCollection) BarItem(state, vm, AppTab.COLLECTION, "Collection", AppIcons.Stack)
+        BarItem(state, vm, AppTab.SETTINGS, "Settings", Icons.Filled.Settings)
+    }
+}
+
+@Composable
+private fun RowScope.BarItem(state: UiState, vm: ScannerViewModel, t: AppTab, label: String, icon: ImageVector) = NavigationBarItem(
+    selected = state.tab == t, onClick = { vm.selectTab(t) },
+    icon = { Icon(icon, contentDescription = null, modifier = Modifier.size(22.dp)) },
+    label = { Text(label, fontSize = 11.sp, maxLines = 1) },
+    colors = NavigationBarItemDefaults.colors(selectedIconColor = Ink, indicatorColor = Gold, selectedTextColor = Gold,
+        unselectedIconColor = Muted, unselectedTextColor = Muted))
 
 @Composable
 private fun Loading(text: String) = Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -242,38 +300,23 @@ private fun Message(text: String, action: @Composable () -> Unit = {}) =
         }
     }
 
+/**
+ * The scanner: camera and result share the screen half and half. The camera's corners hold the
+ * cart (top right), a photo from the gallery (bottom right) and the light (bottom left); Add to cart
+ * on the result opens the popup that prices the card for a deal. Search, alert and settings are in
+ * the bottom bar.
+ */
 @Composable
 private fun Scanner(state: UiState, vm: ScannerViewModel) {
     val ctx = LocalContext.current
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     var torch by rememberSaveable { mutableStateOf(false) }
+    var cartOpen by rememberSaveable { mutableStateOf(false) }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri: Uri? ->
         if (uri != null) loadPhoto(ctx.contentResolver, uri)?.let { vm.onPhoto(it) }
     }
+    val free = state.account.isFree
 
-    val topBar: @Composable () -> Unit = {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            // look up any card, without it in front of the camera (the free version: shown locked, as are alerts and photos)
-            val free = state.account.isFree
-            Text(if (free) "🔒  Search cards" else "🔍  Search cards", color = Muted, fontSize = 15.sp, maxLines = 1, softWrap = false,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(end = 6.dp).weight(1f).background(Panel, RoundedCornerShape(20.dp))
-                    .clickable { if (free) vm.showLocked(LockedFeature.SEARCH) else vm.openSearch(SearchMode.LOOK_UP) }
-                    .padding(horizontal = 12.dp, vertical = 8.dp))
-            AssistChip(onClick = { if (free) vm.showLocked(LockedFeature.ALERT) else vm.openSettings(SettingsPage.PRICES) }, label = {
-                Text(when {
-                    free -> "🔒 Alert"
-                    state.settings.threshold > 0 -> "Alert ≥ ${state.settings.threshold.toInt()} €"
-                    else -> "Alert off"
-                }, maxLines = 1, color = if (free) Muted else Color.Unspecified)
-            })
-            TextButton({ torch = !torch }) { Text("Light", color = if (torch) Gold else Color.White, maxLines = 1) }
-            TextButton({ if (free) vm.showLocked(LockedFeature.PHOTO) else pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
-                Text(if (free) "🔒 Photo" else "Photo", color = if (free) Muted else Color.White, maxLines = 1)
-            }
-            TextButton({ vm.openSettings() }) { Text("⚙", color = Color.White, fontSize = 20.sp) }
-        }
-    }
     val camera: @Composable (Modifier) -> Unit = { m ->
         CameraArea(state, vm, torch, video = false, modifier = m) {
             if (!state.paused) {
@@ -283,22 +326,27 @@ private fun Scanner(state: UiState, vm: ScannerViewModel) {
                     state.liveConfidence == Confidence.LIKELY -> "Probably…"
                     else -> "Fit the card into the frame"
                 }
-                Text(hint, color = Color.White, fontSize = 14.sp, maxLines = 1,
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(10.dp)
+                // between the corner buttons
+                Text(hint, color = Color.White, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 64.dp, vertical = 10.dp)
                         .background(Color(0x88000000), RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 4.dp))
             }
         }
+    }
+    // the camera's corners: above the paused overlay, so they work while a card is kept
+    val corners: @Composable BoxScope.() -> Unit = {
+        CameraCorners(state, vm, torch, onTorch = { torch = !torch }, onCart = { cartOpen = true },
+            onPhoto = { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) })
     }
     val result: @Composable (Modifier) -> Unit = { m ->
         Column(m.verticalScroll(rememberScrollState()).padding(12.dp)) {
             val s = state.shown
             if (s == null) {
-                Text(if (state.account.isFree) "Hold a card inside the frame. Its name appears here – reveal its Cardmarket price with a tap " +
+                Text(if (free) "Hold a card inside the frame. Its name appears here – reveal its price with a tap " +
                         "(${Free.REVEALS_PER_HOUR} per hour in the free version). Not recognised? Double-tap the picture to take it anyway. Pinch to zoom."
-                    else "Hold a card inside the frame. Its name and Cardmarket price appear here; " +
-                        "the phone vibrates when any printing of it is worth at least your alert price. " +
+                    else "Hold a card inside the frame. Its name and prices appear here – Add to cart prices it for a deal. " +
+                        "The phone vibrates when a card is worth at least your alert price (Settings › Prices). " +
                         "Not recognised? Double-tap the picture to take it anyway. Pinch to zoom.", color = Muted)
-                CollectionLinks(state, vm, Modifier.padding(top = 12.dp))
             } else {
                 ResultCard(s, state, vm)
             }
@@ -309,19 +357,29 @@ private fun Scanner(state: UiState, vm: ScannerViewModel) {
     // camera and result share the screen half and half
     if (landscape) {
         Row(Modifier.fillMaxSize()) {
-            camera(Modifier.weight(1f).fillMaxHeight())
-            Column(Modifier.weight(1f).fillMaxHeight()) {
-                topBar()
-                result(Modifier.weight(1f).fillMaxWidth())
-            }
+            Box(Modifier.weight(1f).fillMaxHeight()) { camera(Modifier.fillMaxSize()); corners() }
+            result(Modifier.weight(1f).fillMaxHeight())
         }
     } else {
         Column(Modifier.fillMaxSize()) {
-            topBar()
-            camera(Modifier.fillMaxWidth().weight(1f))
+            Box(Modifier.fillMaxWidth().weight(1f)) { camera(Modifier.fillMaxSize()); corners() }
             result(Modifier.fillMaxWidth().weight(1f))
         }
     }
+    if (cartOpen) CartDialog(state, vm) { cartOpen = false }
+}
+
+/** The camera picture's corners: the cart (top right), a photo (bottom right), the light (bottom left); locked in the free version. */
+@Composable
+internal fun BoxScope.CameraCorners(state: UiState, vm: ScannerViewModel, torch: Boolean, onTorch: () -> Unit, onCart: () -> Unit, onPhoto: () -> Unit) {
+    val free = state.account.isFree
+    val carts = state.account.has("trading")
+    val count = if (carts) state.book.active?.let { it.cards + it.giveCards } ?: 0 else 0
+    CornerButton(Icons.Filled.ShoppingCart, if (carts) "Cart" else "Cart, needs a subscription", Modifier.align(Alignment.TopEnd).padding(4.dp),
+        locked = !carts, badge = count) { if (carts) onCart() else vm.showLocked(LockedFeature.TRADING) }
+    CornerButton(AppIcons.Photo, if (free) "Photo, needs a subscription" else "Scan a photo", Modifier.align(Alignment.BottomEnd).padding(4.dp),
+        locked = free) { if (free) vm.showLocked(LockedFeature.PHOTO) else onPhoto() }
+    CornerButton(AppIcons.Light, if (torch) "Light off" else "Light on", Modifier.align(Alignment.BottomStart).padding(4.dp), on = torch, onClick = onTorch)
 }
 
 /** Screen orientation for the setting: "auto" follows the phone, the others stay put. */
@@ -360,6 +418,7 @@ fun CameraArea(state: UiState, vm: ScannerViewModel, torch: Boolean, video: Bool
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ResultCard(s: Shown, state: UiState, vm: ScannerViewModel) {
     val settings = state.settings
@@ -407,21 +466,14 @@ internal fun ResultCard(s: Shown, state: UiState, vm: ScannerViewModel) {
 
     Spacer(Modifier.height(8.dp))
     if (priced) {
-        PriceBlock(s)
+        PriceBlock(s.selected, s.priceCard, settings.priceSource, s.pricedFromEnglish)
         PriceHistoryLine(s)
     } else {
         RevealPrice(state.account, s.priceCard.id, vm)
     }
     // the account: + Collection, ☆ Missing
     CollectionBar(state, vm, s)
-    if (settings.showPsa) {
-        val printing = s.selected?.kind?.takeIf { s.priceCard.printings.size > 1 }
-        if (priced) s.graded?.let { PsaLine(it, printing = printing) }
-        s.population?.let { GemLine(it) }
-        if (s.gradedOnlyOtherPrintings && printing != null)
-            Text("No PSA sales for the ${printing.label.lowercase()} yet", color = Muted, fontSize = 12.sp,
-                modifier = Modifier.padding(top = 4.dp))
-    }
+    ShownPsa(s, state, vm)
 
     val others = s.versions.filter { it.id != s.version.id || it.lang != s.version.lang }
     if (others.isNotEmpty()) {
@@ -441,7 +493,7 @@ internal fun ResultCard(s: Shown, state: UiState, vm: ScannerViewModel) {
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             s.alternatives.forEach { alt ->
                 FilterChip(selected = false, onClick = { vm.choose(alt) }, label = {
-                    Text("${alt.info.name} ${alt.info.numberText}" + if (free) "" else " · ${eur(alt.info.bestValue)}", fontSize = 12.sp)
+                    Text("${alt.info.name} ${alt.info.numberText}" + if (free) "" else " · ${alt.info.bestPriceText}", fontSize = 12.sp)
                 })
             }
             FilterChip(selected = false, onClick = { if (free) vm.showLocked(LockedFeature.SEARCH) else vm.openSearch(SearchMode.REPLACE) },
@@ -449,13 +501,28 @@ internal fun ResultCard(s: Shown, state: UiState, vm: ScannerViewModel) {
         }
     }
     Spacer(Modifier.height(8.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = { vm.next() }) { Text("Next card") }
-        OutlinedButton({
-            val q = URLEncoder.encode(s.priceCard.name, "UTF-8")
-            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=$q")))
-        }) { Text("Cardmarket") }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = { vm.next() }) { Text("Next card", maxLines = 1) }
+        AddToCartButton(s, state, vm)
+        OutlinedButton({ openCardmarket(ctx, s.priceCard.name) }) { Text("Cardmarket", maxLines = 1) }
     }
+}
+
+/** Add to cart: the popup that prices the card for a deal; carts and deals come with a plan (shown locked in the free version). */
+@Composable
+fun AddToCartButton(s: Shown, state: UiState, vm: ScannerViewModel) {
+    val open = state.account.has("trading")
+    OutlinedButton({ if (open) vm.startDeal(s) else vm.showLocked(LockedFeature.TRADING) },
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = if (open) Gold else Muted)) {
+        Icon(Icons.Filled.ShoppingCart, contentDescription = null, modifier = Modifier.size(18.dp))
+        Text(if (open) "  Add to cart" else "  Add to cart 🔒", maxLines = 1)
+    }
+}
+
+/** Cardmarket's search for a card's name */
+fun openCardmarket(ctx: android.content.Context, name: String) {
+    val q = URLEncoder.encode(name, "UTF-8")
+    ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=$q")))
 }
 
 @Composable
@@ -471,37 +538,6 @@ fun FoilLine(s: Shown) {
         else -> "Holo check unsure – tilt the card a little, or tap the printing"
     }
     if (text != null) Text(text, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
-}
-
-@Composable
-private fun PriceBlock(s: Shown) {
-    val p = s.selected
-    if (p == null || (p.eur == null && p.usd == null)) {
-        Text("No price for this card.", color = Muted)
-        return
-    }
-    Row(verticalAlignment = Alignment.Bottom) {
-        Text(when {
-            p.eur != null -> eur(p.eur)
-            p.usdEur != null -> "≈ ${eur(p.usdEur)}"
-            else -> usd(p.usd)
-        }, color = Gold, fontSize = 30.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.width(8.dp))
-        Text(when {
-            p.eur != null -> "Cardmarket trend · ${p.kind.label}"
-            p.usdEur != null -> "TCGplayer in € · ${p.kind.label}"
-            else -> "TCGplayer · ${p.kind.label}"
-        }, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 6.dp))
-    }
-    val parts = buildList {
-        if (p.eur30 != null) add("30-day avg ${eur(p.eur30)}")
-        if (p.eurLow != null) add("from ${eur(p.eurLow)}")
-        if (p.usd != null && (p.eur != null || p.usdEur != null)) add("TCGplayer ${usd(p.usd)}")
-    }
-    if (parts.isNotEmpty()) Text(parts.joinToString(" · "), color = Color.White, fontSize = 13.sp)
-    s.priceCard.priceCheck?.let { Text("⚠ ${it.message}", color = Warn, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp)) }
-    if (s.pricedFromEnglish) Text("Price of the English version (no price for this language)", color = Muted, fontSize = 11.sp)
-    s.priceCard.prices?.updated?.let { Text("Prices from ${it.take(10)}", color = Muted, fontSize = 11.sp) }
 }
 
 @Composable
@@ -751,7 +787,7 @@ fun PrintedOnlyHint(s: Shown) {
 }
 
 /** Labels shared by both screens. */
-fun printingPrice(p: Printing): String = if (p.eur != null) eur(p.eur) else usd(p.usd)
+fun printingPrice(p: Printing): String = p.priceText
 
 /** "Twilight Masquerade · 034/167 · DE · 2024" */
 fun CardInfo.setLine(withLang: Boolean = true): String =

@@ -121,7 +121,7 @@ fun SubmitDialog(
 
                     if (local) {
                         Text("Save puts the video into the Gallery of this phone, in ${GallerySaver.place}" +
-                            " (and the camera video, if recorded). Uploading to S3 is off (⚙ → Record).",
+                            " (and the camera video, if recorded). Uploading to S3 is off (Settings › Record).",
                             color = Color.White, fontSize = 14.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 14.dp))
                     } else {
                         Text("Videos to make", color = Gold, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 14.dp))

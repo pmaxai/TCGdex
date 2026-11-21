@@ -78,6 +78,8 @@ class StoreTest {
         @Volatile var basePlan: String? = null
         /** the creator code the account is registered for */
         @Volatile var affiliate: String? = null
+        /** the PSA prices add-on: its billing period while it runs */
+        @Volatile var psa: String? = null
         /** creator codes that came with a sign-in */
         val signInCodes = CopyOnWriteArrayList<String>()
         val reports = CopyOnWriteArrayList<Pair<String, String>>()
@@ -89,6 +91,8 @@ class StoreTest {
             val active = plan != null
             val f = JSONObject()
             TestAccount.ALL.forEach { f.put(it, active && (plan == "creator" || it in listOf("scanner", "trading", "collection", "wanted"))) }
+            // an add-on unlocks its feature only while a plan runs
+            f.put("psa_prices", active && psa != null)
             return JSONObject().put("status", if (active) "active" else "none").put("server_time", iso(now))
                 .put("valid_until", iso(if (active) now + 30 * 86_400_000L else now))
                 .put("account", JSONObject().put("id", "acc_store01").put("email", "anna@test.overpricedcardboard.com")
@@ -101,6 +105,10 @@ class StoreTest {
                 .put("features", f).put("webshop", JSONObject.NULL)
                 .put("services", JSONObject().put("s3", JSONObject().put("enabled", false)))
                 .put("portal_url", "https://overpricedcardboard.com/account")
+                .put("addons", JSONArray(listOfNotNull(psa?.let { p ->
+                    JSONObject().put("id", "psa_prices").put("state", "active").put("source", "google_play").put("base_plan", p)
+                        .put("renews_at", iso(now + (if (p == "yearly") 365 else 30) * 86_400_000L)).put("ends_at", JSONObject.NULL)
+                })))
         }
 
         private fun json(code: Int, o: Any) = MockResponse().setResponseCode(code).setHeader("Content-Type", "application/json").setBody(o.toString())
@@ -131,6 +139,10 @@ class StoreTest {
                 request.method == "GET" && path == "/status" -> json(200, status())
                 request.method == "GET" && path == "/store/offers" -> json(200, JSONObject().put("offers", JSONArray()
                     .put(offer("collector", "Collector", 4)).put(offer("creator", "Creator", 2)))
+                    .put("addons", JSONArray().put(JSONObject().put("id", "psa_prices").put("name", "PSA prices").put("feature", "psa_prices")
+                        .put("plans", JSONArray(listOf("collector", "creator")))
+                        .put("google", JSONObject().put("product_id", "oc_psa").put("base_plans", JSONObject().put("monthly", "monthly").put("yearly", "yearly")))
+                        .put("apple", JSONObject.NULL)))
                     .put("affiliate", if (affiliate != null && plan == null) affiliateJson() else JSONObject.NULL))
                 request.method == "POST" && path == "/affiliate" -> {
                     val c = body.optString("code").uppercase()
@@ -146,6 +158,8 @@ class StoreTest {
                     refuse?.let { return err(409, it, JSONObject().put("source", "web")) }
                     val product = body.getString("product_id"); val t = body.getString("purchase_token")
                     reports += product to t
+                    // an add-on is kept with the account, beside the plan
+                    if (product == "oc_psa") { psa = if ("yearly" in t) "yearly" else "monthly"; return json(200, status()) }
                     plan = product.removePrefix("oc_"); source = "google_play"
                     inStore = Regex("-d(\\d)").find(t)?.groupValues?.get(1)?.toInt() ?: 0
                     json(200, status())
@@ -188,6 +202,8 @@ class StoreTest {
         override suspend fun installReferrer(): String? = referrer
 
         override suspend fun offers(productIds: List<String>) = productIds.associateWith { id ->
+            if (id == "oc_psa") return@associateWith mapOf("monthly" to StoreOffer(id, "monthly", "€2.99", "$id:monthly"),
+                "yearly" to StoreOffer(id, "yearly", "€32.00", "$id:yearly"))
             val m = mutableMapOf("monthly" to StoreOffer(id, "monthly", if ("device" in id) "€4.00" else "€7.00", "$id:monthly"),
                 "yearly" to StoreOffer(id, "yearly", if ("device" in id) "€43.20" else "€75.60", "$id:yearly"))
             // the creator codes' offer under every base plan of the plans
@@ -204,7 +220,9 @@ class StoreTest {
             asked += request
             val t = next ?: return BuyResult.Cancelled
             val p = StorePurchase(t, request.items.map { it.offer.productId }, true, request.accountRef)
-            held.clear(); held += p
+            // a subscription each: the plan (with its devices), the PSA add-on
+            val addon = "oc_psa" in p.products
+            held.removeAll { ("oc_psa" in it.products) == addon }; held += p
             return BuyResult.Bought(listOf(p))
         }
     }
@@ -278,6 +296,44 @@ class StoreTest {
         assertEquals(listOf("oc_collector:yearly"), req.items.map { it.offer.offerToken })
         assertEquals(listOf("oc_collector" to "gp-1"), shop.reports.toList())
         assertEquals("google_play", ui.value.status!!.source)
+    }
+
+    /** PSA prices: an add-on for a running plan, bought as its own Play subscription beside it; it unlocks psa_prices. */
+    @Test
+    fun psaAddonNeedsAPlanAndRunsBesideIt() {
+        signIn()
+        waitUntil("the add-on") { ui.value.store.addons.isNotEmpty() }
+        val psa = ui.value.store.addons.single()
+        assertEquals("psa_prices", psa.id)
+        assertEquals(listOf("collector", "creator"), psa.plans)
+        assertEquals("€2.99", ui.value.store.price(psa, "monthly")!!.price)
+        assertEquals("€32.00", ui.value.store.price(psa, "yearly")!!.price)
+        // no plan yet: not on sale for this account
+        assertEquals("PSA prices is an add-on for a running plan – choose a plan first.", ui.value.store.addonBlocked(psa, ui.value.status))
+        store.buyAddon(activity, psa, "monthly")
+        waitUntil("refused") { ui.value.store.error != null }
+        assertTrue("no purchase sheet", billing.asked.isEmpty())
+        store.dismiss()
+
+        billing.next = "gp-1"
+        store.buy(activity, ui.value.store.onSale.first { it.plan == "collector" }, "monthly")
+        waitUntil("the plan") { ui.value.gate == AccountGate.OPEN && ui.value.store.purchase != null && !ui.value.store.busy }
+        assertFalse(ui.value.status!!.has("psa_prices"))
+        assertNull(ui.value.store.addonBlocked(psa, ui.value.status))
+        billing.next = "gp-psa-yearly"
+        store.buyAddon(activity, psa, "yearly")
+        waitUntil("PSA prices unlocked") { ui.value.status!!.has("psa_prices") && !ui.value.store.busy }
+        val req = billing.asked.last()
+        assertNull("its own subscription, not a change of the plan's purchase", req.oldPurchaseToken)
+        assertEquals(listOf("oc_psa:yearly"), req.items.map { it.offer.offerToken })
+        assertEquals(listOf("oc_collector" to "gp-1", "oc_psa" to "gp-psa-yearly"), shop.reports.toList())
+        assertEquals("the plan runs on", "collector", ui.value.status!!.plan)
+        assertEquals("yearly", ui.value.status!!.addons["psa_prices"]?.basePlan)
+        assertTrue(ui.value.status!!.addons["psa_prices"]!!.running)
+        assertEquals("two subscriptions side by side", 2, billing.held.size)
+        assertEquals("the plan's purchase stays the one for devices", "gp-1", ui.value.store.purchase?.token)
+        assertEquals("PSA prices is already running.", ui.value.store.addonBlocked(psa, ui.value.status))
+        Log.i("Store", "PSA add-on: ${ui.value.status!!.addons["psa_prices"]?.stateText} beside ${ui.value.status!!.planName}")
     }
 
     @Test
