@@ -298,15 +298,15 @@ final class CameraFileWriter: @unchecked Sendable {
 
     /// The file is closed (after Stop); nil error: it's complete.
     func stop() async {
-        lock.lock()
-        let w = writer, i = input, last = lastPTS
-        writer = nil; input = nil; url = nil
-        lock.unlock()
+        let (w, i, last): (AVAssetWriter?, AVAssetWriterInput?, CMTime) = lock.withLock {
+            defer { writer = nil; input = nil; url = nil }
+            return (writer, input, lastPTS)
+        }
         guard let w else { return }
         i?.markAsFinished()
         if last.isValid { w.endSession(atSourceTime: last) }
         await w.finishWriting()
-        if w.status != .completed { lock.lock(); error = w.error?.localizedDescription ?? "encoder"; lock.unlock() }
+        if w.status != .completed { lock.withLock { error = w.error?.localizedDescription ?? "encoder" } }
     }
 
     /// The log's camera object; screenZeroNanos: the screen file's first frame.

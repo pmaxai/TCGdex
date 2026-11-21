@@ -241,7 +241,7 @@ final class S3Client: @unchecked Sendable {
             } catch let e as S3Error {
                 if e.code == "RequestTimeTooSkewed" && !clockFixed {
                     clockFixed = true
-                    if let d = e.serverDate { lock.lock(); clockOffset = d.timeIntervalSinceNow; lock.unlock() }
+                    if let d = e.serverDate { lock.withLock { clockOffset = d.timeIntervalSinceNow } }
                     continue
                 }
                 if (e.status >= 500 || e.status == 429) && attempt < 3 { await sleep(Double(1 << (attempt - 1))); continue }
