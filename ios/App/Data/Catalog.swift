@@ -521,7 +521,7 @@ final class Catalog {
         for (k, v) in o {
             var p = TcgPrice()
             if let nested = v as? [String: Any] {
-                func num(_ key: String) -> Double? { (nested[key] as? NSNumber)?.doubleValue.flatMap { $0 > 0 ? $0 : nil } }
+                func num(_ key: String) -> Double? { ((nested[key] as? NSNumber)?.doubleValue).flatMap { $0 > 0 ? $0 : nil } }
                 p = TcgPrice(market: num("marketPrice"), mid: num("midPrice"), low: num("lowPrice"))
             } else if let n = v as? NSNumber, n.doubleValue > 0 { p.market = n.doubleValue }
             if p.best != nil { out[k.lowercased()] = p }

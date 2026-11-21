@@ -272,6 +272,11 @@ private struct AddonRow: View {
             if let state, state.running {
                 Text("Running · \(state.stateText)" + (state.source == "app_store" ? "" : state.source == "web" ? " · managed on the website" : ""))
                     .font(.footnote).foregroundStyle(Theme.sure)
+                // the plan ended, the add-on's own subscription still runs (and bills) in the App Store
+                if !has && state.source == "app_store" && state.state != "canceled" {
+                    Text("It works only with a running plan. Without one, cancel it in the App Store's subscriptions (Settings › Account › Manage subscription).")
+                        .font(.caption).foregroundStyle(Theme.warn)
+                }
             } else if let blocked {
                 Text(blocked).font(.footnote).foregroundStyle(Theme.muted)
             } else {

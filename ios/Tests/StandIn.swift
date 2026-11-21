@@ -195,8 +195,7 @@ final class StandIn: URLProtocol {
             if product.contains("_devices_") {
                 a.devicesInStore = Int(product.split(separator: "_")[3]) ?? 1
             } else if product.hasPrefix("oc_psa_") {
-                // an add-on runs beside a plan
-                guard a.active else { return err(409, "addon_needs_plan") }
+                // an add-on is kept with the account; it unlocks psa_prices only while a plan runs
                 a.psa = product.hasSuffix("yearly") ? "yearly" : "monthly"
             } else {
                 a.active = true
