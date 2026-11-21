@@ -29,6 +29,11 @@ final class ReviewPrices: AppStoreBilling {
         for id in ids {
             let yearly = id.hasSuffix("yearly")
             let creator = id.contains("creator")
+            // the PSA prices add-on: €2.99 a month, €32 a year
+            if id.hasPrefix("oc_psa_") {
+                out[id] = StoreProduct(id: id, displayPrice: yearly ? "€32.00" : "€2.99", price: yearly ? 32 : 2.99, period: yearly ? "yearly" : "monthly")
+                continue
+            }
             // oc_<plan>_devices_<n>_<period>: n times the plan's device price
             let parts = id.split(separator: "_")
             let devices = id.contains("_devices_") && parts.count > 3 ? Double(parts[3]) ?? 1 : 0
@@ -144,7 +149,8 @@ final class ScreenshotTests: XCTestCase {
     /**
      * The subscriptions' review screenshots for App Store Connect (Review Information): 400 × 575 points,
      * scaled to 640 × 920 pixels afterwards. The plans screen (top: Collector, bottom: Creator and the
-     * renewal terms), and the extra devices in the Account tab for each plan.
+     * renewal terms), the extra devices in the Account tab for each plan, and the PSA prices add-on in
+     * Settings › Price data & add-ons (one picture for both of its products).
      */
     func testReviewScreenshots() async throws {
         StandIn.reset()
@@ -178,6 +184,22 @@ final class ScreenshotTests: XCTestCase {
             // scrolled so that the plan, the devices row and its line under it are all in the picture
             try await shot("review-devices-\(plan)", tab, width: 400, height: 575, scrolledBy: 60)
         }
+
+        // the PSA prices add-on, on sale to a running Collector plan
+        StandIn.lock.lock()
+        StandIn.accounts.values.forEach { $0.active = true; $0.plan = "collector"; $0.basePlan = "monthly"; $0.source = "app_store"; $0.psa = nil }
+        StandIn.lock.unlock()
+        a.check(force: true)
+        try await until { a.status?.plan == "collector" && a.status?.active == true && !a.busy }
+        await store.loadOffers()
+        let psa = try XCTUnwrap(store.addons.first, "the add-on on sale")
+        XCTAssertEqual(store.price(psa, "monthly")?.displayPrice, "€2.99")
+        XCTAssertEqual(store.price(psa, "yearly")?.displayPrice, "€32.00")
+        XCTAssertNil(store.addonBlocked(psa), "for sale to Collector")
+        let page = NavigationStack {
+            PriceDataView(account: a, store: store).navigationTitle("Price data & add-ons").navigationBarTitleDisplayMode(.inline)
+        }
+        try await shot("review-psa", page, width: 400, height: 575)
     }
 
     /// The free version: a scanned card with its price to reveal, revealed, the hour's limit, the locked Search
