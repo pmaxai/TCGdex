@@ -243,8 +243,11 @@ class AccountTest {
         fake.active = false
         account.check(force = true, manual = true)
         waitUntil("ended") { ui.value.gate == AccountGate.ENDED }
-        assertTrue(ui.value.locked)
-        assertFalse(ui.value.has("scanner"))
+        // ended: the free version – the Scanner only
+        assertTrue(ui.value.isFree)
+        assertTrue(ui.value.has("scanner"))
+        assertFalse(ui.value.has("trading"))
+        assertFalse(ui.value.has("collection"))
         assertTrue("the token stays", AccountStore(app).connected)
         fake.active = true
         account.check(force = true, manual = true)
