@@ -8,9 +8,12 @@ struct ResultCard: View {
     let onSearch: () -> Void
     @EnvironmentObject var account: AccountModel
     @State private var fullscreen = false
+    @State private var locked: LockedFeature?
 
     var body: some View {
         let c = s.version
+        // the free version: the prices only once revealed (10 cards in any 60 minutes)
+        let priced = account.revealed(s.priceCard.id)
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 12) {
                 ShownPicture(s: s)
@@ -30,7 +33,7 @@ struct ResultCard: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(s.priceCard.printings, id: \.kind) { p in
-                            Chip(text: "\(p.kind.rawValue) \(p.priceText)", selected: p.kind == s.selected?.kind) { model.choosePrinting(p.kind) }
+                            Chip(text: priced ? "\(p.kind.rawValue) \(p.priceText)" : p.kind.rawValue, selected: p.kind == s.selected?.kind) { model.choosePrinting(p.kind) }
                         }
                     }
                 }
@@ -39,7 +42,8 @@ struct ResultCard: View {
                 }
             }
             if let r = s.richerPrinting {
-                Text("⚠ The \(r.kind.rawValue.lowercased()) of this card is worth \(r.priceText) – check the finish!")
+                Text(priced ? "⚠ The \(r.kind.rawValue.lowercased()) of this card is worth \(r.priceText) – check the finish!"
+                     : "⚠ The \(r.kind.rawValue.lowercased()) of this card is worth more – check the finish!")
                     .font(.footnote.bold()).foregroundStyle(Theme.warn)
             }
             if let lang = s.printedOnly {
@@ -49,12 +53,12 @@ struct ResultCard: View {
                 Text("Printed in \(name) – this print isn't in the card data; shown: \(shownText)").font(.caption).foregroundStyle(Theme.warn)
             }
 
-            PriceBlock(s: s)
+            if priced { PriceBlock(s: s) } else { RevealPrice(account: account, cardId: s.priceCard.id) }
             CollectionBar(account: account, s: s)
-            if let h = s.history { PriceHistoryChart(history: h, printing: s.selected?.kind, hasNormal: s.priceCard.printings.contains { $0.kind == .normal }) }
+            if priced, let h = s.history { PriceHistoryChart(history: h, printing: s.selected?.kind, hasNormal: s.priceCard.printings.contains { $0.kind == .normal }) }
             if model.settings.showPsa {
                 let printing = s.priceCard.printings.count > 1 ? s.selected?.kind : nil
-                if let g = s.graded { PsaLine(g: g, printing: printing) }
+                if priced, let g = s.graded { PsaLine(g: g, printing: printing) }
                 if let p = s.population { GemLine(p: p) }
                 if s.gradedOnlyOtherPrintings, let printing {
                     Text("No PSA sales for the \(printing.rawValue.lowercased()) yet").font(.caption).foregroundStyle(Theme.muted)
@@ -77,9 +81,9 @@ struct ResultCard: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(s.alternatives) { alt in
-                            Chip(text: "\(alt.info.name) \(alt.info.numberText) · \(Money.eur(alt.info.bestValue))", selected: false) { model.choose(alt) }
+                            Chip(text: "\(alt.info.name) \(alt.info.numberText)" + (account.isFree ? "" : " · \(Money.eur(alt.info.bestValue))"), selected: false) { model.choose(alt) }
                         }
-                        Chip(text: "🔍 Search…", selected: false, action: onSearch)
+                        Chip(text: account.isFree ? "🔒 Search…" : "🔍 Search…", selected: false) { if account.isFree { locked = .search } else { onSearch() } }
                     }
                 }
             }
@@ -89,6 +93,7 @@ struct ResultCard: View {
             }
             .padding(.top, 4)
         }
+        .lockedAlert($locked)
         .fullScreenCover(isPresented: $fullscreen) {
             ZStack {
                 Color.black.ignoresSafeArea()

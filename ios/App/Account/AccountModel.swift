@@ -155,6 +155,12 @@ final class AccountModel: ObservableObject {
     @Published private(set) var resendAt = Date.distantPast
     /// a short message for the person (an alert)
     @Published var message: String?
+    /// the free version (no running subscription): the prices revealed lately, and the collection on this phone
+    /// (set by FreeTier.swift's extension only)
+    @Published var reveals: [FreeReveal] = []
+    @Published var localItems: [LocalItem] = []
+    /// the clock of the free version's hour (tests set their own)
+    var now: () -> Date = Date.init
 
     let store: AccountStore
     /// the app's own server: sign-ins go there (a pairing link names its own); tests: a stand-in
@@ -186,6 +192,8 @@ final class AccountModel: ObservableObject {
     init(store: AccountStore = AccountStore(), home: String = AccountModel.defaultHome) {
         self.store = store
         self.home = home.hasSuffix("/") ? String(home.dropLast()) : home
+        reveals = store.freeReveals()
+        localItems = store.localCollection()
     }
 
     func api(_ base: String? = nil) -> AccountApi? {
@@ -223,6 +231,8 @@ final class AccountModel: ObservableObject {
         notice = store.notice
         gate = AccountGate.of(connected: store.connected, status: st, now: Date())
         onStatus?(store.connected ? st : nil)
+        // a plan with a collection: the cards kept on this phone go into it
+        if has("collection") && !localItems.isEmpty { moveLocalCollection() }
     }
 
     /// an answer that carries the status (a purchase report): kept like a check's

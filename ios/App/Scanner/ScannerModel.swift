@@ -81,6 +81,8 @@ final class ScannerModel: ObservableObject {
     @Published private(set) var flash = 0
     @Published private(set) var debugLines: [String] = []
     @Published var settings: ScannerSettings { didSet { settingsChanged(oldValue) } }
+    /// false in the free version: no price alerts (they would tell the price)
+    var alertsAllowed = true
 
     let camera = Camera()
     let engine: ScannerEngine
@@ -259,7 +261,7 @@ final class ScannerModel: ObservableObject {
     }
 
     private func maybeAlert(_ sh: Shown) {
-        guard sh.confidence != .unsure, settings.threshold > 0, let best = sh.priceCard.bestValue else { return }
+        guard alertsAllowed, sh.confidence != .unsure, settings.threshold > 0, let best = sh.priceCard.bestValue else { return }
         // any printing above the threshold: a valuable reverse holo must not slip through
         if best < settings.threshold || lastAlerted == sh.group { return }
         lastAlerted = sh.group

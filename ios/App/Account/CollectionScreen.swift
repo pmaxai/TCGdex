@@ -20,20 +20,28 @@ struct CollectionScreen: View {
         _part = State(initialValue: start)
     }
 
-    private var parts: [Part] { (account.has("collection") ? [.collection] : []) + (account.has("wanted") ? [.missing] : []) }
+    /// the free version: its collection on this phone, and the missing cards shown locked
+    private var parts: [Part] {
+        if account.isFree { return [.collection, .missing] }
+        return (account.has("collection") ? [.collection] : []) + (account.has("wanted") ? [.missing] : [])
+    }
     private var shown: Part { parts.contains(part) ? part : (parts.first ?? .collection) }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 if parts.count > 1 {
-                    Picker("Part", selection: $part) { ForEach(parts) { Text($0.rawValue).tag($0) } }
+                    Picker("Part", selection: $part) {
+                    ForEach(parts) { p in Text(account.isFree && p == .missing ? "\(p.rawValue) 🔒" : p.rawValue).tag(p) }
+                }
                         .pickerStyle(.segmented)
                         .padding(.horizontal, 16).padding(.vertical, 8)
                 }
                 switch shown {
-                case .collection: CollectionList(account: account, catalog: catalog)
-                case .missing: MissingList(account: account, catalog: catalog)
+                case .collection:
+                    if account.isFree { LocalCollectionList(account: account, catalog: catalog) } else { CollectionList(account: account, catalog: catalog) }
+                case .missing:
+                    if account.isFree { LockedPage(feature: .missing, icon: "star") } else { MissingList(account: account, catalog: catalog) }
                 }
             }
             .background(Theme.ink)
@@ -95,6 +103,77 @@ struct CollectionList: View {
         .refreshable { await account.loadItems() }
         .task { if account.items == nil { await account.loadItems() } }
         .onChange(of: account.collectionEdits) { _, _ in Task { await account.loadItems() } }
+    }
+}
+
+/// The free version's collection, kept on this phone: up to 50 different cards, newest first, with a filter.
+/// Values come with a subscription; a swipe removes a card.
+struct LocalCollectionList: View {
+    @ObservedObject var account: AccountModel
+    let catalog: Catalog?
+    @State private var filter = ""
+    @State private var locked: LockedFeature?
+
+    var body: some View {
+        let all = account.localItems
+        let words = filter.lowercased().split(whereSeparator: \.isWhitespace)
+        let shown = words.isEmpty ? all : all.filter { item in words.allSatisfy { item.searchText.contains($0) } }
+        List {
+            if !all.isEmpty {
+                HStack {
+                    Text("\(account.localCardCount) of \(AccountModel.freeMaxCards) cards · \(all.reduce(0) { $0 + $1.quantity }) copies")
+                        .foregroundStyle(Theme.muted)
+                    Spacer()
+                    Button { locked = .values } label: { Label("Value", systemImage: "lock.fill").font(.callout.bold()).foregroundStyle(Theme.gold) }
+                        .buttonStyle(.borderless)
+                }
+                .listRowBackground(Theme.ink)
+            }
+            ForEach(shown) { item in
+                let lang = ShopTerms.appLang(item.language)
+                NavigationLink(value: CardKey(id: item.cardId, lang: lang)) {
+                    LocalRow(item: item, card: catalog?.card(item.cardId, lang))
+                }
+                .listRowBackground(Theme.ink)
+                .swipeActions(edge: .trailing) {
+                    Button("Remove", role: .destructive) { account.removeLocally(item.id) }
+                }
+            }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .overlay {
+            if all.isEmpty {
+                Text("No cards in the collection yet. Tap + Collection on a scanned card to add it – the free version keeps up to \(AccountModel.freeMaxCards) different cards on this phone.")
+                    .foregroundStyle(Theme.muted).multilineTextAlignment(.center).padding(24)
+            } else if shown.isEmpty {
+                Text("No card matches “\(filter)”.").foregroundStyle(Theme.muted)
+            }
+        }
+        .searchable(text: $filter, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Filter the collection")
+        .autocorrectionDisabled()
+        .textInputAutocapitalization(.never)
+        .lockedAlert($locked)
+    }
+}
+
+struct LocalRow: View {
+    let item: LocalItem
+    let card: CardInfo?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if let card { CardPicture(card: card).frame(width: 40) }
+            else { RoundedRectangle(cornerRadius: 4).fill(Theme.panel).aspectRatio(0.716, contentMode: .fit).frame(width: 40) }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(card?.name ?? item.label).font(.body.weight(.semibold)).lineLimit(1)
+                if let card { Text("\(card.setName) · \(card.numberText)").font(.caption).foregroundStyle(Theme.muted).lineLimit(1) }
+                Text([item.language, ShopTerms.finishLabel(item.finish), item.condition].filter { !$0.isEmpty }.joined(separator: " · "))
+                    .font(.caption).foregroundStyle(Theme.muted).lineLimit(1)
+            }
+            Spacer()
+            Text("× \(item.quantity)").font(.callout.monospacedDigit())
+        }
     }
 }
 

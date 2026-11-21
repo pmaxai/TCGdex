@@ -60,11 +60,16 @@ struct CardDetail: View {
                     Text([card.setName, card.numberText, card.year, card.rarity].compactMap { $0 }.joined(separator: " · "))
                         .foregroundStyle(Theme.muted)
                 }
-                PriceTable(card: card)
-                if let d = card.prices?.updated {
-                    Text("Cardmarket prices of \(String(d.prefix(10)))").font(.caption).foregroundStyle(Theme.muted)
+                // the free version: revealed one card at a time
+                if account.revealed(card.id) {
+                    PriceTable(card: card)
+                    if let d = card.prices?.updated {
+                        Text("Cardmarket prices of \(String(d.prefix(10)))").font(.caption).foregroundStyle(Theme.muted)
+                    }
+                } else {
+                    RevealPrice(account: account, cardId: card.id)
                 }
-                if account.has("collection") || account.has("wanted") {
+                if account.isFree || account.has("collection") || account.has("wanted") {
                     VStack(alignment: .leading, spacing: 6) {
                         if card.printings.count > 1 {
                             Picker("Printing", selection: $printing) {

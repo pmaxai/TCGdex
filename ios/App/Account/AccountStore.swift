@@ -118,6 +118,29 @@ final class AccountStore: @unchecked Sendable {
         if let d = try? JSONSerialization.data(withJSONObject: items) { try? d.write(to: dir.appendingPathComponent("wanted.json"), options: .atomic) }
     }
 
+    // ---------------------------------------------------------------- the free version
+    /// the prices revealed (the last hour's count)
+    func freeReveals() -> [FreeReveal] {
+        guard let d = defaults.data(forKey: "free.reveals") else { return [] }
+        return (try? JSONDecoder().decode([FreeReveal].self, from: d)) ?? []
+    }
+
+    func saveFreeReveals(_ r: [FreeReveal]) {
+        if let d = try? JSONEncoder().encode(r) { defaults.set(d, forKey: "free.reveals") }
+    }
+
+    /// the collection kept on this phone (the free version's); it stays when the account goes
+    func localCollection() -> [LocalItem] {
+        lock.lock(); defer { lock.unlock() }
+        guard let d = try? Data(contentsOf: dir.appendingPathComponent("local-collection.json")) else { return [] }
+        return (try? JSONDecoder().decode([LocalItem].self, from: d)) ?? []
+    }
+
+    func saveLocalCollection(_ items: [LocalItem]) {
+        lock.lock(); defer { lock.unlock() }
+        if let d = try? JSONEncoder().encode(items) { try? d.write(to: dir.appendingPathComponent("local-collection.json"), options: .atomic) }
+    }
+
     /// "iPhone 15 Pro": shown in the account with the device
     static var deviceName: String {
         var info = utsname()

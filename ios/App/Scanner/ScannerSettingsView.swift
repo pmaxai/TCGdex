@@ -2,15 +2,21 @@ import SwiftUI
 
 struct ScannerSettingsView: View {
     @Binding var settings: ScannerSettings
+    /// the free version: price alerts are shown locked
+    var alertsLocked = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Price alert") {
-                    Picker("Vibrate at", selection: $settings.threshold) {
-                        Text("off").tag(0.0)
-                        ForEach([1.0, 2, 5, 10, 20, 50, 100], id: \.self) { Text("≥ \(Int($0)) €").tag($0) }
+                    if alertsLocked {
+                        Label("Vibrate at a price: needs a subscription", systemImage: "lock.fill").foregroundStyle(Theme.muted)
+                    } else {
+                        Picker("Vibrate at", selection: $settings.threshold) {
+                            Text("off").tag(0.0)
+                            ForEach([1.0, 2, 5, 10, 20, 50, 100], id: \.self) { Text("≥ \(Int($0)) €").tag($0) }
+                        }
                     }
                     Toggle("Show PSA prices", isOn: $settings.showPsa)
                 }

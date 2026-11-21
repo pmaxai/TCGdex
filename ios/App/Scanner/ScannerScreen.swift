@@ -4,7 +4,9 @@ import SwiftUI
 /// The scanner: camera and result share the screen half and half (as on Android).
 struct ScannerScreen: View {
     @ObservedObject var model: ScannerModel
+    @EnvironmentObject var account: AccountModel
     @State private var photoItem: PhotosPickerItem?
+    @State private var locked: LockedFeature?
     @State private var search: SearchMode?
     @State private var showSettings = false
     @State private var cameraAllowed: Bool?
@@ -31,6 +33,9 @@ struct ScannerScreen: View {
                 VStack(alignment: .leading, spacing: 0) {
                     if let s = model.shown {
                         ResultCard(s: s, model: model, onSearch: { search = .replace })
+                    } else if account.isFree {
+                        Text("Hold a card inside the frame. Its name appears here – reveal its Cardmarket price with a tap (\(AccountModel.freeRevealsPerHour) per hour in the free version). Not recognised? Double-tap the picture to take it anyway. Pinch to zoom.")
+                            .foregroundStyle(Theme.muted)
                     } else {
                         Text("Hold a card inside the frame. Its name and Cardmarket price appear here; the phone vibrates when any printing of it is worth at least your alert price. Not recognised? Double-tap the picture to take it anyway. Pinch to zoom.")
                             .foregroundStyle(Theme.muted)
@@ -46,6 +51,8 @@ struct ScannerScreen: View {
         }
         .background(Theme.ink)
         .cameraLifecycle(model: model, allowed: $cameraAllowed)
+        // the free version: no price alerts (they would tell the price)
+        .task(id: account.isFree) { model.alertsAllowed = !account.isFree }
         .onChange(of: photoItem) { _, item in
             guard let item else { return }
             Task {
@@ -55,7 +62,12 @@ struct ScannerScreen: View {
             }
         }
         .sheet(item: Binding(get: { model.picks.map { PickSheet.Items(list: $0) } }, set: { if $0 == nil { model.closePicks() } })) { items in
-            PickSheet(list: items.list, shown: model.shown, onPick: model.pick(_:), onSearch: { model.closePicks(); search = .replace })
+            PickSheet(list: items.list, shown: model.shown, showPrices: !account.isFree, searchLocked: account.isFree, onPick: model.pick(_:),
+                      onSearch: {
+                          model.closePicks()
+                          // after the sheet has gone (an alert can't come up while it's leaving)
+                          if account.isFree { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { locked = .search } } else { search = .replace }
+                      })
                 .presentationDetents([.medium, .large])
         }
         .sheet(item: $search) { mode in
@@ -64,37 +76,51 @@ struct ScannerScreen: View {
                 if mode == .replace && model.shown != nil { model.replaceWith(c) } else { model.lookUp(c) }
             }
         }
-        .sheet(isPresented: $showSettings) { ScannerSettingsView(settings: $model.settings) }
+        .sheet(isPresented: $showSettings) { ScannerSettingsView(settings: $model.settings, alertsLocked: account.isFree) }
         .alert(model.message ?? "", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
             Button("OK", role: .cancel) {}
         }
     }
 
+    /// the free version shows Search, the price alert and photos locked
     private var topBar: some View {
         HStack(spacing: 6) {
-            Button { search = .lookUp } label: {
-                Label("Search cards", systemImage: "magnifyingglass")
+            Button { if account.isFree { locked = .search } else { search = .lookUp } } label: {
+                Label("Search cards", systemImage: account.isFree ? "lock.fill" : "magnifyingglass")
                     .lineLimit(1).foregroundStyle(Theme.muted)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(Theme.panel, in: Capsule())
             }
-            Button { showSettings = true } label: {
-                Text(model.settings.threshold > 0 ? "Alert ≥ \(Int(model.settings.threshold)) €" : "Alert off")
-                    .font(.footnote).lineLimit(1)
-                    .padding(.horizontal, 10).padding(.vertical, 7)
-                    .overlay(Capsule().stroke(Theme.muted.opacity(0.5)))
+            Button { if account.isFree { locked = .alert } else { showSettings = true } } label: {
+                Group {
+                    if account.isFree { Label("Alert", systemImage: "lock.fill") }
+                    else { Text(model.settings.threshold > 0 ? "Alert ≥ \(Int(model.settings.threshold)) €" : "Alert off") }
+                }
+                .font(.footnote).lineLimit(1)
+                .padding(.horizontal, 10).padding(.vertical, 7)
+                .overlay(Capsule().stroke(Theme.muted.opacity(0.5)))
             }
-            .foregroundStyle(.white)
-            PhotosPicker(selection: $photoItem, matching: .images) { Image(systemName: "photo") }
-                .foregroundStyle(.white)
-                .accessibilityLabel("Photo")
+            .foregroundStyle(account.isFree ? Theme.muted : .white)
+            if account.isFree {
+                Button { locked = .photo } label: {
+                    Image(systemName: "photo")
+                        .overlay(alignment: .bottomTrailing) { Image(systemName: "lock.fill").font(.system(size: 9)).offset(x: 4, y: 4) }
+                }
+                .foregroundStyle(Theme.muted)
+                .accessibilityLabel("Photo, needs a subscription")
+            } else {
+                PhotosPicker(selection: $photoItem, matching: .images) { Image(systemName: "photo") }
+                    .foregroundStyle(.white)
+                    .accessibilityLabel("Photo")
+            }
             Button { showSettings = true } label: { Image(systemName: "gearshape") }
                 .foregroundStyle(.white)
                 .accessibilityLabel("Settings")
         }
         .font(.body)
         .padding(.horizontal, 8).padding(.vertical, 6)
+        .lockedAlert($locked)
     }
 }
 

@@ -6,6 +6,10 @@ struct PickSheet: View {
 
     let list: [Candidate]
     let shown: Shown?
+    /// the free version: no prices in the list
+    var showPrices = true
+    /// the free version: Search is shown locked
+    var searchLocked = false
     let onPick: (Candidate) -> Void
     let onSearch: () -> Void
 
@@ -13,10 +17,10 @@ struct PickSheet: View {
         NavigationStack {
             List {
                 ForEach(list) { c in
-                    Button { onPick(c) } label: { CandidateRow(c: c, current: c.group == shown?.group) }
+                    Button { onPick(c) } label: { CandidateRow(c: c, current: c.group == shown?.group, showPrice: showPrices) }
                         .listRowBackground(Theme.ink)
                 }
-                Button { onSearch() } label: { Label("Not in the list? Search…", systemImage: "magnifyingglass") }
+                Button { onSearch() } label: { Label("Not in the list? Search…", systemImage: searchLocked ? "lock.fill" : "magnifyingglass") }
                     .listRowBackground(Theme.ink)
             }
             .listStyle(.plain)
@@ -31,6 +35,7 @@ struct PickSheet: View {
 struct CandidateRow: View {
     let c: Candidate
     var current = false
+    var showPrice = true
 
     var body: some View {
         HStack(spacing: 12) {
@@ -47,7 +52,7 @@ struct CandidateRow: View {
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {
-                Text(Money.eur(c.info.bestValue)).font(.callout.monospacedDigit()).foregroundStyle(Theme.gold)
+                if showPrice { Text(Money.eur(c.info.bestValue)).font(.callout.monospacedDigit()).foregroundStyle(Theme.gold) }
                 if current { Text("shown").font(.caption2).foregroundStyle(Theme.sure) }
             }
         }

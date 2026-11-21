@@ -124,6 +124,8 @@ final class ScreenshotTests: XCTestCase {
         let a = account()
         let engine = try ScannerEngine(pack: pack)
         let scanner = ScannerModel(engine: engine, catalog: cat)
+        // not signed in: the free version, this card's price revealed
+        a.reveal(s.priceCard.id)
         let result = ScrollView { ResultCard(s: s, model: scanner, onSearch: {}).padding(12) }.background(Theme.ink).environmentObject(a)
         try await shot("ios-result", result)
 
@@ -176,6 +178,42 @@ final class ScreenshotTests: XCTestCase {
             // scrolled so that the plan, the devices row and its line under it are all in the picture
             try await shot("review-devices-\(plan)", tab, width: 400, height: 575, scrolledBy: 60)
         }
+    }
+
+    /// The free version: a scanned card with its price to reveal, revealed, the hour's limit, the locked Search
+    /// page, the collection on the phone with the locked Missing tab, and the Account tab.
+    func testFreeVersion() async throws {
+        guard let pack = ParityTests.pack ?? Pack.bundledDir.flatMap({ try? Pack(dir: $0) }) else { throw XCTSkip("no data pack") }
+        let cat = Catalog(db: pack.db)
+        let resolver = CardResolver(catalog: cat, pack: pack)
+        func shown(_ id: String, _ lang: String) throws -> Shown {
+            let card = try XCTUnwrap(cat.cardExact(id, lang))
+            return resolver.build(group: cat.groupOf(card.id), version: card, text: nil, confidence: .sure, alternatives: [], locked: false,
+                                  fromPhoto: true, scan: nil, serial: 1)
+        }
+        StandIn.reset()
+        let a = account()
+        XCTAssertTrue(a.isFree, "no account: the free version")
+        let scanner = ScannerModel(engine: try ScannerEngine(pack: pack), catalog: cat)
+        func result(_ s: Shown) -> AnyView {
+            AnyView(ScrollView { ResultCard(s: s, model: scanner, onSearch: {}).padding(12) }.background(Theme.ink).environmentObject(a))
+        }
+        let s = try shown("sv08-059", "de")
+        for i in 0..<3 { a.reveal("other-\(i)") }
+        try await shot("ios-free-result", result(s))
+        XCTAssertTrue(a.reveal(s.priceCard.id))
+        try await shot("ios-free-revealed", result(s))
+        for i in 3..<9 { a.reveal("other-\(i)") }
+        XCTAssertEqual(a.revealsLeft, 0)
+        try await shot("ios-free-limit", result(try shown("base1-4", "en")))
+        try await shot("ios-free-search", LockedPage(feature: .search, icon: "magnifyingglass"))
+        a.addLocally(cardId: "sv08-059", language: "DE", finish: "normal", condition: "NM", quantity: 2, label: "Pikachu-ex")
+        a.addLocally(cardId: "base1-4", language: "EN", finish: "holo", condition: "GD", label: "Charizard")
+        a.addLocally(cardId: "swsh12pt5-160", language: "EN", finish: "normal", condition: "NM", label: "Pikachu")
+        try await shot("ios-free-collection", CollectionScreen(account: a, catalog: cat).environmentObject(a))
+        try await shot("ios-free-missing", CollectionScreen(account: a, catalog: cat, start: .missing).environmentObject(a))
+        let store = StoreModel(account: a, billing: FixedPrices())
+        try await shot("ios-free-account", AccountGateView(account: a, store: store, free: true))
     }
 
     /// The collection page (both tabs), a searched card with + Collection / ☆ Missing, and the bottom bar.

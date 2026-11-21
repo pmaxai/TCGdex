@@ -11,11 +11,14 @@ import SwiftUI
 struct AccountGateView: View {
     @ObservedObject var account: AccountModel
     @ObservedObject var store: StoreModel
+    /// the Account tab of the free version: what Free includes, above the sign-in or the plans
+    var free = false
 
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
                 let st = account.status
+                if free && !account.justConnected { FreeNote().padding(.bottom, 8) }
                 if account.justConnected, let st {
                     Text("Connected").font(.title.bold()).foregroundStyle(Theme.sure)
                     AccountSummary(st: st)
@@ -361,6 +364,7 @@ struct CollectionBar: View {
     /// the condition + Collection adds the copy in (Trading: the one chosen)
     var condition = "NM"
     @State private var sheet = false
+    @State private var locked: LockedFeature?
 
     /// a scanned card
     init(account: AccountModel, s: Shown, condition: String = "NM") {
@@ -387,7 +391,9 @@ struct CollectionBar: View {
     var body: some View {
         let coll = account.has("collection"), want = account.has("wanted")
         let wanted = account.wanted.first { $0.matches(cardId, lang, finish) }
-        if coll || want {
+        if account.isFree {
+            freeBar
+        } else if coll || want {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     if coll {
@@ -427,6 +433,43 @@ struct CollectionBar: View {
                 }
                 .presentationDetents([.medium, .large])
             }
+        }
+    }
+}
+
+extension CollectionBar {
+    /// The free version: + Collection keeps the card on this phone (50 different cards); ☆ Missing is shown locked.
+    @ViewBuilder var freeBar: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Button { addLocally(condition, 1, nil, nil) } label: {
+                    Text("+ Collection").font(.subheadline.bold()).foregroundStyle(Theme.ink)
+                        .padding(.horizontal, 14).padding(.vertical, 8).background(Theme.gold, in: Capsule())
+                }
+                .simultaneousGesture(LongPressGesture().onEnded { _ in sheet = true })
+                Button { locked = .missing } label: {
+                    Label("Missing", systemImage: "lock.fill").font(.subheadline.bold()).foregroundStyle(Theme.muted)
+                        .padding(.horizontal, 14).padding(.vertical, 7).overlay(Capsule().stroke(Theme.muted.opacity(0.6)))
+                }
+            }
+            let lines = account.localLines(cardId)
+            let have = lines.reduce(0) { $0 + $1.quantity }
+            if have > 0 {
+                Text("In collection: \(have) (" + lines.map { "\($0.quantity) × \($0.language) \(ShopTerms.finishLabel($0.finish)) \($0.condition)" }.joined(separator: " · ") + ")")
+                    .font(.caption).foregroundStyle(Theme.muted)
+            }
+        }
+        .padding(.top, 8)
+        .lockedAlert($locked)
+        .sheet(isPresented: $sheet) {
+            CollectionSheet(account: account) { cond, qty, cents, _, note in addLocally(cond, qty, cents, note) }
+                .presentationDetents([.medium, .large])
+        }
+    }
+
+    private func addLocally(_ cond: String, _ qty: Int, _ cents: Int64?, _ note: String?) {
+        if !account.addLocally(cardId: cardId, language: lang, finish: finish, condition: cond, quantity: qty, purchaseCents: cents, note: note, label: label) {
+            locked = .collectionFull
         }
     }
 }

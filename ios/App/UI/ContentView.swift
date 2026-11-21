@@ -5,7 +5,8 @@ struct ContentView: View {
     @EnvironmentObject var account: AccountModel
 
     var body: some View {
-        if account.locked || account.justConnected {
+        // without a running subscription the app opens in the free version (sign-in and plans in the Account tab)
+        if account.justConnected {
             AccountGateView(account: account, store: model.store)
                 .alert(account.message ?? "", isPresented: Binding(get: { account.message != nil }, set: { if !$0 { account.message = nil } })) {
                     Button("OK", role: .cancel) {}
@@ -58,26 +59,37 @@ struct MainView: View {
     @ObservedObject var account: AccountModel
     @State private var tab: AppTab = .mode
     @State private var keyboard = false
+    @State private var locked: LockedFeature?
     @AppStorage("ui.mode") private var modeName = AppMode.scanner.rawValue
 
-    private var modes: [AppMode] { account.has("trading") ? [.scanner, .trading] : [.scanner] }
-    private var mode: AppMode { modes.first { $0.rawValue == modeName } ?? .scanner }
-    private var hasCollection: Bool { account.has("collection") || account.has("wanted") }
+    /// every mode is listed; those the plan lacks are locked (the free version: Trading)
+    private let modes: [AppMode] = [.scanner, .trading]
+    private var lockedModes: Set<AppMode> { account.has("trading") ? [] : [.trading] }
+    private var mode: AppMode { modes.first { $0.rawValue == modeName && !lockedModes.contains($0) } ?? .scanner }
+    /// the free version has its collection on this phone
+    private var hasCollection: Bool { account.isFree || account.has("collection") || account.has("wanted") }
 
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
                 page(.mode) { modePage }
-                page(.search) { SearchView() }
+                page(.search) { if account.isFree { LockedPage(feature: .search, icon: "magnifyingglass") } else { SearchView() } }
                 if hasCollection { page(.collection) { CollectionScreen(account: account, catalog: model.catalog) } }
-                page(.account) { NavigationStack { AccountView(account: account, store: model.store) } }
+                page(.account) {
+                    if account.isFree { AccountGateView(account: account, store: model.store, free: true) }
+                    else { NavigationStack { AccountView(account: account, store: model.store) } }
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // the keyboard covers the bar, as it does a tab bar
             if !keyboard {
-                BottomBar(tab: $tab, modes: modes, mode: mode, hasCollection: hasCollection) { modeName = $0.rawValue }
+                BottomBar(tab: $tab, modes: modes, mode: mode, hasCollection: hasCollection, lockedModes: lockedModes,
+                          onLocked: { _ in locked = .trading }) { modeName = $0.rawValue }
             }
         }
+        .lockedAlert($locked)
+        // a locked feature's "See the plans"
+        .onReceive(NotificationCenter.default.publisher(for: .showPlans)) { _ in tab = .account }
         .onChange(of: tab) { _, _ in UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
         .onChange(of: hasCollection) { _, has in if !has && tab == .collection { tab = .mode } }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboard = true }
@@ -108,6 +120,9 @@ struct BottomBar: View {
     let modes: [AppMode]
     let mode: AppMode
     let hasCollection: Bool
+    /// listed with a lock: picking one says it needs a subscription
+    var lockedModes: Set<AppMode> = []
+    var onLocked: (AppMode) -> Void = { _ in }
     let onMode: (AppMode) -> Void
 
     var body: some View {
@@ -147,7 +162,11 @@ struct BottomBar: View {
         if modes.count > 1 {
             Menu {
                 ForEach(modes) { m in
-                    Button { onMode(m); tab = .mode } label: { Label(m.title, systemImage: m == mode ? "checkmark" : m.icon) }
+                    if lockedModes.contains(m) {
+                        Button { onLocked(m) } label: { Label("\(m.title) · needs a subscription", systemImage: "lock.fill") }
+                    } else {
+                        Button { onMode(m); tab = .mode } label: { Label(m.title, systemImage: m == mode ? "checkmark" : m.icon) }
+                    }
                 }
             } label: {
                 barLabel(mode.title, mode.icon, selected: tab == .mode, more: true)
