@@ -98,6 +98,22 @@ class AccountApi(baseUrl: String, private val appVersion: String?, http: OkHttpC
 
     fun addToCollection(token: String, body: JSONObject): JSONObject = need(call("POST", url("collection", "items"), token, body))
 
+    /** Changes a copy: only the fields given (`null` clears an optional one); the shop's item comes back. */
+    fun updateItem(token: String, id: Long, changes: JSONObject): JSONObject =
+        need(call("PATCH", url("collection", "items", id.toString()), token, changes))
+
+    /** Deletes a copy (204, also when it was gone already). */
+    fun deleteItem(token: String, id: Long) { call("DELETE", url("collection", "items", id.toString()), token) }
+
+    /** The collection's public link: `{ "public": {url, views, …} | null, "other_public": n }` (shop doc: sharing from the app). */
+    fun share(token: String): JSONObject = need(call("GET", url("collection", "share"), token))
+
+    /** A public link of the whole collection with prices (the existing one if there is one); the same answer as share(). */
+    fun makePublic(token: String): JSONObject = need(call("POST", url("collection", "share"), token, JSONObject().put("show_prices", true)))
+
+    /** Switches off every public link of the collection (personal ones sent by email stay). */
+    fun makePrivate(token: String) { call("DELETE", url("collection", "share"), token) }
+
     fun binders(token: String): JSONArray = need(call("GET", url("collection", "binders"), token)).optJSONArray("binders") ?: JSONArray()
 
     /** One page of the whole collection (the collection page): its copies, and the cursor of the next page (null: the last one). */

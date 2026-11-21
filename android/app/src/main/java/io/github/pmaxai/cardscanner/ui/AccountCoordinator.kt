@@ -19,6 +19,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -44,6 +45,9 @@ data class CollectionItem(
     val quantity: Int, val name: String, val setName: String, val number: String, val imageUrl: String?,
     /** the server's value of one copy (null: no price) */
     val valueCents: Long?, val updatedAt: String,
+    /** for editing: the grading's parts ("PSA", "10"), the purchase price per copy, note and binder */
+    val gradingCompany: String? = null, val gradingGrade: String? = null,
+    val purchaseCents: Long? = null, val note: String? = null, val binderId: Long? = null,
 ) {
     /** "glurak-ex 151 199/165 de holo nm …" for the filter */
     val searchText: String = "$name $setName $number $cardId $language ${ShopTerms.finishLabel(finish)} $condition".lowercase()
@@ -61,6 +65,11 @@ data class CollectionItem(
                 AccountStatus.str(o, "number") ?: "", AccountStatus.str(o, "image_url"),
                 if (!o.has("value_cents") || o.isNull("value_cents")) null else o.optLong("value_cents"),
                 AccountStatus.str(o, "updated_at") ?: "",
+                o.optJSONObject("grading")?.let { AccountStatus.str(it, "company") },
+                o.optJSONObject("grading")?.let { AccountStatus.str(it, "grade") },
+                if (!o.has("purchase_price_cents") || o.isNull("purchase_price_cents")) null else o.optLong("purchase_price_cents"),
+                AccountStatus.str(o, "note"),
+                if (!o.has("binder_id") || o.isNull("binder_id")) null else o.optLong("binder_id"),
             )
         }
     }
@@ -98,6 +107,9 @@ data class AccountUi(
     val itemsError: String? = null,
     /** grows with every copy sent to the collection; [itemsAt]: its value when [items] were loaded */
     val collectionEdits: Int = 0,
+    /** the collection's public link (null: private), and public links made on the website that show less (binders, no prices) */
+    val publicLink: PublicLink? = null,
+    val otherPublicLinks: Int = 0,
     val itemsAt: Int = 0,
     /** S3 storage: still being set up by the shop, or why it couldn't be read */
     val s3Note: String? = null,
@@ -335,7 +347,8 @@ class AccountCoordinator(
         stopTransfer()
         store.forget(why)
         load()
-        publish { it.copy(busy = false, error = null, transfer = null, wanted = emptyList(), collection = emptyMap(), binders = emptyList(), items = null, itemsError = null, store = StoreUi()) }
+        publish { it.copy(busy = false, error = null, transfer = null, wanted = emptyList(), collection = emptyMap(), binders = emptyList(), items = null, itemsError = null, store = StoreUi(),
+            publicLink = null, otherPublicLinks = 0) }
         onS3(null)
     }
 
@@ -519,12 +532,87 @@ class AccountCoordinator(
 
     /** + Collection: queued with its own client_ref and sent at once (later when offline). */
     fun addToCollection(cardId: String, language: String, finish: String, condition: String, quantity: Int = 1,
-                        purchaseCents: Long? = null, binderId: Long? = null, note: String? = null, label: String) {
+                        purchaseCents: Long? = null, binderId: Long? = null, note: String? = null, label: String, grading: JSONObject? = null) {
         val body = JSONObject().put("card_id", cardId).put("language", language).put("finish", finish).put("condition", condition)
-            .put("quantity", quantity.coerceIn(1, 999)).put("grading", JSONObject.NULL)
+            .put("quantity", quantity.coerceIn(1, 999)).put("grading", grading ?: JSONObject.NULL)
             .put("purchase_price_cents", purchaseCents ?: JSONObject.NULL).put("note", note?.takeIf { it.isNotBlank() }?.take(500) ?: JSONObject.NULL)
             .put("binder_id", binderId ?: JSONObject.NULL).put("merge", true)
         enqueue(PendingOp("collection_add", UUID.randomUUID().toString(), current().status?.accountId, cardId, body, label = label))
+    }
+
+    // ---------------------------------------------------------------- editing a copy
+    /** The collection page's Edit: the changed fields to the shop; the page shows the shop's answer. null: saved, else why not. */
+    suspend fun updateItem(item: CollectionItem, changes: JSONObject): String? = withContext(Dispatchers.IO) {
+        if (changes.length() == 0) return@withContext null
+        val token = store.token ?: return@withContext "Not connected to an account."
+        val api = api() ?: return@withContext "Not connected to an account."
+        try {
+            val new = CollectionItem.of(api.updateItem(token, item.id, changes))
+            if (new != null) publish { a -> a.copy(items = a.items?.map { if (it.id == item.id) new else it }) } else loadItems()
+            loadCollection(item.cardId, force = true)
+            null
+        } catch (e: AccountException) {
+            if (e.lostToken) lost(e)
+            if (e.status == 404) {
+                publish { a -> a.copy(items = a.items?.filter { it.id != item.id }) }
+                "This card isn't in your collection any more."
+            } else e.friendly
+        } catch (e: Exception) {
+            offline(e, "the change wasn't saved.")
+        }
+    }
+
+    /** The collection page's Delete (asked first). null: deleted, else why not. */
+    suspend fun deleteItem(item: CollectionItem): String? = withContext(Dispatchers.IO) {
+        val token = store.token ?: return@withContext "Not connected to an account."
+        val api = api() ?: return@withContext "Not connected to an account."
+        try {
+            api.deleteItem(token, item.id)
+            publish { a -> a.copy(items = a.items?.filter { it.id != item.id }) }
+            loadCollection(item.cardId, force = true)
+            null
+        } catch (e: AccountException) {
+            if (e.lostToken) lost(e)
+            e.friendly
+        } catch (e: Exception) {
+            offline(e, "the card wasn't deleted.")
+        }
+    }
+
+    // ---------------------------------------------------------------- sharing the collection
+    /** The collection's public link (null: private). null: read, else why not. */
+    suspend fun loadShare(): String? = shareCall("the link couldn't be read.") { api, token -> api.share(token) }
+
+    /** A public link of the whole collection with prices (the existing one if there is one). */
+    suspend fun makePublic(): String? = shareCall("no link was made.") { api, token -> api.makePublic(token) }
+
+    /** Switches off every public link (personal links sent by email from the website keep running until they end). */
+    suspend fun makePrivate(): String? = shareCall("the collection is still public.") { api, token ->
+        api.makePrivate(token)
+        JSONObject().put("public", JSONObject.NULL).put("other_public", 0)
+    }
+
+    private suspend fun shareCall(what: String, call: (AccountApi, String) -> JSONObject): String? = withContext(Dispatchers.IO) {
+        if (!current().has("collection")) return@withContext "Sharing needs a subscription with a collection."
+        val token = store.token ?: return@withContext "Not connected to an account."
+        val api = api() ?: return@withContext "Not connected to an account."
+        try {
+            val o = call(api, token)
+            val link = o.optJSONObject("public")?.let { PublicLink.of(it) }
+            publish { it.copy(publicLink = link, otherPublicLinks = o.optInt("other_public", 0)) }
+            null
+        } catch (e: AccountException) {
+            when {
+                e.lostToken -> { lost(e); e.friendly }
+                // the website doesn't have sharing from the app yet
+                e.status == 404 || e.status == 405 -> PublicLink.NOT_YET
+                else -> e.friendly
+            }
+        } catch (e: io.github.pmaxai.cardscanner.account.ServerUnavailable) {
+            if (e.code == 404 || e.code == 405) PublicLink.NOT_YET else offline(e, what)
+        } catch (e: Exception) {
+            offline(e, what)
+        }
     }
 
     // ---------------------------------------------------------------- the free version
@@ -572,6 +660,18 @@ class AccountCoordinator(
         return true
     }
 
+    /** The edit sheet's details for a card on the phone. */
+    @Synchronized
+    fun updateLocally(id: String, d: CopyDetails) {
+        val items = store.localCollection().map {
+            if (it.id != id) it else it.copy(quantity = d.quantity.coerceIn(1, 999), condition = d.condition, finish = d.finish,
+                language = d.language, gradingCompany = d.grading?.optString("company"), gradingGrade = d.grading?.optString("grade"),
+                purchaseCents = d.purchaseCents, note = d.trimmedNote)
+        }
+        store.saveLocalCollection(items)
+        publish { it.copy(localItems = items) }
+    }
+
     @Synchronized
     fun removeLocally(id: String) {
         val items = store.localCollection().filter { it.id != id }
@@ -591,7 +691,8 @@ class AccountCoordinator(
         publish { it.copy(localItems = emptyList()) }
         // oldest first, so the account's collection keeps their order
         items.reversed().forEach { i ->
-            addToCollection(i.cardId, i.language, i.finish, i.condition, i.quantity, i.purchaseCents, null, i.note, i.label)
+            val grading = i.gradingCompany?.let { JSONObject().put("company", it).put("grade", i.gradingGrade ?: "") }
+            addToCollection(i.cardId, i.language, i.finish, i.condition, i.quantity, i.purchaseCents, null, i.note, i.label, grading)
         }
         val cards = items.map { it.cardId }.toSet().size
         message(if (cards == 1) "The card from this phone is now in your account's collection."

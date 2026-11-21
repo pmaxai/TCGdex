@@ -12,7 +12,15 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
 import io.github.pmaxai.cardscanner.ui.CollectionItem
+import io.github.pmaxai.cardscanner.ui.CopyDetails
+import io.github.pmaxai.cardscanner.ui.EditCopySheet
+import io.github.pmaxai.cardscanner.ui.PublicLink
+import io.github.pmaxai.cardscanner.ui.ShareSheet
 import io.github.pmaxai.cardscanner.ui.CollectionPart
 import io.github.pmaxai.cardscanner.ui.CollectionScreen
 import io.github.pmaxai.cardscanner.ui.Gold
@@ -73,5 +81,38 @@ class CollectionScreenshotTest {
         compose.onNodeWithText("Found it: add to the collection").performClick()
         compose.onNodeWithText("Found it").assertExists()
         Screenshots.saveScreen(compose, "collection-found-it.png")
+    }
+
+    /** A copy's Edit, and Share before and after the public link. */
+    @Test
+    fun editAndShare() {
+        val vm = TestVm.shared
+        val item = CollectionItem(3, "sv03.5-199", "DE", "holo", "NM", "PSA 10", 2, "Glurak-ex", "151", "199/165", null, 41250,
+            "2026-11-20T10:00:00Z", gradingCompany = "PSA", gradingGrade = "10", purchaseCents = 9900, note = "From the Vienna show")
+        val private = TestAccount.ui()
+        val public = private.copy(publicLink = PublicLink("https://overpricedcardboard.com/c/AbC9xQ7kLm2Zp9Rt4VwXy1", 12,
+            System.currentTimeMillis() - 3 * 86_400_000L))
+        var page by mutableStateOf("edit")
+        compose.setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Gold, onPrimary = Ink, background = Ink, surface = Panel)) {
+                Box(Modifier.fillMaxSize().background(Ink)) {
+                    when (page) {
+                        "edit" -> EditCopySheet(item.name, listOf(1L to "Trade binder"), CopyDetails.of(item), onClose = {},
+                            onSave = { null }, onDelete = { null })
+                        "private" -> ShareSheet(private, onClose = {}, load = { null }, makePublic = { null }, makePrivate = { null })
+                        "public" -> ShareSheet(public, onClose = {}, load = { null }, makePublic = { null }, makePrivate = { null })
+                    }
+                }
+            }
+        }
+        if (!Screenshots.ready(compose)) { Log.w("CollectionScreenshot", "skipped: the test screen didn't come up"); return }
+        compose.onNodeWithText("Delete from the collection").assertExists()
+        Screenshots.saveScreen(compose, "collection-edit.png")
+        compose.runOnIdle { page = "private" }
+        compose.onNodeWithText("Create a public link").assertExists()
+        Screenshots.saveScreen(compose, "collection-share-private.png")
+        compose.runOnIdle { page = "public" }
+        compose.onNodeWithText("Send the link").assertExists()
+        Screenshots.saveScreen(compose, "collection-share-public.png")
     }
 }

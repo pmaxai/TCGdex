@@ -13,6 +13,8 @@ import io.github.pmaxai.cardscanner.account.PairCode
 import io.github.pmaxai.cardscanner.ui.AccountCoordinator
 import io.github.pmaxai.cardscanner.shop.ShopTerms
 import io.github.pmaxai.cardscanner.ui.AccountUi
+import io.github.pmaxai.cardscanner.ui.CopyDetails
+import io.github.pmaxai.cardscanner.ui.PublicLink
 import io.github.pmaxai.cardscanner.ui.Free
 import io.github.pmaxai.cardscanner.ui.localCardCount
 import io.github.pmaxai.cardscanner.ui.localLines
@@ -25,6 +27,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
@@ -80,6 +83,13 @@ class AccountTest {
         @Volatile var pageSize = 500
         /** the cursors GET /collection/items was asked with ("" for the first page) */
         val pages: MutableList<String> = java.util.Collections.synchronizedList(ArrayList())
+        /** sharing from the app: the app's public link, other public links made on the website, how many links were made */
+        @Volatile var publicShare: JSONObject? = null
+        @Volatile var otherPublic = 0
+        @Volatile var sharesMade = 0
+        @Volatile var lastShareBody: JSONObject? = null
+        /** the website without sharing from the app yet: /collection/share is an unknown page (404, no JSON) */
+        @Volatile var shareMissing = false
         @Volatile var statusCalls = 0
 
         fun status(): JSONObject = TestAccount.statusJson(plan = plan, active = active, state = if (active) "active" else "ended",
@@ -135,6 +145,35 @@ class AccountTest {
                     }
                     val r = json(if (known != null) 200 else 201, item)
                     if (slowOnce.remove(ref)) r.setHeadersDelay(3, TimeUnit.SECONDS) else r
+                }
+                path == "/collection/share" && shareMissing ->
+                    MockResponse().setResponseCode(404).setHeader("Content-Type", "text/html").setBody("<html>Not found</html>")
+                request.method == "GET" && path == "/collection/share" ->
+                    json(200, JSONObject().put("public", publicShare ?: JSONObject.NULL).put("other_public", otherPublic))
+                request.method == "POST" && path == "/collection/share" -> synchronized(this) {
+                    lastShareBody = body
+                    val existing = publicShare
+                    val share = existing ?: JSONObject().put("id", nextId++).put("url", "https://overpricedcardboard.com/c/Ab${nextId}xQ7kLm2Zp9Rt4Vw")
+                        .put("show_prices", body.optBoolean("show_prices", true)).put("views", 0).put("created_at", "2026-11-21T12:00:00.000Z")
+                        .also { publicShare = it; sharesMade++ }
+                    json(if (existing != null) 200 else 201, JSONObject().put("public", share).put("other_public", otherPublic))
+                }
+                request.method == "DELETE" && path == "/collection/share" -> { publicShare = null; otherPublic = 0; MockResponse().setResponseCode(204) }
+                path.startsWith("/collection/items/") && (request.method == "PATCH" || request.method == "DELETE") -> {
+                    val id = path.removePrefix("/collection/items/").toLong()
+                    val entry = items.entries.firstOrNull { it.value.optLong("id") == id }
+                    when {
+                        entry == null -> if (request.method == "DELETE") MockResponse().setResponseCode(204) else err(404, "not_found")
+                        request.method == "DELETE" -> { items.remove(entry.key); MockResponse().setResponseCode(204) }
+                        else -> {
+                            val item = entry.value
+                            for (k in listOf("quantity", "language", "finish", "condition", "grading", "purchase_price_cents", "note", "binder_id")) {
+                                if (body.has(k)) item.put(k, body.get(k))
+                            }
+                            item.put("updated_at", "2026-11-21T13:00:00.000Z")
+                            json(200, item)
+                        }
+                    }
                 }
                 request.method == "GET" && path == "/collection/items" -> {
                     val cursor = request.requestUrl!!.queryParameter("cursor")
@@ -455,6 +494,10 @@ class AccountTest {
     fun theLocalCardsMoveIntoTheAccountWithAPlan() {
         account.addLocally("base1-4", "EN", "holo", "GD", purchaseCents = 25000, note = "from the flea market", label = "Charizard")
         account.addLocally("sv08-059", "DE", "normal", "NM", quantity = 2, label = "Pikachu-ex")
+        // graded on the phone: the grading goes along
+        ui.value.localItems.first { it.cardId == "sv08-059" }.let { p ->
+            account.updateLocally(p.id, CopyDetails.of(p).copy(graded = true, company = "PSA", grade = "10"))
+        }
         assertTrue(ui.value.isFree)
         pair()
         waitUntil("moved") { fake.items.size == 2 && ui.value.localItems.isEmpty() && AccountStore(app).queue().isEmpty() }
@@ -465,12 +508,103 @@ class AccountTest {
         assertEquals(25000, charizard.optInt("purchase_price_cents"))
         assertEquals("from the flea market", charizard.optString("note"))
         assertEquals(2, fake.items.values.single { it.optString("card_id") == "sv08-059" }.optInt("quantity"))
+        assertEquals("10", fake.items.values.single { it.optString("card_id") == "sv08-059" }.optJSONObject("grading")?.optString("grade"))
         assertTrue(messages.toString(), synchronized(messages) { messages.contains("The 2 cards from this phone are now in your account's collection.") })
         assertFalse(ui.value.isFree)
         assertTrue("nothing left on the phone", AccountStore(app).localCollection().isEmpty())
         account.disconnect()
         waitUntil("signed out") { ui.value.gate == AccountGate.CONNECT && !ui.value.busy }
         assertTrue("signed out: the free version again", ui.value.isFree)
+    }
+
+    /** Edit sends only what changed (null clears); Delete removes the copy. */
+    @Test
+    fun aCopyIsEditedAndDeleted() {
+        fake.cards["base1-4"] = JSONObject().put("name", "Charizard").put("set_name", "Base Set").put("number", "4/102").put("value_cents", 41200)
+        pair()
+        account.addToCollection("base1-4", "EN", "holo", "NM", label = "Charizard")
+        waitUntil("sent") { AccountStore(app).queue().isEmpty() && ui.value.collectionEdits == 1 }
+        account.loadItems()
+        waitUntil("loaded") { ui.value.items?.size == 1 && !ui.value.itemsLoading }
+        val item = ui.value.items!!.single()
+        val d = CopyDetails.of(item).copy(quantity = 3, condition = "EX", language = "DE", graded = true, company = "PSA", grade = "9",
+            purchaseCents = 25000, note = "  binder page 3 ")
+        val changes = d.changes(CopyDetails.of(item))
+        Log.i("Account", "changes: $changes")
+        assertEquals("only what changed", setOf("quantity", "condition", "language", "grading", "purchase_price_cents", "note"),
+            changes.keys().asSequence().toSet())
+        assertNull(runBlocking { account.updateItem(item, changes) })
+        val edited = ui.value.items!!.single()
+        assertEquals(3, edited.quantity)
+        assertEquals("EX", edited.condition)
+        assertEquals("DE", edited.language)
+        assertEquals("PSA 9", edited.graded)
+        assertEquals(25000L, edited.purchaseCents)
+        assertEquals("trimmed", "binder page 3", edited.note)
+        assertEquals("unchanged", "holo", edited.finish)
+        assertEquals("EX", fake.items.values.single().optString("condition"))
+        // cleared again: not graded, no price, no note → null
+        val clear = CopyDetails.of(edited).copy(graded = false, purchaseCents = null, note = "").changes(CopyDetails.of(edited))
+        assertEquals(3, clear.length())
+        assertTrue(clear.isNull("grading") && clear.isNull("purchase_price_cents") && clear.isNull("note"))
+        assertNull(runBlocking { account.updateItem(edited, clear) })
+        assertNull(ui.value.items!!.single().graded)
+        assertNull(ui.value.items!!.single().purchaseCents)
+        assertNull(runBlocking { account.deleteItem(ui.value.items!!.single()) })
+        assertTrue(ui.value.items!!.isEmpty())
+        assertTrue("gone on the server", fake.items.isEmpty())
+    }
+
+    /** Share makes one public link (with prices), the same one again; Make private switches every public link off. */
+    @Test
+    fun theCollectionIsSharedAndMadePrivateAgain() {
+        pair()
+        assertNull(runBlocking { account.loadShare() })
+        assertNull("private to start", ui.value.publicLink)
+        assertNull(runBlocking { account.makePublic() })
+        val link = ui.value.publicLink!!
+        assertTrue(link.url, link.url.contains("/c/"))
+        assertNull(runBlocking { account.makePublic() })
+        assertEquals("the same link again", link, ui.value.publicLink)
+        assertEquals("one link made", 1, fake.sharesMade)
+        assertTrue("with prices", fake.lastShareBody?.optBoolean("show_prices") == true)
+        // a public link of one binder, made on the website
+        fake.otherPublic = 1
+        assertNull(runBlocking { account.loadShare() })
+        assertEquals(1, ui.value.otherPublicLinks)
+        assertNull(runBlocking { account.makePrivate() })
+        assertNull(ui.value.publicLink)
+        assertEquals(0, ui.value.otherPublicLinks)
+        assertNull("switched off on the server", fake.publicShare)
+        Log.i("Account", "shared ${link.url}, then private")
+    }
+
+    /** Before the website has sharing from the app: the app says so. */
+    @Test
+    fun sharingBeforeTheWebsiteHasIt() {
+        pair()
+        fake.shareMissing = true
+        assertEquals(PublicLink.NOT_YET, runBlocking { account.loadShare() })
+        assertEquals(PublicLink.NOT_YET, runBlocking { account.makePublic() })
+    }
+
+    /** The free version: a copy on the phone is edited in place. */
+    @Test
+    fun aCopyOnThePhoneIsEdited() {
+        account.addLocally("base1-4", "EN", "holo", "NM", label = "Charizard")
+        val item = ui.value.localItems.single()
+        account.updateLocally(item.id, CopyDetails.of(item).copy(quantity = 2, condition = "LP", language = "DE", graded = true, company = "CGC",
+            grade = "8.5", purchaseCents = 9900, note = "a gift "))
+        val e = ui.value.localItems.single()
+        assertEquals(item.id, e.id)
+        assertEquals(2, e.quantity)
+        assertEquals("LP", e.condition)
+        assertEquals("DE", e.language)
+        assertEquals("CGC", e.gradingCompany)
+        assertEquals("8.5", e.gradingGrade)
+        assertEquals(9900L, e.purchaseCents)
+        assertEquals("a gift", e.note)
+        assertEquals("kept on the phone", ui.value.localItems, AccountStore(app).localCollection())
     }
 
     /** The shop's card languages back to the data pack's. */

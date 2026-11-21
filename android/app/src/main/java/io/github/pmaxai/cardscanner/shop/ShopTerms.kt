@@ -47,6 +47,9 @@ object ShopTerms {
         Printing.Kind.NORMAL, null -> "normal"
     }
 
+    /** every finish the shop knows */
+    val FINISHES = listOf("normal", "holo", "reverse_holo", "first_edition", "shadowless", "stamped", "pokeball", "masterball")
+
     fun finishLabel(f: String): String = when (f) {
         "normal" -> "Normal"; "holo" -> "Holo"; "reverse_holo" -> "Reverse Holo"; "first_edition" -> "1st Edition"
         "shadowless" -> "Shadowless"; "stamped" -> "Stamped"; "pokeball" -> "Poké Ball"; "masterball" -> "Master Ball"

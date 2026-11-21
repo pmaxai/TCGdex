@@ -23,7 +23,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -72,6 +78,7 @@ fun CollectionScreen(state: UiState, vm: ScannerViewModel, start: CollectionPart
     var part by rememberSaveable { mutableStateOf(start) }
     LaunchedEffect(start) { part = start }
     val shown = if (part in parts) part else parts.firstOrNull() ?: CollectionPart.COLLECTION
+    var sharing by remember { mutableStateOf(false) }
     BackHandler { vm.closeCollection() }
     Column(Modifier.fillMaxSize().background(Ink)) {
         Row(Modifier.fillMaxWidth().background(Panel).padding(horizontal = 4.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -79,6 +86,10 @@ fun CollectionScreen(state: UiState, vm: ScannerViewModel, start: CollectionPart
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
             Text(shown.title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            // a public link for friends (the free version: shown locked)
+            if (shown == CollectionPart.COLLECTION) IconButton(onClick = { if (a.isFree) vm.showLocked(LockedFeature.SHARE) else sharing = true }) {
+                Icon(Icons.Filled.Share, contentDescription = "Share", tint = Color.White)
+            }
             if (!a.isFree) IconButton(onClick = { if (shown == CollectionPart.COLLECTION) vm.account.loadItems() else vm.account.check(force = true) },
                 enabled = !(shown == CollectionPart.COLLECTION && a.itemsLoading)) {
                 Icon(Icons.Filled.Refresh, contentDescription = "Load again", tint = Color.White)
@@ -105,6 +116,20 @@ fun CollectionScreen(state: UiState, vm: ScannerViewModel, start: CollectionPart
             else -> MissingList(state, vm, Modifier.weight(1f))
         }
     }
+    if (sharing) ShareSheet(a, onClose = { sharing = false }, load = { vm.account.loadShare() }, makePublic = { vm.account.makePublic() },
+        makePrivate = { vm.account.makePrivate() })
+}
+
+/** A row's ⋮ (or press and hold): Edit details, Delete. */
+@Composable
+private fun RowMenu(open: Boolean, onDismiss: () -> Unit, onOpen: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit) {
+    Box {
+        IconButton(onClick = onOpen) { Icon(Icons.Filled.MoreVert, contentDescription = "Edit or delete", tint = Muted) }
+        DropdownMenu(expanded = open, onDismissRequest = onDismiss) {
+            DropdownMenuItem(text = { Text("Edit details…") }, onClick = { onDismiss(); onEdit() })
+            DropdownMenuItem(text = { Text("Delete", color = Warn) }, onClick = { onDismiss(); onDelete() })
+        }
+    }
 }
 
 /** Every copy in the collection, newest first, with a filter, the counts and the total value. */
@@ -112,6 +137,11 @@ fun CollectionScreen(state: UiState, vm: ScannerViewModel, start: CollectionPart
 private fun CollectionList(state: UiState, vm: ScannerViewModel, modifier: Modifier) {
     val a = state.account
     var filter by rememberSaveable { mutableStateOf("") }
+    var editing by remember { mutableStateOf<CollectionItem?>(null) }
+    var deleting by remember { mutableStateOf<CollectionItem?>(null) }
+    var deleteError by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     // first time, and after copies were sent to the collection meanwhile
     LaunchedEffect(a.collectionEdits) { if (a.items == null || a.itemsAt != a.collectionEdits) vm.account.loadItems() }
     val all = a.items.orEmpty()
@@ -135,10 +165,36 @@ private fun CollectionList(state: UiState, vm: ScannerViewModel, modifier: Modif
             else -> {
                 a.itemsError?.let { Text("⚠ $it", color = Warn, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
                 LazyColumn(Modifier.weight(1f)) {
-                    items(shown, key = { it.id }) { item -> CollectionRow(item, vm) }
+                    items(shown, key = { it.id }) { item ->
+                        CollectionRow(item, vm, onEdit = { vm.account.loadBinders(); editing = item }, onDelete = { deleteError = null; deleting = item })
+                    }
                 }
             }
         }
+    }
+    editing?.let { item ->
+        EditCopySheet(item.name, a.binders, CopyDetails.of(item), onClose = { editing = null },
+            onSave = { d -> vm.account.updateItem(item, d.changes(CopyDetails.of(item))) }, onDelete = { vm.account.deleteItem(item) })
+    }
+    deleting?.let { item ->
+        AlertDialog(onDismissRequest = { if (!busy) deleting = null }, title = { Text("Delete ${item.name}?") },
+            text = {
+                Column {
+                    Text(copyLine(item.quantity, item.language, item.finish, item.condition, item.graded) + " – it leaves your collection.")
+                    deleteError?.let { Text("⚠ $it", color = Warn, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp)) }
+                }
+            },
+            confirmButton = {
+                TextButton({
+                    busy = true
+                    scope.launch {
+                        deleteError = vm.account.deleteItem(item)
+                        busy = false
+                        if (deleteError == null) deleting = null
+                    }
+                }, enabled = !busy) { Text("Delete", color = Warn) }
+            },
+            dismissButton = { TextButton({ deleting = null }, enabled = !busy) { Text("Cancel") } })
     }
 }
 
@@ -147,7 +203,8 @@ private fun CollectionList(state: UiState, vm: ScannerViewModel, modifier: Modif
 private fun LocalCollectionList(state: UiState, vm: ScannerViewModel, modifier: Modifier) {
     val a = state.account
     var filter by rememberSaveable { mutableStateOf("") }
-    /** the card whose Remove is asked */
+    var editing by remember { mutableStateOf<LocalItem?>(null) }
+    /** the card whose Delete is asked */
     var removing by remember { mutableStateOf<LocalItem?>(null) }
     val all = a.localItems
     val words = filter.lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }
@@ -167,44 +224,54 @@ private fun LocalCollectionList(state: UiState, vm: ScannerViewModel, modifier: 
                 modifier = Modifier.fillMaxWidth().padding(24.dp))
             shown.isEmpty() -> Text("No card matches “$filter”.", color = Muted, modifier = Modifier.padding(24.dp))
             else -> LazyColumn(Modifier.weight(1f)) {
-                items(shown, key = { it.id }) { item -> LocalRow(item, vm) { removing = item } }
+                items(shown, key = { it.id }) { item -> LocalRow(item, vm, onEdit = { editing = item }, onDelete = { removing = item }) }
             }
         }
     }
+    editing?.let { item ->
+        EditCopySheet(item.label, emptyList(), CopyDetails.of(item), onClose = { editing = null },
+            onSave = { d -> vm.account.updateLocally(item.id, d); null }, onDelete = { vm.account.removeLocally(item.id); null })
+    }
     removing?.let { item ->
-        AlertDialog(onDismissRequest = { removing = null }, title = { Text(item.label) },
-            text = { Text("Remove it from the collection on this phone?") },
-            confirmButton = { TextButton({ removing = null; vm.account.removeLocally(item.id) }) { Text("Remove", color = Warn) } },
+        AlertDialog(onDismissRequest = { removing = null }, title = { Text("Delete ${item.label}?") },
+            text = { Text(copyLine(item.quantity, item.language, item.finish, item.condition,
+                item.gradingCompany?.let { "$it ${item.gradingGrade ?: ""}".trim() }) + " – it leaves the collection on this phone.") },
+            confirmButton = { TextButton({ removing = null; vm.account.removeLocally(item.id) }) { Text("Delete", color = Warn) } },
             dismissButton = { TextButton({ removing = null }) { Text("Cancel") } })
     }
 }
 
-/** a card of the phone's collection: tap shows it; long press removes it (asked first) */
+/** a card of the phone's collection: tap shows it; ⋮ or press and hold: Edit details, Delete */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun LocalRow(item: LocalItem, vm: ScannerViewModel, onRemove: () -> Unit) {
+private fun LocalRow(item: LocalItem, vm: ScannerViewModel, onEdit: () -> Unit, onDelete: () -> Unit) {
     val lang = ShopTerms.appLang(item.language)
     val c by produceState<Candidate?>(null, item.cardId, lang) { value = vm.candidate(item.cardId, lang) }
-    Row(Modifier.fillMaxWidth().combinedClickable(onClick = { c?.let(vm::showFromCollection) }, onLongClick = onRemove)
+    var menu by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().combinedClickable(onClick = { c?.let(vm::showFromCollection) }, onLongClick = { menu = true })
         .padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Thumb(c?.image, item.label)
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text(c?.info?.name ?: item.label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             c?.info?.let { Text("${it.setName} · ${it.numberText}", color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-            Text(listOf(item.language, ShopTerms.finishLabel(item.finish), item.condition).filter { it.isNotBlank() }.joinToString(" · "),
+            Text(listOf(item.language, ShopTerms.finishLabel(item.finish), item.condition,
+                item.gradingCompany?.let { "$it ${item.gradingGrade ?: ""}".trim() } ?: "").filter { it.isNotBlank() }.joinToString(" · "),
                 color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Text("× ${item.quantity}", color = Color.White, fontSize = 14.sp)
-        Text("✕", color = Muted, fontSize = 16.sp, modifier = Modifier.padding(start = 10.dp).clickable(onClick = onRemove).padding(6.dp))
+        RowMenu(menu, onDismiss = { menu = false }, onOpen = { menu = true }, onEdit = onEdit, onDelete = onDelete)
     }
 }
 
+/** a copy of the collection: tap shows the card; ⋮ or press and hold: Edit details, Delete */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun CollectionRow(item: CollectionItem, vm: ScannerViewModel) {
+private fun CollectionRow(item: CollectionItem, vm: ScannerViewModel, onEdit: () -> Unit, onDelete: () -> Unit) {
     val lang = ShopTerms.appLang(item.language)
     val c by produceState<Candidate?>(null, item.cardId, lang) { value = vm.candidate(item.cardId, lang) }
-    Row(Modifier.fillMaxWidth().clickable(enabled = c != null) { c?.let(vm::showFromCollection) }
+    var menu by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().combinedClickable(onClick = { c?.let(vm::showFromCollection) }, onLongClick = { menu = true })
         .padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Thumb(c?.image ?: item.imageUrl, item.name)
         Spacer(Modifier.width(10.dp))
@@ -220,6 +287,7 @@ private fun CollectionRow(item: CollectionItem, vm: ScannerViewModel) {
             Text("× ${item.quantity}", color = Color.White, fontSize = 14.sp)
             item.valueCents?.let { Text(eur(it * item.quantity / 100.0), color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
         }
+        RowMenu(menu, onDismiss = { menu = false }, onOpen = { menu = true }, onEdit = onEdit, onDelete = onDelete)
     }
 }
 

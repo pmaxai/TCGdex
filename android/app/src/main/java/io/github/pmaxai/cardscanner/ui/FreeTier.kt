@@ -23,6 +23,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.pmaxai.cardscanner.account.AccountStatus
 import io.github.pmaxai.cardscanner.shop.ShopTerms
 import org.json.JSONObject
 import java.text.DateFormat
@@ -62,6 +63,9 @@ data class LocalItem(
     /** "Glurak-ex · 151 199/165" */
     val label: String,
     val added: Long = System.currentTimeMillis(),
+    /** "PSA", "10" when graded */
+    val gradingCompany: String? = null,
+    val gradingGrade: String? = null,
 ) {
     /** "glurak-ex · 151 199/165 de holo nm" for the filter */
     val searchText: String = "$label $cardId $language ${ShopTerms.finishLabel(finish)} $condition".lowercase()
@@ -69,12 +73,14 @@ data class LocalItem(
     fun toJson(): JSONObject = JSONObject().put("id", id).put("card_id", cardId).put("language", language).put("finish", finish)
         .put("condition", condition).put("quantity", quantity).put("purchase_price_cents", purchaseCents ?: JSONObject.NULL)
         .put("note", note ?: JSONObject.NULL).put("label", label).put("added", added)
+        .put("grading_company", gradingCompany ?: JSONObject.NULL).put("grading_grade", gradingGrade ?: JSONObject.NULL)
 
     companion object {
         fun of(o: JSONObject) = LocalItem(o.getString("id"), o.getString("card_id"), o.optString("language"), o.optString("finish"),
             o.optString("condition"), o.optInt("quantity", 1),
             if (o.isNull("purchase_price_cents")) null else o.optLong("purchase_price_cents"),
-            if (o.isNull("note")) null else o.optString("note"), o.optString("label"), o.optLong("added"))
+            if (o.isNull("note")) null else o.optString("note"), o.optString("label"), o.optLong("added"),
+            AccountStatus.str(o, "grading_company"), AccountStatus.str(o, "grading_grade"))
     }
 }
 
@@ -104,6 +110,7 @@ enum class LockedFeature(val title: String, val text: String) {
     MISSING("Missing cards need a subscription", "Keep a list of the cards you're looking for – the shop tells you when one comes in."),
     PHOTO("Scanning photos needs a subscription", "Recognise cards on photos from your gallery."),
     ALERT("Price alerts need a subscription", "The phone vibrates when a scanned card is worth at least your alert price."),
+    SHARE("Sharing needs a subscription", "Send friends a link to your collection – they see your cards and what they're worth."),
     COLLECTION_FULL("The free collection is full", "The free version keeps ${Free.MAX_CARDS} different cards on this phone. With a subscription your collection has no limit, is saved in your account, and these cards move into it."),
     VALUES("Collection values need a subscription", "See what each card and your whole collection is worth."),
 }
