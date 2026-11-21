@@ -279,6 +279,10 @@ final class AccountModel: ObservableObject {
     var onAffiliate: ((String?, JSON?) -> Void)?
     /// a new status answer (the store's part, the screens)
     var onStatus: ((AccountStatus?) -> Void)?
+    /// the account's S3 storage for recordings (Creator's s3_upload), set up by Overpriced Cardboard; nil: none or gone
+    var onS3: ((JSON?) -> Void)?
+    /// why the storage settings can't be read (shown in Settings › Recording)
+    @Published private(set) var s3Note: String?
 
     private var checking = false
     private var checkAgain = false
@@ -445,6 +449,7 @@ final class AccountModel: ObservableObject {
                 store.saveStatus(o)
                 load()
                 if manual { busy = false; error = nil }
+                await syncS3(api, token)
                 if store.status()?.has("wanted") == true { await refreshWanted() }
                 sync()
             } catch let e as AccountError {
@@ -463,11 +468,45 @@ final class AccountModel: ObservableObject {
         }
     }
 
+    /// The account's S3 storage: read when the account has it and its settings changed (updated_at), gone without it.
+    private func syncS3(_ api: AccountApi, _ token: String) async {
+        let d = UserDefaults.standard
+        guard has("s3_upload") else {
+            s3Note = nil
+            if d.string(forKey: ManagedStorage.updatedKey) != nil || RecordingPrefs().load().managed {
+                d.removeObject(forKey: ManagedStorage.updatedKey)
+                onS3?(nil)
+            }
+            return
+        }
+        do {
+            let o = try await api.s3(token: token)
+            let updated = o["updated_at"] as? String
+            if updated == nil || updated != d.string(forKey: ManagedStorage.updatedKey) || !RecordingPrefs().load().managed {
+                onS3?(o)
+                d.set(updated, forKey: ManagedStorage.updatedKey)
+            }
+            s3Note = nil
+        } catch let e as AccountError {
+            s3Note = e.error == "not_configured" ? "Overpriced Cardboard is still setting up your storage." : e.friendly
+        } catch {
+            // offline: next time
+        }
+    }
+
+    /// Settings › Recording opened: the storage's settings read again now.
+    func refreshS3() {
+        guard let token = store.token, let api = api() else { return }
+        UserDefaults.standard.removeObject(forKey: ManagedStorage.updatedKey)
+        Task { await syncS3(api, token) }
+    }
+
     /// The token doesn't count any more: forget it and the saved answer, say why, back to Connect.
     private func lost(_ e: AccountError) {
         let why = e.error == "unpaired" ? unpairedText(reason: e.reason, since: e.since, deviceName: e.deviceName) : "This phone is no longer connected to an account."
         stopTransfer()
         store.forget(notice: why)
+        onS3?(nil)
         load()
         busy = false
         error = nil
@@ -520,6 +559,7 @@ final class AccountModel: ObservableObject {
         run("disconnecting needs the internet.") { [self] in
             do { try await api.disconnect(token: token) } catch let e as AccountError where e.lostToken { lost(e); return }
             store.forget(notice: "This phone was disconnected from the account.")
+            onS3?(nil)
             load()
             wanted = []; collection = [:]; binders = []; items = nil; publicLink = nil; otherPublicLinks = 0
         }
@@ -539,6 +579,7 @@ final class AccountModel: ObservableObject {
                 throw e
             }
             store.forget(notice: "The account was deleted.")
+            onS3?(nil)
             store.saveQueue([])
             load()
             wanted = []; collection = [:]; binders = []; items = nil; publicLink = nil; otherPublicLinks = 0

@@ -25,6 +25,8 @@ final class StandIn: URLProtocol {
         var otherPublic = 0
         /// the PSA prices add-on: its billing period while it runs
         var psa: String?
+        /// Creator's S3 storage and Automatic Content Processing, switched on by the shop
+        var s3 = false
         init(id: String, email: String) { self.id = id; self.email = email }
     }
 
@@ -108,7 +110,8 @@ final class StandIn: URLProtocol {
             "account": ["id": a.id, "email": a.email, "name": NSNull(), "store_ref": a.storeRef, "email_verified": a.emailVerified] as [String: Any],
             "device": ["id": "dev_1", "name": "iPhone"],
             "features": a.active ? ["scanner": true, "trading": true, "collection": true, "wanted": true, "youtube": a.plan == "creator",
-                                    "psa_prices": a.psa != nil] : [String: Bool](),
+                                    "recording": a.plan == "creator", "s3_upload": a.plan == "creator" && a.s3,
+                                    "pipeline": a.plan == "creator" && a.s3, "psa_prices": a.psa != nil] : [String: Bool](),
         ]
         o["addons"] = a.psa.map { [["id": "psa_prices", "state": "active", "source": "app_store", "base_plan": $0,
                                     "renews_at": iso.string(from: now.addingTimeInterval(($0 == "yearly" ? 365 : 30) * 86_400)), "ends_at": NSNull()] as [String: Any]] } ?? []
@@ -168,6 +171,10 @@ final class StandIn: URLProtocol {
         switch (method, p) {
         case ("GET", "/status"):
             return (200, status(a))
+        case ("GET", "/services/s3"):
+            guard a.active, a.plan == "creator", a.s3 else { return err(403, "feature_not_included") }
+            return (200, ["provider": "other", "endpoint": "https://s3.test", "region": "us-east-1", "bucket": "bucket",
+                          "prefix": "acc_\(a.id)/", "access_key_id": "key", "secret_access_key": "secret", "updated_at": "2026-11-15T09:30:00.000Z"])
         case ("GET", "/store/offers"):
             func plan(_ key: String, _ name: String, _ features: [String], devices: [String: [String]]) -> [String: Any] {
                 ["plan": key, "name": name, "features": features, "google": NSNull(),

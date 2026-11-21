@@ -7,6 +7,7 @@ struct OverpricedCardboardApp: App {
 
     init() {
         PackUpdate.register()
+        UploadQueue.register()
     }
 
     var body: some Scene {
@@ -23,8 +24,8 @@ struct OverpricedCardboardApp: App {
         }
         .onChange(of: phase) { _, p in
             UIApplication.shared.isIdleTimerDisabled = p == .active
-            if p == .active { model.onForeground() }
-            if p == .background { PackUpdate.schedule() }
+            if p == .active { model.onForeground(); UploadQueue.shared.kick() }
+            if p == .background { PackUpdate.schedule(); UploadQueue.schedule() }
         }
     }
 }

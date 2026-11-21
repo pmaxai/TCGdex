@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The pages of Settings (as on Android); more come later.
 enum SettingsPage: String, Hashable, CaseIterable, Identifiable {
-    case account, prices, priceData, scanner, trading, about
+    case account, prices, priceData, scanner, trading, youtube, recording, about
 
     var id: String { rawValue }
 
@@ -13,6 +13,8 @@ enum SettingsPage: String, Hashable, CaseIterable, Identifiable {
         case .priceData: return "Price data & add-ons"
         case .scanner: return "Scanner"
         case .trading: return "Carts & deals"
+        case .youtube: return "YouTube Mode"
+        case .recording: return "Recording"
         case .about: return "About"
         }
     }
@@ -24,6 +26,8 @@ enum SettingsPage: String, Hashable, CaseIterable, Identifiable {
         case .priceData: return "chart.bar.doc.horizontal"
         case .scanner: return "camera.viewfinder"
         case .trading: return "cart"
+        case .youtube: return "play.rectangle"
+        case .recording: return "record.circle"
         case .about: return "info.circle"
         }
     }
@@ -36,6 +40,7 @@ struct SettingsScreen: View {
     @ObservedObject var trading: TradingModel
     let scanner: ScannerModel?
     var catalog: Catalog? = nil
+    var recording: RecordingModel? = nil
     @Binding var path: [SettingsPage]
     @AppStorage(PriceSource.key) private var sourceName = PriceSource.cmTrend.rawValue
 
@@ -53,6 +58,10 @@ struct SettingsScreen: View {
                     row(.scanner, nil)
                     row(.trading, account.has("trading") ? nil : "needs a subscription")
                 }
+                Section("YouTube Mode") {
+                    row(.youtube, account.has("youtube") ? (scanner?.settings.youtube == true ? "on" : nil) : "Creator plan")
+                    row(.recording, account.has("recording") ? recordingDetail : "Creator plan")
+                }
                 Section { row(.about, AccountApi.version) }
             }
             .navigationTitle("Settings")
@@ -62,6 +71,11 @@ struct SettingsScreen: View {
                     .navigationBarTitleDisplayMode(.inline)
             }
         }
+    }
+
+    private var recordingDetail: String? {
+        guard let r = recording else { return nil }
+        return r.settings.uploadS3 ? "upload to S3" : "saved in Photos"
     }
 
     private var accountRow: some View {
@@ -101,6 +115,12 @@ struct SettingsScreen: View {
             if let scanner { ScannerSettingsForm(model: scanner) }
         case .trading:
             if account.has("trading") { TradingSettingsForm(trading: trading) } else { LockedPage(feature: .trading, icon: "cart") }
+        case .youtube:
+            if !account.has("youtube") { LockedPage(feature: .youtube, icon: "play.rectangle") }
+            else if let scanner { YouTubeSettingsView(model: scanner) }
+        case .recording:
+            if !account.has("recording") { LockedPage(feature: .recording, icon: "record.circle") }
+            else if let recording { RecordingSettingsView(rec: recording, account: account).onAppear { account.refreshS3() } }
         case .about: AboutView(account: account, catalog: catalog)
         }
     }

@@ -145,7 +145,7 @@ extension AccountModel {
 
 /// A feature the free version shows but doesn't include.
 enum LockedFeature: String, Identifiable {
-    case search, trading, missing, photo, alert, collectionFull, values, share, psa
+    case search, trading, missing, photo, alert, collectionFull, values, share, psa, youtube, recording
 
     var id: String { rawValue }
 
@@ -160,6 +160,8 @@ enum LockedFeature: String, Identifiable {
         case .values: return "Collection values need a subscription"
         case .share: return "Sharing needs a subscription"
         case .psa: return "PSA prices are an add-on"
+        case .youtube: return "YouTube Mode comes with the Creator plan"
+        case .recording: return "Recording comes with the Creator plan"
         }
     }
 
@@ -174,6 +176,8 @@ enum LockedFeature: String, Identifiable {
         case .values: return "See what each card and your whole collection is worth."
         case .share: return "Send friends a link to your collection – they see your cards and what they're worth."
         case .psa: return "What PSA 10, 9 and 8 copies of a card sold for on eBay – an add-on for Collector and Creator, monthly or yearly."
+        case .youtube: return "Full screen for unboxing and price-check videos: an animated price reveal for every card, a HIT at your alert price, the pack's running value."
+        case .recording: return "● REC records YouTube Mode with a log of every card, saved in Photos or uploaded for the video pipeline."
         }
     }
 

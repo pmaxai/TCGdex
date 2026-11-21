@@ -155,8 +155,10 @@ struct CornerIcon: View {
 }
 
 /// The camera picture with the guide frame. Double tap takes the card by hand, pinch zooms.
+/// video (YouTube Mode): nothing dimmed around the frame, no hint, the zoom only while pinching.
 struct CameraArea: View {
     @ObservedObject var model: ScannerModel
+    var video = false
     @State private var flash = 0.0
     @State private var pinchStart: Double?
     @State private var showZoom = false
@@ -165,9 +167,9 @@ struct CameraArea: View {
         GeometryReader { geo in
             ZStack {
                 CameraPreview(camera: model.camera)
-                GuideOverlay(model: model, size: geo.size)
+                GuideOverlay(model: model, size: geo.size, dim: !video)
                 Color.white.opacity(flash).allowsHitTesting(false)
-                if showZoom || model.settings.zoom > 1.01 {
+                if showZoom || (!video && model.settings.zoom > 1.01) {
                     Text(zoomLabel(model.settings.zoom))
                         .font(.footnote.bold()).foregroundStyle(.white)
                         .padding(.horizontal, 8).padding(.vertical, 3)
@@ -175,12 +177,14 @@ struct CameraArea: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(10)
                 }
                 if !model.paused {
+                    if !video {
                     Text(hint)
                         .font(.subheadline).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.75)
                         .padding(.horizontal, 12).padding(.vertical, 4)
                         .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
                         // clear of the photo button in the corner
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom).padding(.vertical, 10).padding(.horizontal, 60)
+                    }
                 } else {
                     Color.black.opacity(0.66)
                         .overlay(Text(model.shown?.fromSearch == true ? "Looked up · tap to scan again" : "Tap to scan again")
@@ -275,6 +279,7 @@ func zoomLabel(_ z: Double) -> String {
 struct GuideOverlay: View {
     @ObservedObject var model: ScannerModel
     let size: CGSize
+    var dim = true
 
     var body: some View {
         Canvas { ctx, sz in
@@ -288,9 +293,11 @@ struct GuideOverlay: View {
             case .unsure: col = .white
             }
             let frame = Path(roundedRect: rect, cornerRadius: 9)
-            var dim = Path(CGRect(origin: .zero, size: sz))
-            dim.addPath(frame)
-            ctx.fill(dim, with: .color(.black.opacity(0.4)), style: FillStyle(eoFill: true))
+            if dim {
+                var around = Path(CGRect(origin: .zero, size: sz))
+                around.addPath(frame)
+                ctx.fill(around, with: .color(.black.opacity(0.4)), style: FillStyle(eoFill: true))
+            }
             ctx.stroke(frame, with: .color(col), lineWidth: 2)
             // hold still: the green bar under the frame fills up until the card is taken
             if let p = model.liveProgress, p > 0, model.liveConfidence == .sure {

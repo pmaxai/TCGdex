@@ -156,6 +156,9 @@ final class AccountApi: @unchecked Sendable {
 
     func binders(token: String) async throws -> [JSON] { try need(await call("GET", ["collection", "binders"], token))["binders"] as? [JSON] ?? [] }
 
+    /// The account's S3 storage for recordings, set up by Overpriced Cardboard (Creator, the s3_upload service).
+    func s3(token: String) async throws -> JSON { try need(await call("GET", ["services", "s3"], token)) }
+
     func wanted(token: String) async throws -> [JSON] { try need(await call("GET", ["wanted"], token))["items"] as? [JSON] ?? [] }
 
     func addWanted(token: String, body: JSON) async throws -> JSON { try need(await call("POST", ["wanted"], token, body)) }

@@ -18,11 +18,19 @@ final class AppModel: ObservableObject {
     let account: AccountModel
     let store: StoreModel
     let trading = TradingModel()
+    /// YouTube Mode's recordings (● REC), their uploads and the Recordings list
+    let recording: RecordingModel
 
     init(account: AccountModel? = nil, billing: AppStoreBilling? = nil) {
         let account = account ?? AccountModel()
         self.account = account
         store = StoreModel(account: account, billing: billing ?? StoreKitBilling())
+        recording = RecordingModel()
+        let rec = recording
+        rec.uploadAllowed = { [weak account] in account.map { $0.has("s3_upload") && $0.has("pipeline") } ?? false }
+        account.onS3 = { [weak rec] o in rec?.applyManagedS3(o) }
+        // a new answer may switch uploading on or off (the storage and Automatic Content Processing)
+        account.onStatus = { [weak rec] _ in rec?.reload() }
         account.onConnected = { [weak self] in self?.store.start() }
         account.onAffiliate = { [weak self] result, aff in self?.store.signedInWithCode(result, aff) }
         account.start()
@@ -42,7 +50,10 @@ final class AppModel: ObservableObject {
                 return (pack, Catalog(db: pack.db), try ScannerEngine(pack: pack))
             }.value
             pack = p; catalog = c; engine = e
-            scanner = ScannerModel(engine: e, catalog: c)
+            let sc = ScannerModel(engine: e, catalog: c)
+            scanner = sc
+            recording.packInfo = { [weak self] in (self?.pack?.version, self?.catalog?.pricesDate.map { String($0.prefix(10)) }) }
+            recording.attach(sc)
             state = .ready
         } catch {
             state = .failed(error.localizedDescription)

@@ -304,4 +304,107 @@ final class ScreenshotTests: XCTestCase {
         .background(Theme.ink)
         try await shot("ios-bottom-bar", bar, height: 160)
     }
+
+    /**
+     * YouTube Mode: the reveal (a HIT) over the pack's bar, the bottom bar with the mode; Settings › YouTube Mode and
+     * › Recording (the account's storage, tested), the start sheet, the submit screen with templates and inputs, the
+     * Recordings list.
+     */
+    func testYouTubeMode() async throws {
+        guard let pack = ParityTests.pack ?? Pack.bundledDir.flatMap({ try? Pack(dir: $0) }) else { throw XCTSkip("no data pack") }
+        let cat = Catalog(db: pack.db)
+        let d0 = UserDefaults.standard
+        let saved = ["youtube", "title", "threshold"].map { ($0, d0.object(forKey: $0)) }
+        defer { for (k, v) in saved { if let v { d0.set(v, forKey: k) } else { d0.removeObject(forKey: k) } } }
+        StandIn.reset()
+        FakeS3.reset()
+        let email = "creator@overpricedcardboard.com"
+        let a = account()
+        a.signInApple(identityToken: "test_apple:\(email)", authorizationCode: nil)
+        try await until { a.status != nil && !a.busy }
+        StandIn.lock.lock()
+        if let acc = StandIn.accounts[email] { acc.active = true; acc.plan = "creator"; acc.source = "app_store"; acc.emailVerified = true; acc.s3 = true }
+        StandIn.lock.unlock()
+        a.check(force: true)
+        try await until { a.has("youtube") && !a.busy }
+        XCTAssertTrue(a.has("recording"))
+        XCTAssertTrue(a.has("s3_upload"))
+
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("yt-\(UUID().uuidString)")
+        let q = UploadQueue()
+        q.store = RecordingStore(root: tmp.appendingPathComponent("recordings"))
+        q.prefs = RecordingPrefs(defaults: UserDefaults(suiteName: "yt-\(UUID().uuidString)")!, vault: MemoryVault())
+        q.session = FakeS3.session()
+        let rec = RecordingModel(store: q.store, prefs: q.prefs, uploads: q, templatesCache: tmp.appendingPathComponent("templates/index.json"))
+        rec.uploadAllowed = { a.has("s3_upload") && a.has("pipeline") }
+        // the account's storage, as the shop hands it out
+        a.onS3 = { [weak rec] o in rec?.applyManagedS3(o) }
+        a.refreshS3()
+        try await until { rec.settings.managed }
+        XCTAssertEqual(rec.settings.bucket, "bucket")
+
+        let sc = ScannerModel(engine: try ScannerEngine(pack: pack), catalog: cat)
+        sc.settings.youtube = true
+        sc.settings.threshold = 5
+        sc.settings.title = "Surging Sparks booster box"
+        rec.attach(sc)
+        let resolver = CardResolver(catalog: cat, pack: pack)
+        for (id, lang) in [("swsh12pt5-160", "en"), ("sv08-059", "de"), ("base1-4", "en")] {
+            let card = try XCTUnwrap(cat.cardExact(id, lang))
+            sc.show(resolver.build(group: cat.groupOf(card.id), version: card, text: nil, confidence: .sure, alternatives: [], locked: true,
+                                   fromPhoto: false, scan: nil, serial: 0))
+            sc.addAgain()
+        }
+        XCTAssertEqual(sc.session.count, 3)
+        XCTAssertTrue(isHit(sc.shown?.value, 5), "Charizard is a hit")
+        try await shot("ios-youtube", YouTubeScreen(model: sc, rec: rec).environmentObject(a))
+        let bar = VStack(spacing: 0) {
+            Spacer()
+            BottomBar(tab: .constant(.settings), hasCollection: true, mode: .youtube)
+        }
+        .background(Theme.ink)
+        try await shot("ios-bottom-bar-youtube", bar, height: 160)
+
+        try await shot("ios-youtube-settings", NavigationStack {
+            YouTubeSettingsView(model: sc).navigationTitle("YouTube Mode").navigationBarTitleDisplayMode(.inline)
+        })
+        var s = rec.settings
+        s.uploadS3 = true
+        rec.saveSettings(s)
+        XCTAssertTrue(rec.settings.uploadS3)
+        rec.testConnection()
+        try await until { !rec.testing && rec.connection != nil }
+        XCTAssertEqual(rec.connectionOk, true, rec.connection ?? "")
+        let settingsPage = NavigationStack {
+            RecordingSettingsView(rec: rec, account: a).navigationTitle("Recording").navigationBarTitleDisplayMode(.inline)
+        }
+        try await shot("ios-recording-settings", settingsPage)
+        try await shot("ios-recording-settings-bottom", settingsPage, scrolledToBottom: true)
+        try await shot("ios-start-recording", StartRecordingSheet(rec: rec, scanner: sc))
+
+        // a finished recording with the pack's cards, one uploaded, one failed
+        let d = q.store.create()
+        let cards: [JSON] = sc.session.enumerated().map { i, it in
+            ["entry": i + 1, "hit": isHit(it.value, 5), "card": RecJSON.cardJson(it.shown), "price": RecJSON.priceJson(it.shown)]
+        }
+        try RecJSON.data(["schema": Recording.schema, "cards": cards, "video": ["audio": "mic"] as JSON] as JSON).write(to: d.events)
+        try Data(count: 4096).write(to: d.video)
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        d.updateMeta { $0["status"] = RecStatus.LOCAL.rawValue; $0["duration_ms"] = 293_000; $0["cards"] = 3; $0["hits"] = 1; $0["created"] = now }
+        let up = q.store.create(now: Date().addingTimeInterval(-86_400))
+        up.updateMeta { $0["status"] = RecStatus.UPLOADED.rawValue; $0["duration_ms"] = 1_834_000; $0["cards"] = 38; $0["hits"] = 3; $0["created"] = now - 86_400_000 }
+        let failed = q.store.create(now: Date().addingTimeInterval(-3600))
+        failed.updateMeta {
+            $0["status"] = RecStatus.FAILED.rawValue; $0["error"] = "This key may not write to the bucket/prefix"; $0["duration_ms"] = 612_000
+            $0["cards"] = 11; $0["hits"] = 0; $0["created"] = now - 3_600_000
+        }
+        let templates = LoadedTemplates(index: try TemplatesIndex.parse(Data(RecordingTests.templatesJson.utf8)), source: .bucket)
+        try await shot("ios-submit", SubmitView(rec: rec, id: d.id, title: "Recording finished", line: "4:53 · 3 cards · 1 hits · 412 MB",
+                                                onDone: {}, onLeave: {}, preset: templates, presetPack: Submission.packOf(d.events), presetMic: true))
+        rec.refresh()
+        XCTAssertEqual(rec.recordings.count, 3)
+        try await shot("ios-recordings", RecordingsSheet(rec: rec, account: a))
+        sc.settings.youtube = false
+        sc.settings.title = ""
+    }
 }

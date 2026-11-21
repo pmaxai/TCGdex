@@ -180,6 +180,8 @@ struct Chip: View {
 struct PsaLine: View {
     let g: Graded
     var printing: Printing.Kind?
+    /// YouTube Mode's reveal: larger
+    var big = false
 
     var body: some View {
         if g.psa10 != nil || g.psa9 != nil || g.psa8 != nil {
@@ -188,13 +190,13 @@ struct PsaLine: View {
                     let grades: [(String, Double?)] = [("PSA 10", g.psa10), ("PSA 9", g.psa9), ("PSA 8", g.psa8)]
                     ForEach(grades.indices, id: \.self) { i in
                         VStack(alignment: .leading) {
-                            Text(grades[i].0).font(.caption2).foregroundStyle(Theme.muted)
-                            Text(Money.usd(grades[i].1)).font(.subheadline.bold()).foregroundStyle(.white)
+                            Text(grades[i].0).font(big ? .footnote : .caption2).foregroundStyle(Theme.muted)
+                            Text(Money.usd(grades[i].1)).font(big ? .title3.bold() : .subheadline.bold()).foregroundStyle(.white)
                         }
                     }
                 }
-                Text("eBay sold\(printing.map { " · \($0.rawValue)" } ?? "") (PokemonPriceTracker)\(g.updated.map { ", \($0)" } ?? "")")
-                    .font(.caption2).foregroundStyle(Theme.muted)
+                if !big { Text("eBay sold\(printing.map { " · \($0.rawValue)" } ?? "") (PokemonPriceTracker)\(g.updated.map { ", \($0)" } ?? "")")
+                    .font(.caption2).foregroundStyle(Theme.muted) }
             }
             .padding(.top, 6)
         }
@@ -204,12 +206,14 @@ struct PsaLine: View {
 /// "Gem rate 11.3% · PSA 10: 340 of 3,000 graded"
 struct GemLine: View {
     let p: Population
+    /// YouTube Mode's reveal: larger
+    var big = false
 
     var body: some View {
         if let rate = p.gemRate ?? p.psa10.map({ Double($0) / Double(max(1, p.psaTotal)) }) {
-            (Text("Gem rate ").foregroundStyle(Theme.muted).font(.caption)
-             + Text(String(format: "%.1f%%", rate * 100)).bold().foregroundStyle(.white)
-             + Text("  · PSA 10: \((p.psa10 ?? 0).formatted()) of \(p.psaTotal.formatted()) graded").foregroundStyle(Theme.muted).font(.caption))
+            (Text("Gem rate ").foregroundStyle(Theme.muted).font(big ? .subheadline : .caption)
+             + Text(String(format: "%.1f%%", rate * 100)).bold().foregroundStyle(.white).font(big ? .subheadline : .body)
+             + Text("  · PSA 10: \((p.psa10 ?? 0).formatted()) of \(p.psaTotal.formatted()) graded").foregroundStyle(Theme.muted).font(big ? .subheadline : .caption))
                 .lineLimit(1).minimumScaleFactor(0.7)
                 .padding(.top, 4)
         }

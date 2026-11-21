@@ -59,12 +59,16 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIRequiresFullScreen: true
         NSCameraUsageDescription: The camera recognises your cards and shows their prices.
+        # YouTube Mode's recordings: your voice in the video, the videos into Photos (and back for an upload)
+        NSMicrophoneUsageDescription: With Microphone on, YouTube Mode's recordings have your voice in them.
+        NSPhotoLibraryAddUsageDescription: Recordings of YouTube Mode are saved in Photos.
+        NSPhotoLibraryUsageDescription: A recording saved in Photos is read back from there when you upload it later.
         ITSAppUsesNonExemptEncryption: false
         # the account server (sign-in, subscription, nightly prices)
         AccountURL: https://overpricedcardboard.com
         # the nightly data pack, downloaded in the background
         UIBackgroundModes: [processing]
-        BGTaskSchedulerPermittedIdentifiers: [com.overpricedcardboard.app.pack]
+        BGTaskSchedulerPermittedIdentifiers: [com.overpricedcardboard.app.pack, com.overpricedcardboard.app.upload]
     entitlements:
       path: Generated/OverpricedCardboard.entitlements
       properties:

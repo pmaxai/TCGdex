@@ -15,6 +15,15 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unc
     private var configured = false
     /// called on the camera queue with each frame, upright (portrait)
     var onFrame: (@Sendable (RGBImage) -> Void)?
+    /// false: the scanner is busy, the frame isn't converted for it (camera queue)
+    var wantsFrame: (@Sendable () -> Bool)?
+    private let sinkLock = NSLock()
+    private var sink: (@Sendable (CMSampleBuffer) -> Void)?
+    /// a recording's camera file takes every frame as it comes (camera queue), before the scanner
+    var recordSink: (@Sendable (CMSampleBuffer) -> Void)? {
+        get { sinkLock.lock(); defer { sinkLock.unlock() }; return sink }
+        set { sinkLock.lock(); sink = newValue; sinkLock.unlock() }
+    }
 
     var maxZoom: CGFloat { min(device?.maxAvailableVideoZoomFactor ?? 1, 10) }
     /// the zoom factor a person sees as 1× (virtual cameras start on the ultra wide)
@@ -117,6 +126,18 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unc
         return fourThree.min { CMVideoFormatDescriptionGetDimensions($0.formatDescription).width < CMVideoFormatDescriptionGetDimensions($1.formatDescription).width }
     }
 
+    /// the light (YouTube Mode's ⚙ → Light on)
+    var hasTorch: Bool { (device ?? AVCaptureDevice.default(for: .video))?.hasTorch ?? false }
+
+    func setTorch(_ on: Bool) {
+        queue.async { [self] in
+            guard let d = device, d.hasTorch, d.isTorchModeSupported(on ? .on : .off) else { return }
+            try? d.lockForConfiguration()
+            d.torchMode = on ? .on : .off
+            d.unlockForConfiguration()
+        }
+    }
+
     /// zoom as a person sees it (1 = no zoom)
     func setZoom(_ z: CGFloat) {
         queue.async { [self] in
@@ -128,6 +149,8 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unc
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        recordSink?(sampleBuffer)
+        if let wantsFrame, !wantsFrame() { return }
         guard let onFrame, let pb = CMSampleBufferGetImageBuffer(sampleBuffer), let img = RGBImage(pixelBuffer: pb) else { return }
         onFrame(img)
     }

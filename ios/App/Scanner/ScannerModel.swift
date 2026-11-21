@@ -14,6 +14,10 @@ struct ScannerSettings: Equatable {
     /// height of the capture frame, percent of the camera picture
     var guideSize = 70
     var zoom: Double = 1
+    /// YouTube Mode instead of the scanner (the Scanner tab's mode; Creator plan)
+    var youtube = false
+    /// YouTube Mode's title line at the top of the picture (optional)
+    var title = ""
     var guideFraction: Double { Double(guideSize) / 100 }
 
     static func load(_ d: UserDefaults = .standard) -> ScannerSettings {
@@ -25,6 +29,8 @@ struct ScannerSettings: Equatable {
         s.energyFilter = d.integer(forKey: "energy_filter")
         if d.object(forKey: "guide_size") != nil { s.guideSize = d.integer(forKey: "guide_size") }
         if d.object(forKey: "zoom") != nil { s.zoom = max(1, d.double(forKey: "zoom")) }
+        s.youtube = d.bool(forKey: "youtube")
+        s.title = d.string(forKey: "title") ?? ""
         return s
     }
 
@@ -36,6 +42,8 @@ struct ScannerSettings: Equatable {
         d.set(energyFilter, forKey: "energy_filter")
         d.set(guideSize, forKey: "guide_size")
         d.set(zoom, forKey: "zoom")
+        d.set(youtube, forKey: "youtube")
+        d.set(title, forKey: "title")
     }
 }
 
@@ -56,6 +64,8 @@ private final class FrameGate: @unchecked Sendable {
         if let picking { _picking = picking }
     }
     var kept: String? { lock.lock(); defer { lock.unlock() }; return _kept }
+    /// a new frame would be looked at now
+    var idle: Bool { lock.lock(); defer { lock.unlock() }; return !_busy && !_paused && !_picking }
     var aspect: Double { lock.lock(); defer { lock.unlock() }; return _aspect }
     var guide: Double { lock.lock(); defer { lock.unlock() }; return _guide }
 }
@@ -83,6 +93,11 @@ final class ScannerModel: ObservableObject {
     @Published var settings: ScannerSettings { didSet { settingsChanged(oldValue) } }
     /// false in the free version: no price alerts (they would tell the price)
     var alertsAllowed = true
+    /// YouTube Mode's pack: every card taken by the camera, in order (photos and looked-up cards only with +1)
+    @Published private(set) var session: [SessionItem] = []
+    var sessionValue: Double { session.reduce(0) { $0 + ($1.value ?? 0) } }
+    /// the recording's log: told right after each change of the pack or of the shown card, and what caused it
+    var packObserver: ((PackReason, _ source: String?) -> Void)?
 
     let camera = Camera()
     let engine: ScannerEngine
@@ -92,6 +107,10 @@ final class ScannerModel: ObservableObject {
     private let reader = TextReader()
     private let gate = FrameGate()
     private let textQueue = DispatchQueue(label: "scanner.text", qos: .userInitiated)
+    /// recognition runs here, so the camera's queue stays free (a recording's camera file gets every frame)
+    private let recognizeQueue = DispatchQueue(label: "scanner.recognize", qos: .userInitiated)
+    /// the size of the camera's whole frame (the analysed one is its centred part)
+    private var fullFrame = CGSize.zero
     private var serial = 0
     private var kept: String? { didSet { gate.set(kept: .some(kept)) } }
     private var rejected: Set<String> = []
@@ -108,6 +127,7 @@ final class ScannerModel: ObservableObject {
         gate.set(guide: settings.guideFraction)
         applyEnergyFilter(settings.energyFilter)
         camera.onFrame = { [weak self] img in self?.onFrame(img) }
+        camera.wantsFrame = { [gate] in gate.idle }
     }
 
     // ------------------------------------------------------------------ frames (camera queue)
@@ -115,8 +135,13 @@ final class ScannerModel: ObservableObject {
     /// The camera box's width / height: frames are cut to what it shows.
     func setViewAspect(_ a: Double) { gate.set(aspect: a) }
 
-    nonisolated private func onFrame(_ full: RGBImage) {
+    nonisolated private func onFrame(_ frame: RGBImage) {
         guard gate.tryBegin() else { return }
+        recognizeQueue.async { [weak self] in self?.recognize(frame) }
+    }
+
+    nonisolated private func recognize(_ full: RGBImage) {
+        let fullSize = CGSize(width: full.width, height: full.height)
         let img = full.visiblePart(aspect: gate.aspect) ?? full
         let prior = ScannerEngine.guidePrior(width: img.width, height: img.height, size: gate.guide)
         let manual = gate.takeManual()
@@ -126,6 +151,7 @@ final class ScannerModel: ObservableObject {
         let ms = Date().timeIntervalSince(t0) * 1000
         DispatchQueue.main.async { [self] in
             MainActor.assumeIsolated {
+                fullFrame = fullSize
                 if manual { takeByHand(r, img) } else { analysed(r, img, ms: ms) }
             }
             gate.end()
@@ -171,7 +197,7 @@ final class ScannerModel: ObservableObject {
         tracker.lock(best.group)
         kept = best.group
         rejected = []
-        showNew(best.group, r, img, fromPhoto: false, confidence: .likely)
+        showNew(best.group, r, img, fromPhoto: false, confidence: .likely, source: "double_tap")
         let list = r.candidates.compactMap { resolver.candidate(of: $0) }
         lastPicks = list
         if list.count > 1 { picks = list; gate.set(picking: true) }
@@ -192,7 +218,7 @@ final class ScannerModel: ObservableObject {
         }
     }
 
-    private func showNew(_ group: String, _ r: Scan, _ img: RGBImage, fromPhoto: Bool, confidence conf: Confidence) {
+    private func showNew(_ group: String, _ r: Scan, _ img: RGBImage, fromPhoto: Bool, confidence conf: Confidence, source: String = "camera") {
         let hit = r.hits.first { $0.group == group }
         // shown at once from the picture; the printed text (language, set number) refines it a moment later
         guard let version = resolver.resolveVersion(group: group, entry: hit?.entry, text: nil) else { return }
@@ -208,6 +234,8 @@ final class ScannerModel: ObservableObject {
         shown = first
         picks = nil
         gate.set(picking: false)
+        if settings.youtube && !fromPhoto { addToSession(first) }
+        logPack(.shown, fromPhoto ? "photo" : source)
         guard let hit else { maybeAlert(first); return }
         // the card straightened, upright, for reading its text
         let textReader = reader, eng = engine
@@ -235,6 +263,8 @@ final class ScannerModel: ObservableObject {
             updated.text = text
         }
         shown = updated
+        replaceInSession(updated)
+        logPack(.textRead)
         maybeAlert(updated)
     }
 
@@ -261,7 +291,8 @@ final class ScannerModel: ObservableObject {
     }
 
     private func maybeAlert(_ sh: Shown) {
-        guard alertsAllowed, sh.confidence != .unsure, settings.threshold > 0, let best = sh.priceCard.bestValue else { return }
+        // YouTube Mode shows a HIT instead (a vibration would shake the tripod)
+        guard alertsAllowed, !settings.youtube, sh.confidence != .unsure, settings.threshold > 0, let best = sh.priceCard.bestValue else { return }
         // any printing above the threshold: a valuable reverse holo must not slip through
         if best < settings.threshold || lastAlerted == sh.group { return }
         lastAlerted = sh.group
@@ -294,6 +325,8 @@ final class ScannerModel: ObservableObject {
                                locked: true, fromPhoto: s.fromPhoto, scan: s.scan, serial: serial)
         b.versionByUser = true
         shown = b
+        replaceInSession(b, oldSerial: s.serial)
+        logPack(.otherCard)
         maybeAlert(b)
     }
 
@@ -309,6 +342,15 @@ final class ScannerModel: ObservableObject {
         if b.priceCard.printing(s.printing)?.kind != s.printing { b.printing = defaultPrinting(b.priceCard) }
         tracker.lock(s.group)
         shown = b
+        replaceInSession(b)
+        logPack(.version)
+    }
+
+    /// Step through the versions of the shown card (+1 next, -1 previous).
+    func stepVersion(_ step: Int) {
+        guard let s = shown, s.versions.count > 1 else { return }
+        let n = s.versions.count, i = max(0, s.versionIndex)
+        chooseVersion(s.versions[((i + step) % n + n) % n])
     }
 
     func choosePrinting(_ kind: Printing.Kind) {
@@ -318,6 +360,8 @@ final class ScannerModel: ObservableObject {
         s.locked = true
         tracker.lock(s.group)
         shown = s
+        replaceInSession(s)
+        logPack(.printing)
     }
 
     /// A card from the last scans (Trading's tray): shown again and kept.
@@ -336,6 +380,7 @@ final class ScannerModel: ObservableObject {
         shown = nil
         closePicks()
         setPaused(false)
+        logPack(.next)
     }
 
     /// Tap on the waiting camera: scan again.
@@ -365,6 +410,7 @@ final class ScannerModel: ObservableObject {
         shown = b
         closePicks()
         setPaused(true)
+        logPack(.shown, "search")
     }
 
     /// The shown card is this one (found in the search): it takes its place.
@@ -381,6 +427,8 @@ final class ScannerModel: ObservableObject {
         b.fromSearch = s.fromSearch
         shown = b
         closePicks()
+        replaceInSession(b, oldSerial: s.serial)
+        logPack(.searchReplace)
         maybeAlert(b)
     }
 
@@ -388,6 +436,80 @@ final class ScannerModel: ObservableObject {
     private func rejectedBy(_ s: Shown, _ chosen: String) -> Set<String> {
         Set(([s.group] + s.alternatives.map(\.group) + lastPicks.map(\.group)).filter { $0 != chosen })
     }
+
+    // ------------------------------------------------------------------ the pack (YouTube Mode)
+
+    /// A new card from the camera into the pack: not when unsure, not the same card twice in a row (+1 does that).
+    private func addToSession(_ sh: Shown) {
+        if sh.confidence == .unsure || session.last?.group == sh.group { return }
+        session.append(SessionItem(serial: sh.serial, time: Date(), shown: sh.forPack))
+    }
+
+    /// The shown card changed (its text was read, another printing, version or card): so did its place in the pack.
+    private func replaceInSession(_ sh: Shown, oldSerial: Int? = nil) {
+        let old = oldSerial ?? sh.serial
+        guard let i = session.firstIndex(where: { $0.serial == old }) else { return }
+        session[i] = SessionItem(serial: sh.serial, time: session[i].time, shown: sh.forPack)
+    }
+
+    /// New pack: the value starts at zero.
+    func resetSession() {
+        session = []
+        logPack(.reset)
+    }
+
+    /**
+     * +1: the shown card goes into the pack once more (two of the same card in a row are otherwise
+     * counted once). The copy is a card of its own: its printing can differ, and swiping it away
+     * leaves the first one in the pack. Also adds a card the scanner wasn't sure enough about, a
+     * photo or a looked-up card.
+     */
+    func addAgain() {
+        guard var s = shown else { return }
+        serial += 1
+        s.serial = serial
+        shown = s
+        session.append(SessionItem(serial: s.serial, time: Date(), shown: s.forPack))
+        logPack(.addAgain)
+    }
+
+    func undoLast() {
+        guard !session.isEmpty else { return }
+        session.removeLast()
+        logPack(.removeLast)
+    }
+
+    /// Swiped away: the card leaves the pack. It is not taken again until another card was in front of the camera.
+    func dismissShown() {
+        guard let s = shown else { return }
+        kept = nil
+        shown = nil
+        closePicks()
+        session.removeAll { $0.serial == s.serial }
+        logPack(.swipe)
+    }
+
+    /// The card's corners in the camera's whole frame (camera.mp4), 0–1, clockwise from the top left; nil without a live outline.
+    func cameraQuad() -> [CGPoint]? {
+        guard let q = liveQuad, q.count == 4, !paused, shown?.fromPhoto != true, fullFrame.width > 0, fullFrame.height > 0 else { return nil }
+        let ox = (fullFrame.width - liveFrame.width) / 2, oy = (fullFrame.height - liveFrame.height) / 2
+        return Self.clockwiseFromTopLeft(q.map { CGPoint(x: (ox + $0.x) / fullFrame.width, y: (oy + $0.y) / fullFrame.height) })
+    }
+
+    /// Four corners in picture order: clockwise (on screen, y down) from the one nearest the top left; each 0–1.
+    nonisolated static func clockwiseFromTopLeft(_ p: [CGPoint]) -> [CGPoint] {
+        guard !p.isEmpty else { return p }
+        let cx = p.map(\.x).reduce(0, +) / CGFloat(p.count), cy = p.map(\.y).reduce(0, +) / CGFloat(p.count)
+        let sorted = p.sorted { atan2($0.y - cy, $0.x - cx) < atan2($1.y - cy, $1.x - cx) }
+        let start = sorted.indices.min { sorted[$0].x + sorted[$0].y < sorted[$1].x + sorted[$1].y } ?? 0
+        return sorted.indices.map { i in
+            let q = sorted[(start + i) % sorted.count]
+            return CGPoint(x: min(1, max(0, q.x)), y: min(1, max(0, q.y)))
+        }
+    }
+
+    /// what the pack and the shown card are now: the recording's log compares it with the last time
+    private func logPack(_ reason: PackReason, _ source: String? = nil) { packObserver?(reason, source) }
 
     func zoom(by factor: Double) { setZoom(settings.zoom * factor) }
 
