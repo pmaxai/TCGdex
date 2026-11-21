@@ -79,12 +79,37 @@ final class FreeTierTests: XCTestCase {
         XCTAssertEqual(again.localItems, a.localItems, "kept on the phone")
     }
 
+    func testACopyOnThePhoneIsEdited() {
+        let a = account()
+        a.addLocally(cardId: "base1-4", language: "EN", finish: "holo", condition: "NM", label: "Charizard")
+        let item = a.localItems[0]
+        var d = CopyDetails(item)
+        d.quantity = 2; d.condition = "LP"; d.language = "DE"; d.graded = true; d.company = "CGC"; d.grade = "8.5"
+        d.purchaseCents = 9900; d.note = "a gift "
+        a.updateLocally(item.id, d)
+        let e = a.localItems[0]
+        XCTAssertEqual(e.id, item.id)
+        XCTAssertEqual(e.quantity, 2)
+        XCTAssertEqual(e.condition, "LP")
+        XCTAssertEqual(e.language, "DE")
+        XCTAssertEqual(e.gradingCompany, "CGC")
+        XCTAssertEqual(e.gradingGrade, "8.5")
+        XCTAssertEqual(e.purchaseCents, 9900)
+        XCTAssertEqual(e.note, "a gift")
+        XCTAssertEqual(a.localCardCount, 1)
+    }
+
     func testTheLocalCardsMoveIntoTheAccountWithAPlan() async throws {
         StandIn.reset()
         let email = "free-to-collector@test.overpricedcardboard.com"
         let a = account()
         a.addLocally(cardId: "base1-4", language: "EN", finish: "holo", condition: "GD", purchaseCents: 25000, note: "from the flea market", label: "Charizard")
         a.addLocally(cardId: "sv08-059", language: "DE", finish: "normal", condition: "NM", quantity: 2, label: "Pikachu-ex")
+        // graded on the phone: the grading goes along
+        if let p = a.localItems.first(where: { $0.cardId == "sv08-059" }) {
+            var d = CopyDetails(p); d.graded = true; d.company = "PSA"; d.grade = "10"
+            a.updateLocally(p.id, d)
+        }
         a.signInApple(identityToken: "test_apple:\(email)", authorizationCode: nil)
         try await until("signed in") { a.status != nil && !a.busy }
         XCTAssertTrue(a.isFree, "signed in without a plan: still the free version")
@@ -109,6 +134,7 @@ final class FreeTierTests: XCTestCase {
         XCTAssertEqual((charizard["purchase_price_cents"] as? NSNumber)?.intValue, 25000)
         XCTAssertEqual(charizard["note"] as? String, "from the flea market")
         XCTAssertEqual((coll.first { $0["card_id"] as? String == "sv08-059" }?["quantity"] as? NSNumber)?.intValue, 2)
+        XCTAssertEqual((coll.first { $0["card_id"] as? String == "sv08-059" }?["grading"] as? [String: Any])?["grade"] as? String, "10")
         XCTAssertEqual(a.message, "The 2 cards from this phone are now in your account's collection.")
         XCTAssertFalse(a.isFree)
 

@@ -85,6 +85,101 @@ final class CollectionTests: XCTestCase {
         XCTAssertTrue(left.isEmpty, "the server's missing cards are empty")
     }
 
+    func testACopyIsEditedAndDeleted() async throws {
+        StandIn.reset()
+        StandIn.cards = ["base1-4": ("Charizard", "Base Set", "4/102", 41200)]
+        let email = "editor@test.overpricedcardboard.com"
+        let a = try await signedIn(email)
+        a.addToCollection(cardId: "base1-4", language: "EN", finish: "holo", condition: "NM", label: "Charizard")
+        try await until("sent") { a.pending.isEmpty && a.collectionEdits == 1 }
+        await a.loadItems()
+        let item = try XCTUnwrap(a.items?.first)
+        var d = CopyDetails(item)
+        d.quantity = 3; d.condition = "EX"; d.language = "DE"; d.graded = true; d.company = "PSA"; d.grade = "9"
+        d.purchaseCents = 25000; d.note = "  binder page 3 "
+        let changes = d.changes(from: CopyDetails(item))
+        log("changes: \(changes)")
+        XCTAssertEqual(Set(changes.keys), ["quantity", "condition", "language", "grading", "purchase_price_cents", "note"], "only what changed")
+        let saved = await a.updateItem(item, changes)
+        XCTAssertNil(saved)
+        let edited = try XCTUnwrap(a.items?.first)
+        XCTAssertEqual(edited.quantity, 3)
+        XCTAssertEqual(edited.condition, "EX")
+        XCTAssertEqual(edited.language, "DE")
+        XCTAssertEqual(edited.graded, "PSA 9")
+        XCTAssertEqual(edited.purchaseCents, 25000)
+        XCTAssertEqual(edited.note, "binder page 3", "trimmed")
+        XCTAssertEqual(edited.finish, "holo", "unchanged")
+        StandIn.lock.lock()
+        let server = StandIn.accounts[email]?.collection.first ?? [:]
+        StandIn.lock.unlock()
+        XCTAssertEqual(server["condition"] as? String, "EX")
+        XCTAssertEqual((server["grading"] as? [String: Any])?["company"] as? String, "PSA")
+
+        // cleared again: not graded, no price, no note → null
+        var back = CopyDetails(edited)
+        back.graded = false; back.purchaseCents = nil; back.note = ""
+        let clear = back.changes(from: CopyDetails(edited))
+        XCTAssertTrue(clear["grading"] is NSNull)
+        XCTAssertTrue(clear["purchase_price_cents"] is NSNull)
+        XCTAssertTrue(clear["note"] is NSNull)
+        XCTAssertEqual(clear.count, 3)
+        let cleared = await a.updateItem(edited, clear)
+        XCTAssertNil(cleared)
+        XCTAssertNil(a.items?.first?.graded)
+        XCTAssertNil(a.items?.first?.purchaseCents)
+
+        let last = try XCTUnwrap(a.items?.first)
+        let deleted = await a.deleteItem(last)
+        XCTAssertNil(deleted)
+        XCTAssertEqual(a.items?.count, 0)
+        StandIn.lock.lock()
+        XCTAssertEqual(StandIn.accounts[email]?.collection.count, 0, "gone on the server")
+        StandIn.lock.unlock()
+        log("edited and deleted")
+    }
+
+    func testTheCollectionIsSharedAndMadePrivateAgain() async throws {
+        StandIn.reset()
+        let email = "sharer@test.overpricedcardboard.com"
+        let a = try await signedIn(email)
+        let first = await a.loadShare()
+        XCTAssertNil(first)
+        XCTAssertNil(a.publicLink, "private to start")
+        let made = await a.makePublic()
+        XCTAssertNil(made)
+        let link = try XCTUnwrap(a.publicLink)
+        XCTAssertTrue(link.url.contains("/c/"))
+        let again = await a.makePublic()
+        XCTAssertNil(again)
+        XCTAssertEqual(a.publicLink, link, "the same link again, not a second one")
+        XCTAssertEqual(StandIn.calls("/collection/share").last?.body["show_prices"] as? Bool, true, "with prices")
+        // a public link of one binder, made on the website
+        StandIn.lock.lock()
+        StandIn.accounts[email]?.otherPublic = 1
+        StandIn.lock.unlock()
+        _ = await a.loadShare()
+        XCTAssertEqual(a.otherPublicLinks, 1)
+        let off = await a.makePrivate()
+        XCTAssertNil(off)
+        XCTAssertNil(a.publicLink)
+        XCTAssertEqual(a.otherPublicLinks, 0)
+        StandIn.lock.lock()
+        XCTAssertNil(StandIn.accounts[email]?.publicShare, "switched off on the server")
+        StandIn.lock.unlock()
+        log("shared \(link.url), then private")
+    }
+
+    func testSharingBeforeTheWebsiteHasIt() async throws {
+        StandIn.reset()
+        let a = try await signedIn("early@test.overpricedcardboard.com")
+        StandIn.shareMissing = true
+        let e = await a.loadShare()
+        XCTAssertEqual(e, PublicLink.notYet)
+        let made = await a.makePublic()
+        XCTAssertEqual(made, PublicLink.notYet)
+    }
+
     func testShopLanguagesMapBackToThePack() {
         XCTAssertEqual(ShopTerms.appLang("DE"), "de")
         XCTAssertEqual(ShopTerms.appLang("ZH-HANT"), "zh-tw")

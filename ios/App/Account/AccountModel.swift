@@ -20,6 +20,85 @@ struct WantedItem: Equatable, Identifiable {
     }
 }
 
+/// The collection's public link (shop doc: sharing from the app): anyone with it sees the whole collection with prices.
+struct PublicLink: Equatable {
+    let url: String
+    let views: Int
+    let createdAt: Date?
+
+    init?(_ o: JSON) {
+        guard let url = AccountStatus.str(o, "url") else { return nil }
+        self.url = url
+        views = (o["views"] as? NSNumber)?.intValue ?? 0
+        createdAt = AccountStatus.time(o, "created_at")
+    }
+
+    static let notYet = "Sharing from the app isn't on overpricedcardboard.com yet – it comes with the next update of the website."
+}
+
+/// The details of a copy as the edit sheet changes them (a copy in the account's collection, or on the phone).
+struct CopyDetails: Equatable {
+    var quantity: Int
+    var condition: String
+    var finish: String
+    var language: String
+    var graded: Bool
+    var company: String
+    var grade: String
+    var purchaseCents: Int64?
+    var note: String
+    var binderId: Int64?
+
+    init(_ i: CollectionItem) {
+        quantity = i.quantity; condition = i.condition; finish = i.finish; language = i.language
+        graded = i.gradingCompany != nil || i.gradingGrade != nil
+        company = i.gradingCompany ?? ""; grade = i.gradingGrade ?? ""
+        purchaseCents = i.purchaseCents; note = i.note ?? ""; binderId = i.binderId
+    }
+
+    init(_ i: LocalItem) {
+        quantity = i.quantity; condition = i.condition; finish = i.finish; language = i.language
+        graded = i.gradingCompany != nil || i.gradingGrade != nil
+        company = i.gradingCompany ?? ""; grade = i.gradingGrade ?? ""
+        purchaseCents = i.purchaseCents; note = i.note ?? ""; binderId = nil
+    }
+
+    /// the grading as the shop takes it (nil: not graded)
+    var grading: JSON? {
+        guard graded else { return nil }
+        return ["company": String(company.trimmingCharacters(in: .whitespaces).prefix(20)), "grade": String(grade.trimmingCharacters(in: .whitespaces).prefix(10))]
+    }
+
+    /// "PSA|10" (nil: not graded), to compare
+    var gradingKey: String? {
+        grading.map { "\($0["company"] as? String ?? "")|\($0["grade"] as? String ?? "")" }
+    }
+
+    var trimmedNote: String? { let n = note.trimmingCharacters(in: .whitespacesAndNewlines); return n.isEmpty ? nil : String(n.prefix(500)) }
+
+    /// why it can't be saved (nil: it can)
+    var problem: String? {
+        if graded && (company.trimmingCharacters(in: .whitespaces).isEmpty || grade.trimmingCharacters(in: .whitespaces).isEmpty) {
+            return "A graded card needs the company and the grade (e.g. PSA 10)."
+        }
+        return nil
+    }
+
+    /// The fields that differ from `old`, as PATCH /collection/items/{id} takes them (`null` clears).
+    func changes(from old: CopyDetails) -> JSON {
+        var j: JSON = [:]
+        if quantity != old.quantity { j["quantity"] = max(1, min(999, quantity)) }
+        if condition != old.condition { j["condition"] = condition }
+        if finish != old.finish { j["finish"] = finish }
+        if language != old.language { j["language"] = language }
+        if gradingKey != old.gradingKey { j["grading"] = grading.map { $0 as Any } ?? NSNull() }
+        if purchaseCents != old.purchaseCents { j["purchase_price_cents"] = purchaseCents.map { $0 as Any } ?? NSNull() }
+        if trimmedNote != old.trimmedNote { j["note"] = trimmedNote.map { $0 as Any } ?? NSNull() }
+        if binderId != old.binderId { j["binder_id"] = binderId.map { $0 as Any } ?? NSNull() }
+        return j
+    }
+}
+
 /// One of the customer's binders.
 struct Binder: Identifiable, Equatable { let id: Int64; let name: String }
 
@@ -36,7 +115,12 @@ struct CollectionItem: Equatable, Identifiable {
     let cardId: String
     let language: String, finish: String, condition: String
     let graded: String?
+    /// the grading's parts ("PSA", "10"), for editing
+    let gradingCompany: String?, gradingGrade: String?
     let quantity: Int
+    let purchaseCents: Int64?
+    let note: String?
+    let binderId: Int64?
     let name: String, setName: String, number: String
     /// the server's value of one copy (nil: no price)
     let valueCents: Int64?
@@ -50,7 +134,12 @@ struct CollectionItem: Equatable, Identifiable {
         finish = AccountStatus.str(o, "finish") ?? ""
         condition = AccountStatus.str(o, "condition") ?? ""
         graded = (o["grading"] as? JSON).map { g in "\(AccountStatus.str(g, "company") ?? "") \(AccountStatus.str(g, "grade") ?? "")".trimmingCharacters(in: .whitespaces) }
+        gradingCompany = (o["grading"] as? JSON).flatMap { AccountStatus.str($0, "company") }
+        gradingGrade = (o["grading"] as? JSON).flatMap { AccountStatus.str($0, "grade") }
         quantity = (o["quantity"] as? NSNumber)?.intValue ?? 1
+        purchaseCents = (o["purchase_price_cents"] as? NSNumber)?.int64Value
+        note = AccountStatus.str(o, "note")
+        binderId = (o["binder_id"] as? NSNumber)?.int64Value
         name = AccountStatus.str(o, "name") ?? card
         setName = AccountStatus.str(o, "set_name") ?? ""
         number = AccountStatus.str(o, "number") ?? ""
@@ -112,6 +201,18 @@ enum ShopTerms {
         }
     }
 
+    /// card_language, with the name a collector knows it by
+    struct Lang: Identifiable, Equatable { let code: String; let name: String; var id: String { code } }
+    static let languages: [Lang] = [
+        Lang(code: "DE", name: "Deutsch"), Lang(code: "EN", name: "English"), Lang(code: "FR", name: "Français"), Lang(code: "IT", name: "Italiano"),
+        Lang(code: "ES", name: "Español"), Lang(code: "PT", name: "Português"), Lang(code: "NL", name: "Nederlands"), Lang(code: "PL", name: "Polski"),
+        Lang(code: "RU", name: "Russkij"), Lang(code: "JA", name: "日本語"), Lang(code: "KO", name: "한국어"), Lang(code: "ZH-HANT", name: "中文 繁體"),
+        Lang(code: "ZH-HANS", name: "中文 简体"), Lang(code: "ID", name: "Indonesia"), Lang(code: "TH", name: "ไทย"),
+    ]
+
+    /// every finish the shop knows
+    static let finishes = ["normal", "holo", "reverse_holo", "first_edition", "shadowless", "stamped", "pokeball", "masterball"]
+
     static func finishLabel(_ f: String) -> String {
         ["normal": "Normal", "holo": "Holo", "reverse_holo": "Reverse Holo", "first_edition": "1st Edition", "shadowless": "Shadowless",
          "stamped": "Stamped", "pokeball": "Poké Ball", "masterball": "Master Ball"][f] ?? f
@@ -150,6 +251,9 @@ final class AccountModel: ObservableObject {
     @Published private(set) var itemsError: String?
     /// goes up when a copy reached the collection (the collection page loads again)
     @Published private(set) var collectionEdits = 0
+    /// the collection's public link (nil: private), and public links made on the website that show less (binders, no prices)
+    @Published private(set) var publicLink: PublicLink?
+    @Published private(set) var otherPublicLinks = 0
     /// Use another email: where the code went, and from when another may be asked for
     @Published private(set) var emailSentTo: String?
     @Published private(set) var resendAt = Date.distantPast
@@ -367,7 +471,7 @@ final class AccountModel: ObservableObject {
         load()
         busy = false
         error = nil
-        wanted = []; collection = [:]; binders = []; items = nil
+        wanted = []; collection = [:]; binders = []; items = nil; publicLink = nil; otherPublicLinks = 0
     }
 
     /// the app came to the front: after more than an hour away, check
@@ -417,7 +521,7 @@ final class AccountModel: ObservableObject {
             do { try await api.disconnect(token: token) } catch let e as AccountError where e.lostToken { lost(e); return }
             store.forget(notice: "This phone was disconnected from the account.")
             load()
-            wanted = []; collection = [:]; binders = []; items = nil
+            wanted = []; collection = [:]; binders = []; items = nil; publicLink = nil; otherPublicLinks = 0
         }
     }
 
@@ -437,7 +541,7 @@ final class AccountModel: ObservableObject {
             store.forget(notice: "The account was deleted.")
             store.saveQueue([])
             load()
-            wanted = []; collection = [:]; binders = []; items = nil
+            wanted = []; collection = [:]; binders = []; items = nil; publicLink = nil; otherPublicLinks = 0
             if let url = AccountStatus.str(o, "manage_url") {
                 message = "The account is deleted. Cancel the subscription in the App Store too (Settings › Apple Account › Subscriptions): \(url)"
             } else {
@@ -503,14 +607,85 @@ final class AccountModel: ObservableObject {
 
     /// + Collection: queued with its own client_ref and sent at once (later when offline).
     func addToCollection(cardId: String, language: String, finish: String, condition: String, quantity: Int = 1,
-                         purchaseCents: Int64? = nil, binderId: Int64? = nil, note: String? = nil, label: String) {
+                         purchaseCents: Int64? = nil, binderId: Int64? = nil, note: String? = nil, grading: JSON? = nil, label: String) {
         let body: JSON = ["card_id": cardId, "language": language, "finish": finish, "condition": condition,
-                          "quantity": max(1, min(999, quantity)), "grading": NSNull(),
+                          "quantity": max(1, min(999, quantity)), "grading": grading.map { $0 as Any } ?? NSNull(),
                           "purchase_price_cents": purchaseCents.map { $0 as Any } ?? NSNull(),
                           "note": note.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : String($0.prefix(500)) as Any } ?? NSNull(),
                           "binder_id": binderId.map { $0 as Any } ?? NSNull(), "merge": true]
         enqueue(PendingOp(kind: "collection_add", clientRef: UUID().uuidString.lowercased(), accountId: status?.accountId, cardId: cardId,
                           body: PendingOp.encode(body), label: label))
+    }
+
+    // ---------------------------------------------------------------- editing a copy
+    /// The collection page's Edit: the changed fields to the shop; the page shows the shop's answer. nil: saved, else why not.
+    func updateItem(_ item: CollectionItem, _ changes: JSON) async -> String? {
+        guard !changes.isEmpty else { return nil }
+        guard let token = store.token, let api = api() else { return "Not connected to an account." }
+        do {
+            let o = try await api.updateItem(token: token, id: item.id, changes: changes)
+            if let new = CollectionItem(o), let i = items?.firstIndex(where: { $0.id == item.id }) { items?[i] = new } else { await loadItems() }
+            loadCollection(item.cardId, force: true)
+            return nil
+        } catch let e as AccountError {
+            if e.lostToken { lost(e) }
+            if e.status == 404 { items?.removeAll { $0.id == item.id }; return "This card isn't in your collection any more." }
+            return e.friendly
+        } catch {
+            return offline(error, "the change wasn't saved.")
+        }
+    }
+
+    /// The collection page's Delete (asked first). nil: deleted, else why not.
+    func deleteItem(_ item: CollectionItem) async -> String? {
+        guard let token = store.token, let api = api() else { return "Not connected to an account." }
+        do {
+            try await api.deleteItem(token: token, id: item.id)
+            items?.removeAll { $0.id == item.id }
+            loadCollection(item.cardId, force: true)
+            return nil
+        } catch let e as AccountError {
+            if e.lostToken { lost(e) }
+            return e.friendly
+        } catch {
+            return offline(error, "the card wasn't deleted.")
+        }
+    }
+
+    // ---------------------------------------------------------------- sharing the collection
+    /// The collection's public link (nil: private). nil: read, else why not.
+    func loadShare() async -> String? {
+        await shareCall("the link couldn't be read.") { api, token in try await api.share(token: token) }
+    }
+
+    /// A public link of the whole collection with prices (the existing one if there is one).
+    func makePublic() async -> String? {
+        await shareCall("no link was made.") { api, token in try await api.makePublic(token: token) }
+    }
+
+    /// Switches off every public link (personal links sent by email from the website keep running until they end).
+    func makePrivate() async -> String? {
+        await shareCall("the collection is still public.") { api, token in try await api.makePrivate(token: token); return ["public": NSNull(), "other_public": 0] }
+    }
+
+    private func shareCall(_ what: String, _ call: (AccountApi, String) async throws -> JSON) async -> String? {
+        guard has("collection") else { return "Sharing needs a subscription with a collection." }
+        guard let token = store.token, let api = api() else { return "Not connected to an account." }
+        do {
+            let o = try await call(api, token)
+            publicLink = (o["public"] as? JSON).flatMap(PublicLink.init)
+            otherPublicLinks = (o["other_public"] as? NSNumber)?.intValue ?? 0
+            return nil
+        } catch let e as AccountError {
+            if e.lostToken { lost(e); return e.friendly }
+            // the website doesn't have sharing from the app yet
+            if e.status == 404 || e.status == 405 { return PublicLink.notYet }
+            return e.friendly
+        } catch let e as ServerUnavailable where e.code == 404 || e.code == 405 {
+            return PublicLink.notYet
+        } catch {
+            return offline(error, what)
+        }
     }
 
     // ---------------------------------------------------------------- missing cards

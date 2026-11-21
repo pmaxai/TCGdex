@@ -12,12 +12,15 @@ struct LocalItem: Codable, Equatable, Identifiable {
     var id = UUID().uuidString.lowercased()
     let cardId: String
     /// the shop's card_language and finish, as + Collection sends them to an account
-    let language: String
-    let finish: String
-    let condition: String
+    var language: String
+    var finish: String
+    var condition: String
     var quantity: Int
     var purchaseCents: Int64?
     var note: String?
+    /// "PSA", "10" when graded
+    var gradingCompany: String?
+    var gradingGrade: String?
     /// "Glurak-ex · 151 199/165"
     let label: String
     var added = Date()
@@ -100,6 +103,22 @@ extension AccountModel {
         return true
     }
 
+    /// The edit sheet's details for a card on the phone.
+    func updateLocally(_ id: String, _ d: CopyDetails) {
+        guard let i = localItems.firstIndex(where: { $0.id == id }) else { return }
+        var item = localItems[i]
+        item.quantity = max(1, min(999, d.quantity))
+        item.condition = d.condition
+        item.finish = d.finish
+        item.language = d.language
+        item.gradingCompany = d.grading?["company"] as? String
+        item.gradingGrade = d.grading?["grade"] as? String
+        item.purchaseCents = d.purchaseCents
+        item.note = d.trimmedNote
+        localItems[i] = item
+        store.saveLocalCollection(localItems)
+    }
+
     func removeLocally(_ id: String) {
         localItems.removeAll { $0.id == id }
         store.saveLocalCollection(localItems)
@@ -113,8 +132,9 @@ extension AccountModel {
         let cards = Set(items.map(\.cardId)).count
         // oldest first, so the account's collection keeps their order
         for i in items.reversed() {
+            let grading: JSON? = i.gradingCompany.map { ["company": $0, "grade": i.gradingGrade ?? ""] }
             addToCollection(cardId: i.cardId, language: i.language, finish: i.finish, condition: i.condition, quantity: i.quantity,
-                            purchaseCents: i.purchaseCents, note: i.note, label: i.label)
+                            purchaseCents: i.purchaseCents, note: i.note, grading: grading, label: i.label)
         }
         localItems = []
         store.saveLocalCollection([])
@@ -125,7 +145,7 @@ extension AccountModel {
 
 /// A feature the free version shows but doesn't include.
 enum LockedFeature: String, Identifiable {
-    case search, trading, missing, photo, alert, collectionFull, values
+    case search, trading, missing, photo, alert, collectionFull, values, share
 
     var id: String { rawValue }
 
@@ -138,6 +158,7 @@ enum LockedFeature: String, Identifiable {
         case .alert: return "Price alerts need a subscription"
         case .collectionFull: return "The free collection is full"
         case .values: return "Collection values need a subscription"
+        case .share: return "Sharing needs a subscription"
         }
     }
 
@@ -150,6 +171,7 @@ enum LockedFeature: String, Identifiable {
         case .alert: return "The phone vibrates when a scanned card is worth at least your alert price."
         case .collectionFull: return "The free version keeps \(AccountModel.freeMaxCards) different cards on this phone. With a subscription your collection has no limit, is saved in your account, and these cards move into it."
         case .values: return "See what each card and your whole collection is worth."
+        case .share: return "Send friends a link to your collection – they see your cards and what they're worth."
         }
     }
 }

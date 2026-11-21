@@ -13,6 +13,8 @@ struct CollectionScreen: View {
         var id: String { rawValue }
     }
     @State private var part: Part
+    @State private var sharing = false
+    @State private var locked: LockedFeature?
 
     init(account: AccountModel, catalog: Catalog?, start: Part = .collection) {
         _account = ObservedObject(wrappedValue: account)
@@ -50,8 +52,45 @@ struct CollectionScreen: View {
             .navigationDestination(for: CardKey.self) { k in
                 if let card = catalog?.card(k.id, k.lang) { CardDetail(card: card) }
             }
+            .toolbar {
+                // a public link for friends (the free version: shown locked)
+                if shown == .collection {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { if account.isFree { locked = .share } else { sharing = true } } label: {
+                            Label("Share", systemImage: "square.and.arrow.up")
+                        }
+                    }
+                }
+            }
+            .sheet(isPresented: $sharing) { ShareCollectionSheet(account: account).presentationDetents([.medium, .large]) }
+            .lockedAlert($locked)
         }
     }
+}
+
+/// A row's Edit and Delete: swipe (right: Edit, left: Delete) or press and hold.
+private struct CopyActions: ViewModifier {
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button { onDelete() } label: { Label("Delete", systemImage: "trash") }.tint(.red)
+            }
+            .swipeActions(edge: .leading) {
+                Button { onEdit() } label: { Label("Edit", systemImage: "pencil") }.tint(Theme.gold)
+            }
+            .contextMenu {
+                Button { onEdit() } label: { Label("Edit details…", systemImage: "pencil") }
+                Button(role: .destructive) { onDelete() } label: { Label("Delete", systemImage: "trash") }
+            }
+    }
+}
+
+/// "2 × DE · Holo · NM · PSA 10"
+private func copyLine(_ quantity: Int, _ language: String, _ finish: String, _ condition: String, _ graded: String?) -> String {
+    "\(quantity) × " + [language, ShopTerms.finishLabel(finish), condition, graded ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")
 }
 
 /// Every copy in the collection, newest first, with a filter and the total value.
@@ -59,6 +98,8 @@ struct CollectionList: View {
     @ObservedObject var account: AccountModel
     let catalog: Catalog?
     @State private var filter = ""
+    @State private var editing: CollectionItem?
+    @State private var deleting: CollectionItem?
 
     var body: some View {
         let all = account.items ?? []
@@ -81,6 +122,7 @@ struct CollectionList: View {
                     CollectionRow(item: item, card: catalog?.card(item.cardId, lang))
                 }
                 .listRowBackground(Theme.ink)
+                .modifier(CopyActions(onEdit: { account.loadBinders(); editing = item }, onDelete: { deleting = item }))
             }
         }
         .listStyle(.plain)
@@ -103,6 +145,17 @@ struct CollectionList: View {
         .refreshable { await account.loadItems() }
         .task { if account.items == nil { await account.loadItems() } }
         .onChange(of: account.collectionEdits) { _, _ in Task { await account.loadItems() } }
+        .sheet(item: $editing) { item in
+            EditCopySheet(title: item.name, binders: account.binders, details: CopyDetails(item),
+                          onSave: { d in await account.updateItem(item, d.changes(from: CopyDetails(item))) },
+                          onDelete: { await account.deleteItem(item) })
+        }
+        .confirmationDialog(deleting.map { "Delete \($0.name)?" } ?? "", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                            titleVisibility: .visible, presenting: deleting) { item in
+            Button("Delete", role: .destructive) {
+                Task { if let e = await account.deleteItem(item) { account.message = e } }
+            }
+        } message: { item in Text(copyLine(item.quantity, item.language, item.finish, item.condition, item.graded) + " – it leaves your collection.") }
     }
 }
 
@@ -113,6 +166,8 @@ struct LocalCollectionList: View {
     let catalog: Catalog?
     @State private var filter = ""
     @State private var locked: LockedFeature?
+    @State private var editing: LocalItem?
+    @State private var deleting: LocalItem?
 
     var body: some View {
         let all = account.localItems
@@ -135,9 +190,7 @@ struct LocalCollectionList: View {
                     LocalRow(item: item, card: catalog?.card(item.cardId, lang))
                 }
                 .listRowBackground(Theme.ink)
-                .swipeActions(edge: .trailing) {
-                    Button("Remove", role: .destructive) { account.removeLocally(item.id) }
-                }
+                .modifier(CopyActions(onEdit: { editing = item }, onDelete: { deleting = item }))
             }
         }
         .listStyle(.plain)
@@ -154,6 +207,17 @@ struct LocalCollectionList: View {
         .autocorrectionDisabled()
         .textInputAutocapitalization(.never)
         .lockedAlert($locked)
+        .sheet(item: $editing) { item in
+            EditCopySheet(title: catalog?.card(item.cardId, ShopTerms.appLang(item.language))?.name ?? item.label, binders: [], details: CopyDetails(item),
+                          onSave: { d in account.updateLocally(item.id, d); return nil },
+                          onDelete: { account.removeLocally(item.id); return nil })
+        }
+        .confirmationDialog(deleting.map { "Delete \($0.label)?" } ?? "", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                            titleVisibility: .visible, presenting: deleting) { item in
+            Button("Delete", role: .destructive) { account.removeLocally(item.id) }
+        } message: { item in
+            Text(copyLine(item.quantity, item.language, item.finish, item.condition, item.gradingCompany.map { "\($0) \(item.gradingGrade ?? "")" }) + " – it leaves the collection on this phone.")
+        }
     }
 }
 
@@ -168,7 +232,8 @@ struct LocalRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(card?.name ?? item.label).font(.body.weight(.semibold)).lineLimit(1)
                 if let card { Text("\(card.setName) · \(card.numberText)").font(.caption).foregroundStyle(Theme.muted).lineLimit(1) }
-                Text([item.language, ShopTerms.finishLabel(item.finish), item.condition].filter { !$0.isEmpty }.joined(separator: " · "))
+                Text([item.language, ShopTerms.finishLabel(item.finish), item.condition,
+                      item.gradingCompany.map { "\($0) \(item.gradingGrade ?? "")" } ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
                     .font(.caption).foregroundStyle(Theme.muted).lineLimit(1)
             }
             Spacer()

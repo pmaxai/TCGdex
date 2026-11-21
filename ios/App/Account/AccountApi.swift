@@ -137,6 +137,23 @@ final class AccountApi: @unchecked Sendable {
         return (o["items"] as? [JSON] ?? [], AccountStatus.str(o, "next_cursor"))
     }
 
+    /// Changes a copy: only the fields given (`null` clears an optional one); the shop's item comes back.
+    func updateItem(token: String, id: Int64, changes: JSON) async throws -> JSON {
+        try need(await call("PATCH", ["collection", "items", String(id)], token, changes))
+    }
+
+    /// Deletes a copy (204, also when it was gone already).
+    func deleteItem(token: String, id: Int64) async throws { _ = try await call("DELETE", ["collection", "items", String(id)], token) }
+
+    /// The collection's public link: `{ "public": {url, views, …} | null, "other_public": n }` (shop doc: sharing from the app).
+    func share(token: String) async throws -> JSON { try need(await call("GET", ["collection", "share"], token)) }
+
+    /// A public link of the whole collection with prices (the existing one if there is one); the same answer as share().
+    func makePublic(token: String) async throws -> JSON { try need(await call("POST", ["collection", "share"], token, ["show_prices": true])) }
+
+    /// Switches off every public link of the collection (personal ones sent by email stay).
+    func makePrivate(token: String) async throws { _ = try await call("DELETE", ["collection", "share"], token) }
+
     func binders(token: String) async throws -> [JSON] { try need(await call("GET", ["collection", "binders"], token))["binders"] as? [JSON] ?? [] }
 
     func wanted(token: String) async throws -> [JSON] { try need(await call("GET", ["wanted"], token))["items"] as? [JSON] ?? [] }

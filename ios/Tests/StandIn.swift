@@ -20,6 +20,9 @@ final class StandIn: URLProtocol {
         var collection: [[String: Any]] = []
         var devicesInStore = 0
         var emailVerified = false
+        /// the collection's public link (sharing from the app), and other public links made on the website
+        var publicShare: [String: Any]?
+        var otherPublic = 0
         init(id: String, email: String) { self.id = id; self.email = email }
     }
 
@@ -40,10 +43,12 @@ final class StandIn: URLProtocol {
     nonisolated(unsafe) static var pageSize: Int?
     /// what the server fills into a collection item per card id: name, set, number, value of a copy (cents)
     nonisolated(unsafe) static var cards: [String: (name: String, set: String, number: String, cents: Int)] = [:]
+    /// the website without sharing from the app yet: /collection/share answers like an unknown page (404, no JSON)
+    nonisolated(unsafe) static var shareMissing = false
 
     static func reset() {
         lock.lock(); defer { lock.unlock() }
-        accounts = [:]; tokens = [:]; calls = []; failNextReport = false; offline = false; nextId = 1; fullLineup = false; pageSize = nil; cards = [:]
+        accounts = [:]; tokens = [:]; calls = []; failNextReport = false; offline = false; nextId = 1; fullLineup = false; pageSize = nil; cards = [:]; shareMissing = false
     }
 
     static func session() -> URLSession {
@@ -229,7 +234,41 @@ final class StandIn: URLProtocol {
             let end = start + page.count
             return (200, ["items": page, "next_cursor": end < a.collection.count ? String(end) as Any : NSNull(),
                           "server_time": "2026-11-21T11:00:00.000Z"])
+        case ("GET", "/collection/share"):
+            if Self.shareMissing { return (404, nil) }
+            return (200, ["public": a.publicShare ?? NSNull(), "other_public": a.otherPublic])
+        case ("POST", "/collection/share"):
+            if Self.shareMissing { return (404, nil) }
+            if let share = a.publicShare { return (200, ["public": share, "other_public": a.otherPublic]) }
+            let share: [String: Any] = ["id": Self.nextId, "url": "https://overpricedcardboard.com/c/Ab\(Self.nextId)xQ7kLm2Zp9Rt4Vw",
+                                        "show_prices": body["show_prices"] as? Bool ?? true, "views": 0, "created_at": "2026-11-21T12:00:00.000Z"]
+            Self.nextId += 1
+            a.publicShare = share
+            return (201, ["public": share, "other_public": a.otherPublic])
+        case ("DELETE", "/collection/share"):
+            if Self.shareMissing { return (404, nil) }
+            a.publicShare = nil
+            a.otherPublic = 0
+            return (204, nil)
         default:
+            if p.hasPrefix("/collection/items/"), let id = Int(p.dropFirst("/collection/items/".count)) {
+                guard let i = a.collection.firstIndex(where: { ($0["id"] as? Int) == id }) else {
+                    return method == "DELETE" ? (204, nil) : err(404, "not_found")
+                }
+                if method == "DELETE" {
+                    a.collection.remove(at: i)
+                    return (204, nil)
+                }
+                if method == "PATCH" {
+                    var item = a.collection[i]
+                    for (k, v) in body where ["quantity", "language", "finish", "condition", "grading", "purchase_price_cents", "note", "binder_id"].contains(k) {
+                        item[k] = v
+                    }
+                    item["updated_at"] = "2026-11-21T13:00:00.000Z"
+                    a.collection[i] = item
+                    return (200, item)
+                }
+            }
             if method == "DELETE", p.hasPrefix("/wanted/"), let id = Int(p.dropFirst("/wanted/".count)) {
                 a.wanted.removeAll { ($0["id"] as? Int) == id }
                 return (204, nil)

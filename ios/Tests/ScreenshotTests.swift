@@ -246,6 +246,14 @@ final class ScreenshotTests: XCTestCase {
         await a.loadItems()
         try await shot("ios-collection", CollectionScreen(account: a, catalog: cat).environmentObject(a))
         try await shot("ios-missing", CollectionScreen(account: a, catalog: cat, start: .missing).environmentObject(a))
+        // a copy's Edit, and Share before and after the public link
+        let first = try XCTUnwrap(a.items?.first)
+        try await shot("ios-edit-copy", EditCopySheet(title: first.name, binders: [Binder(id: 1, name: "Trade binder")], details: CopyDetails(first),
+                                                      onSave: { _ in nil }, onDelete: { nil }))
+        try await shot("ios-share-private", ShareCollectionSheet(account: a))
+        let made = await a.makePublic()
+        XCTAssertNil(made)
+        try await shot("ios-share-public", ShareCollectionSheet(account: a))
         let card = try XCTUnwrap(cat.cardExact("sv08-059", "de"))
         try await shot("ios-search-card", NavigationStack { CardDetail(card: card) }.environmentObject(a))
         let bar = VStack(spacing: 0) {
