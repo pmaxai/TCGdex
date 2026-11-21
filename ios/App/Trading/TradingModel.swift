@@ -2,36 +2,31 @@ import Foundation
 import SwiftUI
 
 /**
- * Trading Mode (card shows), the Android app's trading part of ScannerViewModel: the card the
- * scanner shows with its market value for a condition, the vendor's price and a verdict, carts per
- * booth, trades (I give), shows with a budget, and the deal history.
+ * Carts and deals (card shows), in the Scanner: Add to cart prices a card for its condition (in the
+ * default price source) against the vendor's price, then carts per booth, trades (I give), shows
+ * with a budget, and the deal history.
  */
 @MainActor
 final class TradingModel: ObservableObject {
     @Published private(set) var book: TradingBook
-    /// the condition and the vendor's price for the card shown now
+    /// the Add to cart popup's condition and vendor's price
     @Published var condition: Condition = .NM
     @Published var asking: Double?
-    /// which side + Cart puts the next card on
+    /// which side Add to cart puts the card on (stays as chosen for the next card)
     @Published var side: Side = .GET
-    /// the last scanned cards (to bring one back)
-    @Published private(set) var tray: [Shown] = []
     @Published var message: String?
     /// a cart just paid whose cards could go into the collection
     @Published var offerCart: Int64?
-    @Published var reference: Reference { didSet { UserDefaults.standard.set(reference.rawValue, forKey: "trading.reference") } }
     @Published var startCondition: Condition { didSet { UserDefaults.standard.set(startCondition.rawValue, forKey: "trading.condition") } }
     /// what one tap on − / + beside a price changes it by (EUR)
     @Published var priceStep: Double { didSet { UserDefaults.standard.set(priceStep, forKey: "trading.step") } }
 
     private let store: TradingStore
-    static let traySize = 6
 
     init(store: TradingStore = TradingStore()) {
         self.store = store
         book = store.load()
         let d = UserDefaults.standard
-        reference = d.string(forKey: "trading.reference").flatMap(Reference.init(rawValue:)) ?? .TREND
         let start = d.string(forKey: "trading.condition").flatMap(Condition.init(rawValue:)) ?? .NM
         startCondition = start
         priceStep = d.object(forKey: "trading.step") != nil ? d.double(forKey: "trading.step") : 0.5
@@ -40,15 +35,14 @@ final class TradingModel: ObservableObject {
 
     static func now() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
 
-    /// A new card was shown: a fresh draft, and it goes into the tray.
-    func shown(_ s: Shown) {
+    /// Add to cart opens: a fresh draft (the start condition, no price yet).
+    func startDeal() {
         condition = startCondition
         asking = nil
-        if tray.last?.group != s.group { tray = Array((tray + [s]).suffix(Self.traySize)) }
-        else { tray[tray.count - 1] = s }
     }
 
-    func market(_ s: Shown) -> Double? { TradingMath.reference(s.selected, reference).map { TradingMath.market($0, condition) } }
+    /// the market value of a printing in the draft's condition
+    func market(_ p: Printing?) -> Double? { TradingMath.reference(p, PriceSource.current).map { TradingMath.market($0, condition) } }
 
     private func update(_ f: (TradingBook) -> TradingBook) {
         book = f(book)
@@ -59,12 +53,12 @@ final class TradingModel: ObservableObject {
         update { b in b.carts.first { $0.id == id }.map { b.replace(f($0)) } ?? b }
     }
 
-    /// + Cart (or + I give): the shown card in the active cart; the same card again counts up
-    func addToCart(_ s: Shown) {
+    /// Add to cart (I get or I give): the card in the active cart; the same card again counts up
+    func addToCart(_ s: DealCard) {
         let now = Self.now()
         var cartName = ""
-        let printing = s.selected.map { CartLine.code($0.kind) }
-        let ref = TradingMath.reference(s.selected, reference)
+        let printing = s.printing.map { CartLine.code($0.kind) }
+        let ref = TradingMath.reference(s.printing, PriceSource.current)
         let side = self.side, condition = self.condition, asking = self.asking
         update { b0 in
             let (b, cart) = b0.withActive(now: now)
@@ -75,7 +69,7 @@ final class TradingModel: ObservableObject {
                 lines[lines.count - 1].qty += 1
             } else {
                 lines.append(CartLine(id: now, cardId: s.version.id, lang: s.version.lang, group: s.group, name: s.version.name,
-                                      setLine: s.version.setLine(), image: s.imageCard?.thumbnailUrl, printing: printing, reference: ref,
+                                      setLine: s.version.setLine(), image: s.image, printing: printing, reference: ref,
                                       condition: condition, asking: asking, added: now, side: side,
                                       priceDoubt: ref != nil && s.priceCard.priceCheck != nil))
             }

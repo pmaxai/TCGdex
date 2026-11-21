@@ -23,109 +23,6 @@ extension SellVerdict {
 
 let giveBlue = Color(red: 0x6F / 255, green: 0xA8 / 255, blue: 0xFF / 255)
 
-/**
- * Trading Mode (card shows): scan a card, see its market value for its condition, type the vendor's
- * price for a verdict, collect cards per booth in a cart with the negotiated price.
- */
-struct TradingScreen: View {
-    @ObservedObject var scanner: ScannerModel
-    @ObservedObject var trading: TradingModel
-    @EnvironmentObject var account: AccountModel
-    @State private var cameraAllowed: Bool?
-    @State private var cartOpen = false
-    @State private var dealsOpen = false
-    @State private var showOpen = false
-    @State private var search = false
-    @State private var settingsOpen = false
-
-    var body: some View {
-        VStack(spacing: 0) {
-            topBar
-            ZStack(alignment: .top) {
-                if cameraAllowed == false {
-                    Text("Trading needs the camera.").foregroundStyle(.white).frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    CameraArea(model: scanner)
-                }
-                // which side + Cart puts the next card on: the vendor's cards, or yours for a trade or sale
-                Button { trading.side = trading.side == .GET ? .GIVE : .GET } label: {
-                    Text(trading.side == .GIVE ? "Scanning: I give ⇄" : "Scanning: I get ⇄")
-                        .font(.footnote.bold()).foregroundStyle(trading.side == .GIVE ? Theme.ink : .white)
-                        .padding(.horizontal, 12).padding(.vertical, 5)
-                        .background(trading.side == .GIVE ? giveBlue : Color.black.opacity(0.6), in: Capsule())
-                }
-                .padding(8)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 6) {
-                    if let s = scanner.shown {
-                        CardPrice(s: s, scanner: scanner, trading: trading, onSearch: { search = true })
-                    } else {
-                        Text("Show a card: its market value for its condition appears here. Type the vendor's price for a verdict, then + Cart. Not recognised? Double-tap the picture, or search.")
-                            .foregroundStyle(Theme.muted)
-                    }
-                    if trading.tray.count > 1 { Tray(scanner: scanner, trading: trading) }
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .background(Theme.ink)
-        .cameraLifecycle(model: scanner, allowed: $cameraAllowed)
-        .onChange(of: scanner.shown?.serial) { _, _ in if let s = scanner.shown { trading.shown(s) } }
-        .sheet(isPresented: $cartOpen) { CartSheet(trading: trading) }
-        .sheet(isPresented: $dealsOpen) { DealsSheet(trading: trading) }
-        .sheet(isPresented: $showOpen) { ShowSheet(trading: trading) }
-        .sheet(isPresented: $settingsOpen) { TradingSettingsView(trading: trading) }
-        .sheet(isPresented: $search) {
-            CardSearchSheet(resolver: scanner.resolver) { c in
-                search = false
-                if scanner.shown != nil { scanner.replaceWith(c) } else { scanner.lookUp(c) }
-            }
-        }
-        .sheet(item: Binding(get: { scanner.picks.map { PickSheet.Items(list: $0) } }, set: { if $0 == nil { scanner.closePicks() } })) { items in
-            PickSheet(list: items.list, shown: scanner.shown, onPick: scanner.pick(_:), onSearch: { scanner.closePicks(); search = true })
-                .presentationDetents([.medium, .large])
-        }
-        .alert("Add the cards to your collection?", isPresented: Binding(get: { trading.offerCart != nil }, set: { if !$0 { trading.offerCart = nil } })) {
-            Button("Add") { if let id = trading.offerCart { trading.addCartToCollection(id, account: account) } }
-            Button("Not now", role: .cancel) { trading.offerCart = nil }
-        } message: { Text("Each with its condition and the price you paid per copy.") }
-        .overlay(alignment: .bottom) {
-            if let m = trading.message {
-                Text(m).font(.footnote).foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 8)
-                    .background(.black.opacity(0.8), in: Capsule()).padding(.bottom, 12)
-                    .task(id: m) { try? await Task.sleep(nanoseconds: 1_800_000_000); trading.message = nil }
-            }
-        }
-    }
-
-    private var topBar: some View {
-        let b = trading.book
-        return VStack(spacing: 4) {
-            HStack(spacing: 10) {
-                Button { showOpen = true } label: {
-                    Text(b.show?.name ?? "Start a show").font(.footnote).lineLimit(1).foregroundStyle(b.show == nil ? Theme.muted : .white)
-                }
-                Spacer()
-                Button { cartOpen = true } label: {
-                    let c = b.active
-                    Label(c.map { "\($0.name) · \($0.cards) · \(Money.eur($0.payTotal))" } ?? "Cart", systemImage: "cart")
-                        .font(.footnote.bold()).lineLimit(1)
-                }
-                Button { dealsOpen = true } label: { Image(systemName: "clock.arrow.circlepath") }.accessibilityLabel("Deal history")
-                Button { settingsOpen = true } label: { Image(systemName: "gearshape") }.accessibilityLabel("Trading settings")
-            }
-            if let budget = b.show?.budget, budget > 0 { BudgetBar(book: b, budget: budget) }
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 10).padding(.vertical, 6)
-    }
-}
-
 /// The show's budget: spent, agreed, and what is left.
 struct BudgetBar: View {
     let book: TradingBook
@@ -184,111 +81,132 @@ struct PriceField: View {
     static func format(_ v: Double?) -> String { v.map { String(format: "%.2f", locale: .current, $0) } ?? "" }
 }
 
-/// The card shown, priced for its condition, with the vendor's price and the verdict.
-struct CardPrice: View {
-    let s: Shown
-    @ObservedObject var scanner: ScannerModel
+/// What the Add to cart popup prices: a scanned card, or one opened in the search.
+struct DealCard: Identifiable {
+    let id = UUID()
+    let version: CardInfo
+    let priceCard: CardInfo
+    let printing: Printing?
+    let group: String
+    let image: String?
+    let scan: UIImage?
+    let pricedFromEnglish: Bool
+
+    init(_ s: Shown) {
+        version = s.version; priceCard = s.priceCard; printing = s.selected; group = s.group
+        image = s.imageCard?.thumbnailUrl; scan = s.scan; pricedFromEnglish = s.pricedFromEnglish
+    }
+
+    /// a card opened in the search (priced from its English version when it has no price of its own)
+    init(card: CardInfo, priceCard: CardInfo, printing: Printing?) {
+        version = card; self.priceCard = priceCard; self.printing = printing; group = card.id
+        image = card.thumbnailUrl; scan = nil; pricedFromEnglish = priceCard.id != card.id || priceCard.lang != card.lang
+    }
+}
+
+/**
+ * Add to cart: the card priced for its condition (in the default price source), I get or I give,
+ * the vendor's price with the verdict and what to offer – then into the active cart.
+ */
+struct DealSheet: View {
+    let d: DealCard
     @ObservedObject var trading: TradingModel
-    let onSearch: () -> Void
-    @EnvironmentObject var account: AccountModel
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage(PriceSource.key) private var sourceName = PriceSource.cmTrend.rawValue
 
     var body: some View {
-        let p = s.selected
-        let ref = TradingMath.reference(p, trading.reference)
+        let source = PriceSource(rawValue: sourceName) ?? .cmTrend
+        let p = d.printing
+        let shown = p?.shown(source)
+        let ref = TradingMath.reference(p, source)
         let market = ref.map { TradingMath.market($0, trading.condition) }
         let give = trading.side == .GIVE
-        let check = s.priceCard.priceCheck
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top, spacing: 12) {
-                ShownPicture(s: s).frame(width: 84)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(s.version.name).font(.title2.bold()).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
-                    Text(s.version.setLine()).font(.footnote).foregroundStyle(Theme.muted).lineLimit(1).minimumScaleFactor(0.7)
-                    if let e = s.english { Text("English: \(e.name)").font(.caption).foregroundStyle(.white) }
-                    // condition: the camera can't judge it, so it's one tap here
+        let check = d.priceCard.priceCheck
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .top, spacing: 12) {
+                        CardPicture(card: d.version, fallback: d.scan).frame(width: 64)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(d.version.name).font(.title3.bold()).foregroundStyle(.white).lineLimit(2)
+                            Text(d.version.setLine()).font(.footnote).foregroundStyle(Theme.muted).lineLimit(1)
+                            if let p { Text(p.kind.rawValue).font(.footnote).foregroundStyle(.white) }
+                        }
+                    }
+                    Picker("Side", selection: $trading.side) {
+                        Text("I get · buy").tag(Side.GET)
+                        Text("I give · sell or trade").tag(Side.GIVE)
+                    }
+                    .pickerStyle(.segmented)
+                    Text("Condition").font(.caption).foregroundStyle(Theme.muted)
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 4) { ForEach(Condition.allCases) { c in Chip(text: c.label, selected: c == trading.condition) { trading.condition = c } } }
                     }
-                    .padding(.top, 4)
-                }
-            }
-            if s.priceCard.printings.count > 1 {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(s.priceCard.printings, id: \.kind) { pr in
-                            Chip(text: "\(pr.kind.rawValue) \(pr.priceText)", selected: pr.kind == p?.kind) { scanner.choosePrinting(pr.kind) }
+                    // market value for this condition, and where it comes from
+                    if let market, let ref, let shown {
+                        Text(Money.eur(market)).font(.system(size: 30, weight: .black)).foregroundStyle(Theme.gold)
+                        Text("market value · \(trading.condition.label) = \(Int(trading.condition.share * 100)) % of the \(shown.source.label) \(Money.eur(ref))")
+                            .font(.caption2).foregroundStyle(Theme.muted)
+                    } else {
+                        Text(check?.status == .dropped ? "No reliable price to judge by" : "No price to judge by").font(.subheadline.bold()).foregroundStyle(Theme.warn)
+                    }
+                    // warnings: a thin price is not to be trusted blindly
+                    let warnings = [check?.message, TradingMath.fewSales(p) ? "Few sales – check Cardmarket before you pay" : nil,
+                                    d.pricedFromEnglish ? "Price of the English version (none for this language)" : nil, ageWarning].compactMap { $0 }
+                    ForEach(warnings, id: \.self) { w in Text("⚠ \(w)").font(.caption).foregroundStyle(Theme.warn) }
+
+                    // the vendor's price and the verdict (your own card: the vendor's offer for it)
+                    HStack {
+                        Text(give ? "Vendor's offer for your card" : "Asking price").font(.caption).foregroundStyle(Theme.muted)
+                        Spacer()
+                        if let badge = badge(market: market, give: give, doubt: check != nil) {
+                            Text(badge.0).font(.subheadline.bold()).foregroundStyle(Theme.ink)
+                                .padding(.horizontal, 10).padding(.vertical, 4).background(badge.1, in: RoundedRectangle(cornerRadius: 8))
                         }
                     }
-                }
-            }
-            // market value for this condition, and where it comes from
-            if let market, let ref {
-                HStack(alignment: .lastTextBaseline, spacing: 10) {
-                    Text(Money.eur(market)).font(.system(size: 30, weight: .black)).foregroundStyle(Theme.gold)
-                    if let t = TradingMath.trend(p), abs(t) >= 0.005 {
-                        Text("\(t > 0 ? "▲" : "▼") \(Int((abs(t) * 100).rounded())) % vs 30 days").font(.footnote).foregroundStyle(t > 0 ? Theme.sure : Theme.warn)
+                    .padding(.top, 4)
+                    PriceField(title: give ? "Type the vendor's offer" : "Type the asking price", value: $trading.asking, step: trading.priceStep,
+                               tint: give ? giveBlue : Theme.muted.opacity(0.4))
+                    if let market {
+                        let pct = trading.asking.map { " · \(give ? "offer" : "asking") = \(Int(($0 / market * 100).rounded())) % of market" } ?? ""
+                        if give {
+                            let (lo, hi) = TradingMath.sellRange(market)
+                            let rate = trading.book.active.flatMap { $0.isTrade ? $0.giveRate : nil } ?? TradingMath.giveRate
+                            Text("Vendors usually pay \(Money.eur(lo)) – \(Money.eur(hi)) · in a trade at \(Int((rate * 100).rounded())) %: \(Money.eur(TradingMath.round2(market * rate)))\(pct)")
+                                .font(.caption).foregroundStyle(Theme.muted)
+                        } else {
+                            Text("Offer \(Money.eur(TradingMath.offer(market))) · walk away above \(Money.eur(TradingMath.walkAway(market)))\(pct)")
+                                .font(.caption).foregroundStyle(Theme.muted)
+                        }
                     }
+                    if let budget = trading.book.show?.budget, budget > 0 { BudgetBar(book: trading.book, budget: budget).padding(.top, 6) }
                 }
-                Text("market value · \(trading.condition.label) = \(Int(trading.condition.share * 100)) % of the \(trading.reference.label.lowercased()) \(Money.eur(ref))")
-                    .font(.caption2).foregroundStyle(Theme.muted)
-            } else {
-                let head = check?.status == .dropped ? "No reliable Cardmarket price" : "No Cardmarket price"
-                Text(head + (p?.usd.map { " · TCGplayer \(Money.usd($0))" + (p?.usdEur.map { " ≈ \(Money.eur($0))" } ?? "") } ?? ""))
-                    .font(.subheadline.bold()).foregroundStyle(Theme.warn)
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            let parts = [p?.eur.map { "trend \(Money.eur($0))" }, p?.eur30.map { "30-day \(Money.eur($0))" }, p?.eurLow.map { "from \(Money.eur($0))" },
-                         market != nil ? p?.usd.map { "TCGplayer \(Money.usd($0))" } : nil].compactMap { $0 }
-            if !parts.isEmpty { Text(parts.joined(separator: " · ")).font(.caption).foregroundStyle(.white) }
-            // warnings: a thin price is not to be trusted blindly
-            let warnings = [check?.message, TradingMath.fewSales(p) ? "Few sales – check Cardmarket before you pay" : nil,
-                            s.pricedFromEnglish ? "Price of the English version (none for this language)" : nil, ageWarning].compactMap { $0 }
-            ForEach(warnings, id: \.self) { w in Text("⚠ \(w)").font(.caption).foregroundStyle(Theme.warn) }
-
-            // the vendor's price and the verdict (your own card: the vendor's offer for it)
-            HStack {
-                Text(give ? "Vendor's offer for your card" : "Asking price").font(.caption).foregroundStyle(Theme.muted)
-                Spacer()
-                if let badge = badge(market: market, give: give, doubt: check != nil) {
-                    Text(badge.0).font(.subheadline.bold()).foregroundStyle(Theme.ink)
-                        .padding(.horizontal, 10).padding(.vertical, 4).background(badge.1, in: RoundedRectangle(cornerRadius: 8))
+            .background(Theme.ink)
+            .navigationTitle("Add to cart")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .safeAreaInset(edge: .bottom) {
+                Button {
+                    trading.addToCart(d)
+                    dismiss()
+                } label: {
+                    Text((give ? "Add to I give" : "Add to cart") + " · " + (trading.book.active?.name ?? "new cart"))
+                        .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(give ? giveBlue : Theme.gold)
+                .foregroundStyle(Theme.ink)
+                .padding(.horizontal, 16).padding(.vertical, 8)
+                .background(Theme.ink)
             }
-            .padding(.top, 4)
-            PriceField(title: give ? "Type the vendor's offer" : "Type the asking price", value: $trading.asking, step: trading.priceStep,
-                       tint: give ? giveBlue : Theme.muted.opacity(0.4))
-                .id(s.serial)
-            if let market {
-                let pct = trading.asking.map { " · \(give ? "offer" : "asking") = \(Int(($0 / market * 100).rounded())) % of market" } ?? ""
-                if give {
-                    let (lo, hi) = TradingMath.sellRange(market)
-                    let rate = trading.book.active.flatMap { $0.isTrade ? $0.giveRate : nil } ?? TradingMath.giveRate
-                    Text("Vendors usually pay \(Money.eur(lo)) – \(Money.eur(hi)) · in a trade at \(Int((rate * 100).rounded())) %: \(Money.eur(TradingMath.round2(market * rate)))\(pct)")
-                        .font(.caption).foregroundStyle(Theme.muted)
-                } else {
-                    Text("Offer \(Money.eur(TradingMath.offer(market))) · walk away above \(Money.eur(TradingMath.walkAway(market)))\(pct)")
-                        .font(.caption).foregroundStyle(Theme.muted)
-                }
-            }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    Text("Not this card?").font(.caption).foregroundStyle(Theme.muted)
-                    if !s.fromSearch { ForEach(s.alternatives) { alt in Chip(text: alt.info.name, selected: false) { scanner.choose(alt) } } }
-                    Chip(text: "🔍 Search…", selected: false, action: onSearch)
-                }
-            }
-            Button { trading.addToCart(s) } label: {
-                Text((give ? "+ I give" : "+ Cart") + (trading.book.active.map { " (\($0.name))" } ?? "")).font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(give ? giveBlue : Theme.gold)
-            .foregroundStyle(Theme.ink)
-            .padding(.top, 4)
-            if !give { CollectionBar(account: account, s: s, condition: trading.condition.rawValue) }
         }
     }
 
     private var ageWarning: String? {
-        guard let d = s.priceCard.prices?.updated, let date = ISO8601DateFormatter().date(from: d) ?? Self.day.date(from: String(d.prefix(10))) else { return nil }
+        guard let u = d.priceCard.prices?.updated, let date = ISO8601DateFormatter().date(from: u) ?? Self.day.date(from: String(u.prefix(10))) else { return nil }
         let days = Int(Date().timeIntervalSince(date) / 86_400)
         return days > 3 ? "Prices are \(days) days old – update the app before a show" : nil
     }
@@ -297,36 +215,9 @@ struct CardPrice: View {
 
     private func badge(market: Double?, give: Bool, doubt: Bool) -> (String, Color)? {
         guard let a = trading.asking, let market else { return nil }
-        if doubt { return ("Check price", Theme.muted) }          // no deal verdict on a doubtful Cardmarket price
+        if doubt { return ("Check price", Theme.muted) }          // no deal verdict on a doubtful price
         if give { return TradingMath.sellVerdict(a, market).map { ($0.label, $0.color) } }
         return TradingMath.verdict(a, market).map { ($0.label, $0.color) }
-    }
-}
-
-/// The last scanned cards; tap one to bring it back.
-struct Tray: View {
-    @ObservedObject var scanner: ScannerModel
-    @ObservedObject var trading: TradingModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Last scans").font(.caption).foregroundStyle(Theme.muted)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(trading.tray.reversed(), id: \.serial) { item in
-                        Button { scanner.show(item) } label: {
-                            VStack(spacing: 2) {
-                                ShownPicture(s: item).frame(width: 48)
-                                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(item.serial == scanner.shown?.serial ? Theme.gold : .clear, lineWidth: 2))
-                                Text(item.version.name).font(.system(size: 10)).foregroundStyle(.white).lineLimit(1).frame(width: 52)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        }
-        .padding(.top, 10)
     }
 }
 
@@ -342,14 +233,20 @@ struct CartSheet: View {
     @State private var agreeing = false
     @State private var total: Double?
     @State private var cashText: Double?
+    @State private var dealsOpen = false
+    @State private var showOpen = false
 
     var body: some View {
         NavigationStack {
             let book = trading.book
+            Group {
             if let c = book.active {
                 List {
+                    if let budget = book.show?.budget, budget > 0 {
+                        Section(book.show?.name ?? "Show") { BudgetBar(book: book, budget: budget) }
+                    }
                     if c.lines.isEmpty {
-                        Text("Nothing in this cart yet. Scan a card and tap + Cart. For a trade, switch the camera's target to \"I give\" and scan your cards.")
+                        Text("Nothing in this cart yet. Scan a card and tap Add to cart. For a trade, choose I give there and add your cards.")
                             .foregroundStyle(Theme.muted)
                     }
                     if !c.getLines.isEmpty || c.isTrade {
@@ -361,7 +258,7 @@ struct CartSheet: View {
                         Section("I give · \(c.giveCards) · \(Money.eur(c.giveValue)) (market \(Money.eur(c.marketGive)))") {
                             ForEach(c.lines.filter { $0.side == .GIVE && $0.active }) { l in LineRow(l: l).onTapGesture { editing = l } }
                             if c.giveLines.isEmpty {
-                                Text("Switch the camera's target to \"I give\" (top of the picture) and scan your cards.").font(.footnote).foregroundStyle(Theme.muted)
+                                Text("Scan your cards, tap Add to cart and choose I give.").font(.footnote).foregroundStyle(Theme.muted)
                             }
                         }
                     }
@@ -410,7 +307,6 @@ struct CartSheet: View {
                 }
                 .navigationTitle(c.name)
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Close") { dismiss() } } }
                 .sheet(item: $editing) { l in LineEditor(trading: trading, cartId: c.id, line: l) }
                 .alert("Name of this cart", isPresented: $renaming) {
                     TextField("e.g. Max, table 14", text: $name)
@@ -445,11 +341,24 @@ struct CartSheet: View {
             } else {
                 VStack(spacing: 12) {
                     Text("No cart yet").font(.title3.bold())
-                    Text("Scan a card and tap + Cart.").foregroundStyle(Theme.muted)
+                    Text("Scan a card and tap Add to cart.").foregroundStyle(Theme.muted)
                     Button("New cart") { trading.newCart() }.buttonStyle(.bordered)
                 }
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Close") { dismiss() } } }
             }
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        Button { dealsOpen = true } label: { Label("Deal history", systemImage: "clock.arrow.circlepath") }
+                        Button { showOpen = true } label: { Label(book.show.map { "Show: \($0.name)" } ?? "Show & budget…", systemImage: "calendar") }
+                        Button { trading.newCart() } label: { Label("New cart (next booth)", systemImage: "cart.badge.plus") }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .accessibilityLabel("Deals, show and carts")
+                }
+                ToolbarItem(placement: .confirmationAction) { Button("Close") { dismiss() } }
+            }
+            .sheet(isPresented: $dealsOpen) { DealsSheet(trading: trading) }
+            .sheet(isPresented: $showOpen) { ShowSheet(trading: trading) }
         }
     }
 }
@@ -628,26 +537,20 @@ struct DealsSheet: View {
 }
 
 /// Trading's settings: which Cardmarket price the market value starts from, the start condition, the price step.
-struct TradingSettingsView: View {
+/// Settings › Trading (the market value comes from the default price source, Settings › Prices).
+struct TradingSettingsForm: View {
     @ObservedObject var trading: TradingModel
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Picker("Market value from", selection: $trading.reference) { ForEach(Reference.allCases) { Text($0.label).tag($0) } }
-                Picker("A new card starts as", selection: $trading.startCondition) { ForEach(Condition.allCases) { Text($0.label).tag($0) } }
-                Picker("− / + changes a price by", selection: $trading.priceStep) {
-                    ForEach([0.1, 0.5, 1.0, 5.0], id: \.self) { Text(Money.eur($0)).tag($0) }
-                }
-                Section {
-                    Text("Conditions count as Cardmarket's scale: NM 100 %, EX 85 %, GD 75 %, LP 65 %, PL 50 %, PO 30 % of the price. Verdicts: up to 80 % of the market value a great deal, 95 % good, 110 % fair, above that expensive.")
-                        .font(.footnote).foregroundStyle(Theme.muted)
-                }
+        Form {
+            Picker("A new card starts as", selection: $trading.startCondition) { ForEach(Condition.allCases) { Text($0.label).tag($0) } }
+            Picker("− / + changes a price by", selection: $trading.priceStep) {
+                ForEach([0.1, 0.5, 1.0, 5.0], id: \.self) { Text(Money.eur($0)).tag($0) }
             }
-            .navigationTitle("Trading")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            Section {
+                Text("The market value is the default price (Settings › Prices) for the card's condition. Conditions count as Cardmarket's scale: NM 100 %, EX 85 %, GD 75 %, LP 65 %, PL 50 %, PO 30 % of the price. Verdicts: up to 80 % of the market value a great deal, 95 % good, 110 % fair, above that expensive.")
+                    .font(.footnote).foregroundStyle(Theme.muted)
+            }
         }
     }
 }

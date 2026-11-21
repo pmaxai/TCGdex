@@ -59,10 +59,37 @@ struct PlanOffer: Equatable, Identifiable {
     var allProductIds: [String] { Array(productIds.values) + deviceProductIds.values.flatMap { $0 } }
 }
 
+/**
+ * An add-on on sale (`GET /store/offers` › `addons`): price data on top of a plan (PSA prices now;
+ * eBay listings and more later), each its own App Store subscription group, so it runs beside the plan.
+ */
+struct AddonOffer: Equatable, Identifiable {
+    /// "psa_prices"
+    let id: String
+    let name: String
+    /// what it unlocks in the status's features (the add-on's id when the shop gives none)
+    let feature: String
+    /// the plans it can be added to (empty: any)
+    let plans: [String]
+    /// "monthly" → the App Store product id
+    let productIds: [String: String]
+
+    static func parse(_ list: [JSON]) -> [AddonOffer] {
+        list.compactMap { o in
+            guard let id = AccountStatus.str(o, "id") else { return nil }
+            var ids: [String: String] = [:]
+            if let p = (o["apple"] as? JSON)?["product_ids"] as? JSON { for (k, v) in p { if let s = v as? String, !s.isEmpty { ids[k] = s } } }
+            return AddonOffer(id: id, name: AccountStatus.str(o, "name") ?? id, feature: AccountStatus.str(o, "feature") ?? id,
+                              plans: (o["plans"] as? [Any])?.compactMap { $0 as? String } ?? [], productIds: ids)
+        }
+    }
+}
+
 /// What a feature is called on the plans.
 func featureLabel(_ f: String) -> String {
-    ["scanner": "Card scanner with prices", "trading": "Trading mode for card shows", "collection": "Your collection",
-     "wanted": "Missing cards list", "youtube": "YouTube mode", "recording": "Recording and upload", "webshop": "Webshop mode"][f] ?? f
+    ["scanner": "Card scanner with prices", "trading": "Carts and deals for card shows", "collection": "Your collection",
+     "wanted": "Missing cards list", "youtube": "YouTube mode", "recording": "Recording and upload", "webshop": "Webshop mode",
+     "psa_prices": "PSA prices (add-on)"][f] ?? f
 }
 
 /**
@@ -75,6 +102,8 @@ func featureLabel(_ f: String) -> String {
 @MainActor
 final class StoreModel: ObservableObject {
     @Published private(set) var offers: [PlanOffer] = []
+    /// price data add-ons on sale (PSA prices)
+    @Published private(set) var addons: [AddonOffer] = []
     /// what the App Store sells of them: product id → price and period
     @Published private(set) var products: [String: StoreProduct] = [:]
     @Published private(set) var loading = false
@@ -156,9 +185,11 @@ final class StoreModel: ObservableObject {
         do {
             let o = try await api.offers(token: token)
             let list = PlanOffer.parse(o["offers"] as? [JSON] ?? [])
-            let ids = list.flatMap(\.allProductIds)
+            let extras = AddonOffer.parse(o["addons"] as? [JSON] ?? [])
+            let ids = list.flatMap(\.allProductIds) + extras.flatMap { $0.productIds.values }
             let prices = ids.isEmpty ? [:] : ((try? await billing.products(ids)) ?? [:])
             offers = list
+            addons = extras
             products = prices
             affiliate = Affiliate.parse(o["affiliate"] as? JSON)
         } catch let e as AccountError {
@@ -201,6 +232,32 @@ final class StoreModel: ObservableObject {
         guard want <= list.count else { error = "No more extra devices in the app."; return }
         let product = list[want - 1]
         guard products[product] != nil else { error = "The App Store doesn't sell the extra devices right now."; return }
+        purchase(product, ref)
+    }
+
+    // ---------------------------------------------------------------- add-ons
+    /// an add-on's price for a period, nil when the App Store doesn't sell it
+    func price(_ addon: AddonOffer, _ period: String) -> StoreProduct? { addon.productIds[period].flatMap { products[$0] } }
+
+    /// the add-on as the account has it (nil: never had it)
+    func state(_ addon: AddonOffer) -> AddonState? { status?.addons[addon.id] }
+
+    /// why the add-on can't be bought now (nil: it can)
+    func addonBlocked(_ addon: AddonOffer) -> String? {
+        guard let st = status, st.active else { return "\(addon.name) is an add-on for a running plan – choose a plan first." }
+        if !addon.plans.isEmpty, !addon.plans.contains(st.plan ?? "") {
+            let names = addon.plans.map { AccountStatus.displayName(plan: $0) }
+            return "\(addon.name) is an add-on for \(names.joined(separator: " and "))."
+        }
+        if state(addon)?.running == true { return "\(addon.name) is already running." }
+        return nil
+    }
+
+    /// Buy an add-on for a period ("monthly", "yearly"): its own App Store subscription beside the plan.
+    func buyAddon(_ addon: AddonOffer, _ period: String) {
+        if let why = addonBlocked(addon) { error = why; return }
+        guard let ref = status?.storeRef.flatMap(UUID.init(uuidString:)) else { error = "The account has no store reference yet. Check again."; return }
+        guard let product = addon.productIds[period], products[product] != nil else { error = "The App Store doesn't sell \(addon.name) right now."; return }
         purchase(product, ref)
     }
 

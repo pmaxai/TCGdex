@@ -50,7 +50,7 @@ struct CollectionScreen: View {
             .navigationTitle(shown == .collection ? "Collection" : "Missing cards")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: CardKey.self) { k in
-                if let card = catalog?.card(k.id, k.lang) { CardDetail(card: card) }
+                if let card = catalog?.card(k.id, k.lang) { CardDetail(card: card, catalog: catalog) }
             }
             .toolbar {
                 // a public link for friends (the free version: shown locked)

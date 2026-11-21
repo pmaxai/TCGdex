@@ -23,7 +23,9 @@ struct SearchView: View {
             .navigationTitle("Search")
             .navigationDestination(for: String.self) { key in
                 let parts = key.split(separator: "/", maxSplits: 1).map(String.init)
-                if parts.count == 2, let card = model.catalog?.cardExact(parts[0], parts[1]) { CardDetail(card: card) }
+                if parts.count == 2, let card = model.catalog?.cardExact(parts[0], parts[1]) {
+                    CardDetail(card: card, catalog: model.catalog, trading: model.trading)
+                }
             }
         }
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Card name, number or set")

@@ -25,16 +25,24 @@ final class TradingTests: XCTestCase {
 
     func testMarketValueFollowsConditionAndReference() {
         let p = Printing(kind: .normal, eur: 61.18, eur30: 50, eurLow: 20, usd: 70)
-        XCTAssertEqual(TradingMath.reference(p, .TREND)!, 61.18, accuracy: 1e-9)
-        XCTAssertEqual(TradingMath.reference(p, .AVG30)!, 50, accuracy: 1e-9)
-        XCTAssertEqual(TradingMath.reference(p, .LOW)!, 20, accuracy: 1e-9)
+        XCTAssertEqual(TradingMath.reference(p, .cmTrend)!, 61.18, accuracy: 1e-9)
+        XCTAssertEqual(TradingMath.reference(p, .cmAvg30)!, 50, accuracy: 1e-9)
+        XCTAssertEqual(TradingMath.reference(p, .cmLow)!, 20, accuracy: 1e-9)
+        // no average sell price: the next source with one (the trend)
+        XCTAssertEqual(TradingMath.reference(p, .cmAvg)!, 61.18, accuracy: 1e-9)
         XCTAssertEqual(TradingMath.market(61.18, .EX), 52, accuracy: 1e-9)
         XCTAssertEqual(TradingMath.market(61.18, .PO), 18.35, accuracy: 1e-9)
         XCTAssertEqual(TradingMath.trend(p)!, 0.2236, accuracy: 1e-4)
         XCTAssertTrue(TradingMath.fewSales(p), "lowest under half the trend")
         var q = p; q.eurLow = 40
         XCTAssertFalse(TradingMath.fewSales(q))
-        XCTAssertNil(TradingMath.reference(Printing(kind: .normal, eur: nil, eur30: nil, eurLow: nil, usd: 70), .TREND))
+        // only USD and no rate: no market value in EUR
+        XCTAssertNil(TradingMath.reference(Printing(kind: .normal, eur: nil, eur30: nil, eurLow: nil, usd: 70), .cmTrend))
+        // TCGplayer as the default: its market price in EUR at the pack's rate
+        var t = Printing(kind: .normal, eur: 61.18, eur30: 50, eurLow: 20, usd: nil)
+        t.sourced = true; t.cmTrend = 61.18; t.tcgMarket = 80; t.usdPerEur = 1.25
+        XCTAssertEqual(TradingMath.reference(t, .tcgMarket)!, 64, accuracy: 1e-9)
+        XCTAssertEqual(t.shown(.tcgMid)?.source, .cmTrend, "no mid price: the fallback order")
     }
 
     private func line(_ id: Int64, _ name: String, _ ref: Double, _ c: Condition, _ asking: Double?, _ negotiated: Double?,

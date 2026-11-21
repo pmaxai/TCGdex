@@ -38,11 +38,16 @@ struct AccountStatus {
     var devicesOnWeb = 0
     /// monthly or yearly (nil: not known, or given by the shop)
     var basePlan: String?
+    /// the add-ons the account has (`addons`), by id; what they unlock is in `features` (psa_prices)
+    var addons: [String: AddonState] = [:]
 
     /// a feature the server unlocked (an inactive answer unlocks nothing)
     func has(_ feature: String) -> Bool { active && features[feature] == true }
 
-    var planName: String {
+    var planName: String { Self.displayName(plan: plan) }
+
+    /// "Collector" for collector
+    static func displayName(plan: String?) -> String {
         switch plan {
         case "collector": return "Collector"
         case "creator": return "Creator"
@@ -86,7 +91,8 @@ struct AccountStatus {
             none: o["status"] as? String == "none", storeRef: str(acc, "store_ref"),
             emailVerified: (acc["email_verified"] as? Bool) ?? true,
             source: str(sub, "source"), manageUrl: str(sub, "manage_url"),
-            devicesInStore: int(dev, "in_store", 0), devicesOnWeb: int(dev, "on_web", 0), basePlan: str(sub, "base_plan"))
+            devicesInStore: int(dev, "in_store", 0), devicesOnWeb: int(dev, "on_web", 0), basePlan: str(sub, "base_plan"),
+            addons: Dictionary((o["addons"] as? [JSON] ?? []).compactMap(AddonState.parse).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }))
     }
 
     static func str(_ o: JSON, _ k: String) -> String? {
@@ -105,6 +111,37 @@ struct AccountStatus {
     }
 
     static func day(_ d: Date) -> String { d.formatted(date: .abbreviated, time: .omitted) }
+}
+
+/// An add-on of the account (PSA prices): running or not, where it is billed, until when.
+struct AddonState: Equatable {
+    let id: String
+    /// active, canceled (runs until endsAt), complimentary, ended
+    let state: String?
+    /// app_store, google_play, web
+    let source: String?
+    let basePlan: String?
+    let renewsAt: Date?
+    let endsAt: Date?
+
+    var running: Bool { state == "active" || state == "canceled" || state == "complimentary" }
+
+    /// "renews on 15 Dec 2026", "ends on …"
+    var stateText: String {
+        switch state {
+        case "active": return renewsAt.map { "renews on \(AccountStatus.day($0))" } ?? "active"
+        case "canceled": return endsAt.map { "ends on \(AccountStatus.day($0))" } ?? "cancelled"
+        case "complimentary": return "given by the shop" + (endsAt.map { " until \(AccountStatus.day($0))" } ?? "")
+        case "ended": return "ended"
+        default: return state ?? "–"
+        }
+    }
+
+    static func parse(_ o: JSON) -> AddonState? {
+        guard let id = AccountStatus.str(o, "id") else { return nil }
+        return AddonState(id: id, state: AccountStatus.str(o, "state"), source: AccountStatus.str(o, "source"),
+                          basePlan: AccountStatus.str(o, "base_plan"), renewsAt: AccountStatus.time(o, "renews_at"), endsAt: AccountStatus.time(o, "ends_at"))
+    }
 }
 
 /// What the app may do right now.

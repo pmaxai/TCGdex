@@ -24,8 +24,8 @@ extension CardInfo {
 }
 
 extension Printing {
-    /// what a printing chip shows: Cardmarket, else TCGplayer
-    var priceText: String { eur != nil ? Money.eur(eur) : Money.usd(usd) }
+    /// the default price source's price (or the next one with a price)
+    var priceText: String { shown(PriceSource.current)?.text ?? "–" }
 }
 
 enum Money {

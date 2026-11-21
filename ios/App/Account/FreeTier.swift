@@ -145,20 +145,21 @@ extension AccountModel {
 
 /// A feature the free version shows but doesn't include.
 enum LockedFeature: String, Identifiable {
-    case search, trading, missing, photo, alert, collectionFull, values, share
+    case search, trading, missing, photo, alert, collectionFull, values, share, psa
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .search: return "Search needs a subscription"
-        case .trading: return "Trading Mode needs a subscription"
+        case .trading: return "Carts and deals need a subscription"
         case .missing: return "Missing cards need a subscription"
         case .photo: return "Scanning photos needs a subscription"
         case .alert: return "Price alerts need a subscription"
         case .collectionFull: return "The free collection is full"
         case .values: return "Collection values need a subscription"
         case .share: return "Sharing needs a subscription"
+        case .psa: return "PSA prices are an add-on"
         }
     }
 
@@ -172,21 +173,29 @@ enum LockedFeature: String, Identifiable {
         case .collectionFull: return "The free version keeps \(AccountModel.freeMaxCards) different cards on this phone. With a subscription your collection has no limit, is saved in your account, and these cards move into it."
         case .values: return "See what each card and your whole collection is worth."
         case .share: return "Send friends a link to your collection – they see your cards and what they're worth."
+        case .psa: return "What PSA 10, 9 and 8 copies of a card sold for on eBay – an add-on for Collector and Creator, monthly or yearly."
         }
     }
+
+    /// the alert's way forward: the plans, or (an add-on) the price data page
+    var isAddon: Bool { self == .psa }
 }
 
 extension Notification.Name {
-    /// a locked feature's "See the plans": the Account tab with sign-in and the plans
+    /// a locked feature's "See the plans": Settings › Account with sign-in and the plans
     static let showPlans = Notification.Name("showPlans")
+    /// a locked add-on's "See the add-on": Settings › Price data
+    static let showAddons = Notification.Name("showAddons")
 }
 
 extension View {
     /// The alert of a locked feature: what it does, and the way to the plans.
     func lockedAlert(_ feature: Binding<LockedFeature?>) -> some View {
         alert(feature.wrappedValue?.title ?? "", isPresented: Binding(get: { feature.wrappedValue != nil }, set: { if !$0 { feature.wrappedValue = nil } }),
-              presenting: feature.wrappedValue) { _ in
-            Button("See the plans") { NotificationCenter.default.post(name: .showPlans, object: nil) }
+              presenting: feature.wrappedValue) { f in
+            Button(f.isAddon ? "See the add-on" : "See the plans") {
+                NotificationCenter.default.post(name: f.isAddon ? .showAddons : .showPlans, object: nil)
+            }
             Button("Not now", role: .cancel) {}
         } message: { f in Text(f.text) }
     }
@@ -243,14 +252,14 @@ struct RevealPrice: View {
     }
 }
 
-/// The Account tab in the free version, above the sign-in or the plans: what Free includes and what a plan adds.
+/// Settings › Account in the free version, above the sign-in or the plans: what Free includes and what a plan adds.
 struct FreeNote: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Free version").font(.headline).foregroundStyle(Theme.gold)
             Label("Scanner: scan as many cards as you like, \(AccountModel.freeRevealsPerHour) prices per hour", systemImage: "checkmark")
             Label("A collection of \(AccountModel.freeMaxCards) cards on this phone", systemImage: "checkmark")
-            Label("Search, Trading Mode, missing cards, photo scans, price alerts and collection values come with a plan", systemImage: "lock")
+            Label("Search, carts and deals, missing cards, photo scans, price alerts and collection values come with a plan; PSA prices as an add-on", systemImage: "lock")
             Text("Sign in and choose a plan for everything; your cards move into your account's collection.")
                 .font(.caption).foregroundStyle(Theme.muted).padding(.top, 2)
         }

@@ -1,11 +1,13 @@
 import Charts
 import SwiftUI
 
-/// The card the scanner shows: name, set, printings with their prices, PSA, other versions, alternatives.
+/// The card the scanner shows: name, set, printings with their prices, PSA, other versions, alternatives, Add to cart.
 struct ResultCard: View {
     let s: Shown
     @ObservedObject var model: ScannerModel
     let onSearch: () -> Void
+    /// Add to cart: the popup that prices the card for a deal
+    var onAddToCart: () -> Void = {}
     @EnvironmentObject var account: AccountModel
     @State private var fullscreen = false
     @State private var locked: LockedFeature?
@@ -53,17 +55,15 @@ struct ResultCard: View {
                 Text("Printed in \(name) – this print isn't in the card data; shown: \(shownText)").font(.caption).foregroundStyle(Theme.warn)
             }
 
-            if priced { PriceBlock(s: s) } else { RevealPrice(account: account, cardId: s.priceCard.id) }
+            if priced {
+                PriceBlock(p: s.selected, card: s.priceCard, pricedFromEnglish: s.pricedFromEnglish)
+            } else {
+                RevealPrice(account: account, cardId: s.priceCard.id)
+            }
             CollectionBar(account: account, s: s)
             if priced, let h = s.history { PriceHistoryChart(history: h, printing: s.selected?.kind, hasNormal: s.priceCard.printings.contains { $0.kind == .normal }) }
-            if model.settings.showPsa {
-                let printing = s.priceCard.printings.count > 1 ? s.selected?.kind : nil
-                if priced, let g = s.graded { PsaLine(g: g, printing: printing) }
-                if let p = s.population { GemLine(p: p) }
-                if s.gradedOnlyOtherPrintings, let printing {
-                    Text("No PSA sales for the \(printing.rawValue.lowercased()) yet").font(.caption).foregroundStyle(Theme.muted)
-                }
-            }
+            PsaSection(account: account, graded: s.graded, population: s.population,
+                       printing: s.priceCard.printings.count > 1 ? s.selected?.kind : nil, onlyOtherPrintings: s.gradedOnlyOtherPrintings)
 
             let others = s.versions.filter { $0.id != s.version.id || $0.lang != s.version.lang }
             if !others.isEmpty {
@@ -81,15 +81,18 @@ struct ResultCard: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(s.alternatives) { alt in
-                            Chip(text: "\(alt.info.name) \(alt.info.numberText)" + (account.isFree ? "" : " · \(Money.eur(alt.info.bestValue))"), selected: false) { model.choose(alt) }
+                            Chip(text: "\(alt.info.name) \(alt.info.numberText)" + (account.isFree ? "" : " · \(alt.info.bestPriceText)"), selected: false) { model.choose(alt) }
                         }
                         Chip(text: account.isFree ? "🔒 Search…" : "🔍 Search…", selected: false) { if account.isFree { locked = .search } else { onSearch() } }
                     }
                 }
             }
-            HStack(spacing: 8) {
-                Button("Next card") { model.next() }.buttonStyle(.borderedProminent).foregroundStyle(Theme.ink)
-                Link("Cardmarket", destination: cardmarketUrl).buttonStyle(.bordered)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { nextButton; cartButton; cardmarketLink }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) { nextButton; cartButton }
+                    cardmarketLink
+                }
             }
             .padding(.top, 4)
         }
@@ -102,6 +105,25 @@ struct ResultCard: View {
             }
             .onTapGesture { fullscreen = false }
         }
+    }
+
+    private var nextButton: some View {
+        Button("Next card") { model.next() }.buttonStyle(.borderedProminent).foregroundStyle(Theme.ink).fixedSize()
+    }
+
+    /// carts and deals come with a plan; the free version shows the button locked
+    private var cartButton: some View {
+        let open = account.has("trading")
+        return Button { if open { onAddToCart() } else { locked = .trading } } label: {
+            Label("Add to cart", systemImage: open ? "cart.badge.plus" : "lock.fill")
+        }
+        .buttonStyle(.bordered)
+        .tint(open ? Theme.gold : Theme.muted)
+        .fixedSize()
+    }
+
+    private var cardmarketLink: some View {
+        Link("Cardmarket", destination: cardmarketUrl).buttonStyle(.bordered).fixedSize()
     }
 
     private var matchText: String {
@@ -152,32 +174,6 @@ struct Chip: View {
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(selected ? .clear : Theme.muted.opacity(0.4)))
         }
         .buttonStyle(.plain)
-    }
-}
-
-struct PriceBlock: View {
-    let s: Shown
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if let p = s.selected, p.eur != nil || p.usd != nil {
-                HStack(alignment: .lastTextBaseline, spacing: 8) {
-                    Text(p.eur != nil ? Money.eur(p.eur) : p.usdEur != nil ? "≈ \(Money.eur(p.usdEur))" : Money.usd(p.usd))
-                        .font(.system(size: 30, weight: .bold)).foregroundStyle(Theme.gold)
-                    Text(p.eur != nil ? "Cardmarket trend · \(p.kind.rawValue)" : p.usdEur != nil ? "TCGplayer in € · \(p.kind.rawValue)" : "TCGplayer · \(p.kind.rawValue)")
-                        .font(.caption).foregroundStyle(Theme.muted)
-                }
-                let parts = [p.eur30.map { "30-day avg \(Money.eur($0))" }, p.eurLow.map { "from \(Money.eur($0))" },
-                             p.usd != nil && (p.eur != nil || p.usdEur != nil) ? "TCGplayer \(Money.usd(p.usd))" : nil].compactMap { $0 }
-                if !parts.isEmpty { Text(parts.joined(separator: " · ")).font(.footnote).foregroundStyle(.white) }
-                if let check = s.priceCard.priceCheck { Text("⚠ \(check.message)").font(.caption).foregroundStyle(Theme.warn) }
-                if s.pricedFromEnglish { Text("Price of the English version (no price for this language)").font(.caption2).foregroundStyle(Theme.muted) }
-                if let d = s.priceCard.prices?.updated { Text("Prices from \(String(d.prefix(10)))").font(.caption2).foregroundStyle(Theme.muted) }
-            } else {
-                Text("No price for this card.").foregroundStyle(Theme.muted)
-            }
-        }
-        .padding(.top, 4)
     }
 }
 

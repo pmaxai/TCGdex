@@ -7,18 +7,24 @@ App Store.
 ## What it does (first release)
 
 - **Scanner:** the live camera with the guide frame (green when sure), double tap to take a card by
-  hand (with the list of the 10 most likely cards), pinch to zoom, the light, photos from the
-  library. The printed text (Apple's Vision) gives the language and the number, so the right set and
-  language are shown. The result shows the printings with their prices, the price check's notes, the
-  price history, PSA prices and gem rate, other versions and languages, and the alternatives.
-- **Search:** any card by name (any language), number or set.
-- **Trading:** the market value for the card's condition, the vendor's price with a verdict, carts
-  per booth, trades (I give), shows with a budget, the deal history with CSV.
+  hand (with the list of the 10 most likely cards), pinch to zoom, the light; in the camera's
+  corners the cart (top right) and a photo from the library (bottom right). The printed text
+  (Apple's Vision) gives the language and the number, so the right set and language are shown. The
+  result shows the printings, the default price with a table of every source (Cardmarket trend,
+  30-day average, average sell price, lowest offer; TCGplayer market, mid and low, also in €), the
+  price check's notes, the price history, PSA (an add-on) and gem rate, other versions and
+  languages, and the alternatives.
+- **Carts and deals (Add to cart):** a popup prices the card for its condition against the vendor's
+  price with a verdict (I get or I give); carts per booth, trades, shows with a budget, the deal
+  history with CSV.
+- **Search:** any card by name (any language), number or set; a card's page has the prices of every
+  source, the chart, PSA, + Collection, ☆ Missing and Add to cart.
 - **Collection and Missing cards:** + Collection and ☆ Missing on every card, the missing cards
   list. Changes wait on the phone while it is offline.
-- **Account and App Store:** Sign in with Apple, an emailed code, or a code from an existing
-  account. The plans with the App Store's prices, buying, plan changes, extra devices, Restore
-  purchases, Manage subscription, creator codes, Delete account.
+- **Settings:** the account (Sign in with Apple, an emailed code, or a code from an existing
+  account; the plans with the App Store's prices, buying, plan changes, extra devices, Restore
+  purchases, Manage subscription, creator codes, Delete account), the default price and price alert,
+  price data and add-ons (PSA prices, its own App Store subscription), scanner, carts and deals, about.
 - **Nightly prices:** the data pack downloads from the shop (only the changed files), also in the
   background, and is used from the next start.
 

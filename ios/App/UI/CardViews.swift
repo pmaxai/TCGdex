@@ -32,53 +32,85 @@ struct CardRow: View {
                 Text("\(card.setName) · \(card.numberText) · \(card.lang.uppercased())").font(.caption).foregroundStyle(Theme.muted)
             }
             Spacer()
-            Text(Money.eur(card.bestValue)).font(.callout.monospacedDigit()).foregroundStyle(Theme.gold)
+            Text(card.bestPriceText).font(.callout.monospacedDigit()).foregroundStyle(Theme.gold)
         }
     }
 }
 
-/// Name, set and the prices of every printing.
+/**
+ * A card's page (the search, the collection): the picture, the printing, its prices in every
+ * source, the price chart, PSA, + Collection / ☆ Missing and Add to cart – what the Scanner shows
+ * for a scanned card.
+ */
 struct CardDetail: View {
     let card: CardInfo
     var fallback: UIImage? = nil
+    /// for the price chart and the English prices of a card without its own
+    var catalog: Catalog? = nil
+    /// Add to cart (the search)
+    var trading: TradingModel? = nil
     @EnvironmentObject var account: AccountModel
-    /// the printing + Collection and ☆ Missing are for (the card's default one to start)
+    /// whose prices are shown: the card, or its English version when it has none
+    private let priceCard: CardInfo
+    /// the printing the prices, + Collection, ☆ Missing and Add to cart are for (the card's default one to start)
     @State private var printing: Printing.Kind?
+    @State private var history: PriceHistory?
+    @State private var deal: DealCard?
+    @State private var locked: LockedFeature?
 
-    init(card: CardInfo, fallback: UIImage? = nil) {
+    init(card: CardInfo, fallback: UIImage? = nil, catalog: Catalog? = nil, trading: TradingModel? = nil) {
         self.card = card
         self.fallback = fallback
-        _printing = State(initialValue: defaultPrinting(card))
+        self.catalog = catalog
+        self.trading = trading
+        let own = card.printings.contains { $0.value != nil }
+        priceCard = own || card.lang == "en" ? card : (catalog?.cardExact(card.id, "en") ?? card)
+        _printing = State(initialValue: defaultPrinting(priceCard))
     }
 
     var body: some View {
+        let priced = account.revealed(priceCard.id)
+        let selected = priceCard.printing(printing)
+        let several = priceCard.printings.count > 1
+        let graded = priceCard.gradedFor(selected?.kind)
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                CardPicture(card: card, large: true, fallback: fallback).frame(maxWidth: 320).frame(maxWidth: .infinity)
+            VStack(alignment: .leading, spacing: 14) {
+                CardPicture(card: card, large: true, fallback: fallback).frame(maxWidth: 280).frame(maxWidth: .infinity)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(card.name).font(.title2.weight(.bold))
-                    Text([card.setName, card.numberText, card.year, card.rarity].compactMap { $0 }.joined(separator: " · "))
+                    Text([card.setName, card.numberText, card.lang.uppercased(), card.year, card.rarity].compactMap { $0 }.joined(separator: " · "))
                         .foregroundStyle(Theme.muted)
                 }
-                // the free version: revealed one card at a time
-                if account.revealed(card.id) {
-                    PriceTable(card: card)
-                    if let d = card.prices?.updated {
-                        Text("Cardmarket prices of \(String(d.prefix(10)))").font(.caption).foregroundStyle(Theme.muted)
-                    }
-                } else {
-                    RevealPrice(account: account, cardId: card.id)
-                }
-                if account.isFree || account.has("collection") || account.has("wanted") {
-                    VStack(alignment: .leading, spacing: 6) {
-                        if card.printings.count > 1 {
-                            Picker("Printing", selection: $printing) {
-                                ForEach(card.printings, id: \.kind) { p in Text(p.kind.rawValue).tag(Optional(p.kind)) }
+                if several {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(priceCard.printings, id: \.kind) { p in
+                                Chip(text: priced ? "\(p.kind.rawValue) \(p.priceText)" : p.kind.rawValue, selected: p.kind == selected?.kind) { printing = p.kind }
                             }
-                            .pickerStyle(.segmented)
                         }
-                        CollectionBar(account: account, card: card, printing: printing)
                     }
+                }
+                // the free version: revealed one card at a time
+                if priced {
+                    PriceBlock(p: selected, card: priceCard, pricedFromEnglish: priceCard.id != card.id || priceCard.lang != card.lang)
+                    if let h = history { PriceHistoryChart(history: h, printing: selected?.kind, hasNormal: priceCard.printings.contains { $0.kind == .normal }) }
+                } else {
+                    RevealPrice(account: account, cardId: priceCard.id)
+                }
+                PsaSection(account: account, graded: graded, population: priceCard.populationFor(selected?.kind),
+                           printing: several ? selected?.kind : nil, onlyOtherPrintings: graded == nil && !priceCard.graded.isEmpty)
+                if account.isFree || account.has("collection") || account.has("wanted") {
+                    CollectionBar(account: account, card: card, printing: selected?.kind)
+                }
+                HStack(spacing: 8) {
+                    if let trading {
+                        let open = account.has("trading")
+                        Button {
+                            if open { trading.startDeal(); deal = DealCard(card: card, priceCard: priceCard, printing: selected) } else { locked = .trading }
+                        } label: { Label("Add to cart", systemImage: open ? "cart.badge.plus" : "lock.fill") }
+                        .buttonStyle(.bordered).tint(open ? Theme.gold : Theme.muted)
+                    }
+                    Link("Cardmarket", destination: cardmarketUrl).buttonStyle(.bordered)
                 }
             }
             .padding(16)
@@ -86,32 +118,20 @@ struct CardDetail: View {
         .background(Theme.ink)
         .navigationTitle(card.name)
         .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-struct PriceTable: View {
-    let card: CardInfo
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Printing").frame(maxWidth: .infinity, alignment: .leading)
-                Text("Cardmarket").frame(width: 96, alignment: .trailing)
-                Text("TCGplayer").frame(width: 96, alignment: .trailing)
-            }
-            .font(.caption).foregroundStyle(Theme.muted).padding(.bottom, 6)
-            ForEach(card.printings, id: \.kind) { p in
-                HStack {
-                    Text(p.kind.rawValue).frame(maxWidth: .infinity, alignment: .leading)
-                    Text(Money.eur(p.eur)).frame(width: 96, alignment: .trailing).foregroundStyle(Theme.gold)
-                    Text(Money.usd(p.usd)).frame(width: 96, alignment: .trailing)
-                }
-                .font(.callout.monospacedDigit())
-                .padding(.vertical, 6)
-                Divider().overlay(Theme.panel)
+        .task(id: priceCard.id + priceCard.lang) { history = catalog?.history(priceCard.id) }
+        .lockedAlert($locked)
+        .sheet(item: $deal) { d in if let trading { DealSheet(d: d, trading: trading) } }
+        .overlay(alignment: .bottom) {
+            if let trading, let m = trading.message {
+                Text(m).font(.footnote).foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(.black.opacity(0.8), in: Capsule()).padding(.bottom, 12)
+                    .task(id: m) { try? await Task.sleep(nanoseconds: 1_800_000_000); trading.message = nil }
             }
         }
-        .padding(12)
-        .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var cardmarketUrl: URL {
+        let q = priceCard.name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        return URL(string: "https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=\(q)")!
     }
 }

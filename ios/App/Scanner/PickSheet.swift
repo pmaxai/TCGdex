@@ -52,7 +52,7 @@ struct CandidateRow: View {
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {
-                if showPrice { Text(Money.eur(c.info.bestValue)).font(.callout.monospacedDigit()).foregroundStyle(Theme.gold) }
+                if showPrice { Text(c.info.bestPriceText).font(.callout.monospacedDigit()).foregroundStyle(Theme.gold) }
                 if current { Text("shown").font(.caption2).foregroundStyle(Theme.sure) }
             }
         }

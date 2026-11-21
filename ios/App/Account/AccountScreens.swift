@@ -11,7 +11,7 @@ import SwiftUI
 struct AccountGateView: View {
     @ObservedObject var account: AccountModel
     @ObservedObject var store: StoreModel
-    /// the Account tab of the free version: what Free includes, above the sign-in or the plans
+    /// Settings › Account in the free version: what Free includes, above the sign-in or the plans
     var free = false
 
     var body: some View {
@@ -242,7 +242,7 @@ struct PlanCard: View {
     }
 }
 
-/// ⚙ Account: who, the plan, devices, manage, plan changes, extra devices, move, sign out, delete, waiting changes.
+/// Settings › Account: who, the plan, devices, manage, plan changes, extra devices, move, sign out, delete, waiting changes.
 struct AccountView: View {
     @ObservedObject var account: AccountModel
     @ObservedObject var store: StoreModel

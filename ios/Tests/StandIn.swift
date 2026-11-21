@@ -23,6 +23,8 @@ final class StandIn: URLProtocol {
         /// the collection's public link (sharing from the app), and other public links made on the website
         var publicShare: [String: Any]?
         var otherPublic = 0
+        /// the PSA prices add-on: its billing period while it runs
+        var psa: String?
         init(id: String, email: String) { self.id = id; self.email = email }
     }
 
@@ -105,8 +107,11 @@ final class StandIn: URLProtocol {
             "valid_until": iso.string(from: now.addingTimeInterval(a.active ? 30 * 86_400 : 0)),
             "account": ["id": a.id, "email": a.email, "name": NSNull(), "store_ref": a.storeRef, "email_verified": a.emailVerified] as [String: Any],
             "device": ["id": "dev_1", "name": "iPhone"],
-            "features": a.active ? ["scanner": true, "trading": true, "collection": true, "wanted": true, "youtube": a.plan == "creator"] : [String: Bool](),
+            "features": a.active ? ["scanner": true, "trading": true, "collection": true, "wanted": true, "youtube": a.plan == "creator",
+                                    "psa_prices": a.psa != nil] : [String: Bool](),
         ]
+        o["addons"] = a.psa.map { [["id": "psa_prices", "state": "active", "source": "app_store", "base_plan": $0,
+                                    "renews_at": iso.string(from: now.addingTimeInterval(($0 == "yearly" ? 365 : 30) * 86_400)), "ends_at": NSNull()] as [String: Any]] } ?? []
         if a.active {
             o["subscription"] = ["plan": a.plan ?? "collector", "base_plan": a.basePlan ?? "monthly", "state": "active", "source": a.source ?? "app_store",
                                  "manage_url": "https://apps.apple.com/account/subscriptions", "renews_at": iso.string(from: now.addingTimeInterval(30 * 86_400)),
@@ -175,6 +180,8 @@ final class StandIn: URLProtocol {
             let creatorDevices = Self.fullLineup ? lineup("creator") : [:]
             return (200, ["offers": [plan("collector", "Collector", ["scanner", "trading", "collection", "wanted"], devices: collectorDevices),
                                      plan("creator", "Creator", ["scanner", "trading", "youtube", "recording", "collection", "wanted"], devices: creatorDevices)],
+                          "addons": [["id": "psa_prices", "name": "PSA prices", "feature": "psa_prices", "plans": ["collector", "creator"],
+                                      "apple": ["product_ids": ["monthly": "oc_psa_monthly", "yearly": "oc_psa_yearly"]]] as [String: Any]],
                           "affiliate": a.affiliate.map { $0 as Any } ?? NSNull()])
         case ("POST", "/store/apple"):
             if Self.failNextReport { Self.failNextReport = false; return err(503, "store_unavailable") }
@@ -187,6 +194,10 @@ final class StandIn: URLProtocol {
             }
             if product.contains("_devices_") {
                 a.devicesInStore = Int(product.split(separator: "_")[3]) ?? 1
+            } else if product.hasPrefix("oc_psa_") {
+                // an add-on runs beside a plan
+                guard a.active else { return err(409, "addon_needs_plan") }
+                a.psa = product.hasSuffix("yearly") ? "yearly" : "monthly"
             } else {
                 a.active = true
                 a.source = "app_store"

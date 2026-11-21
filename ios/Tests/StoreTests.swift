@@ -12,7 +12,10 @@ final class FakeAppStore: AppStoreBilling, @unchecked Sendable {
 
     func products(_ ids: [String]) async throws -> [String: StoreProduct] {
         var out: [String: StoreProduct] = [:]
-        for id in ids { out[id] = StoreProduct(id: id, displayPrice: id.contains("creator") ? "€11.99" : "€6.99", price: 0, period: id.hasSuffix("yearly") ? "yearly" : "monthly") }
+        for id in ids {
+            let price = id.hasPrefix("oc_psa_") ? (id.hasSuffix("yearly") ? "€32.00" : "€2.99") : id.contains("creator") ? "€11.99" : "€6.99"
+            out[id] = StoreProduct(id: id, displayPrice: price, price: 0, period: id.hasSuffix("yearly") ? "yearly" : "monthly")
+        }
         return out
     }
 
@@ -20,14 +23,16 @@ final class FakeAppStore: AppStoreBilling, @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         nextId += 1
         let id = nextId
-        let original = held.first { $0.productId == productId || (!$0.productId.contains("_devices_") && !productId.contains("_devices_")) }?.originalId ?? id
+        // a subscription group each: the plans, the extra devices, the PSA add-on
+        func group(_ p: String) -> Int { p.contains("_devices_") ? 1 : p.hasPrefix("oc_psa_") ? 2 : 0 }
+        let original = held.first { group($0.productId) == group(productId) }?.originalId ?? id
         let payload: [String: Any] = ["productId": productId, "appAccountToken": accountToken.uuidString.lowercased(),
                                       "transactionId": "\(id)", "originalTransactionId": "\(original)"]
         let b64 = try! JSONSerialization.data(withJSONObject: payload).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
         let t = StoreTransaction(id: id, originalId: original, productId: productId, accountToken: accountToken, jws: "eyJhbGciOiJub25lIn0.\(b64).sig",
                                  revoked: false, finish: { [weak self] in self?.markFinished(id) })
-        held.removeAll { $0.productId.contains("_devices_") == productId.contains("_devices_") }
+        held.removeAll { group($0.productId) == group(productId) }
         held.append(t)
         return .bought(t)
     }
@@ -156,9 +161,14 @@ final class StoreTests: XCTestCase {
     func testStoreKitTestSellsTheStandInProducts() async throws {
         let sk = try await startStoreKit()
         do {
-            let ps = try await Product.products(for: ["oc_collector_monthly", "oc_creator_yearly", "oc_collector_devices_1_monthly"])
+            let ps = try await Product.products(for: ["oc_collector_monthly", "oc_creator_yearly", "oc_collector_devices_1_monthly", "oc_psa_monthly", "oc_psa_yearly"])
             log("StoreKitTest products: \(ps.map { "\($0.id) \($0.displayPrice) \($0.subscription.map { "\($0.subscriptionPeriod.value) \($0.subscriptionPeriod.unit)" } ?? "-")" })")
-            XCTAssertEqual(ps.count, 3)
+            XCTAssertEqual(ps.count, 5)
+            // the PSA add-on: its own subscription group, beside the plan's
+            let psa = ps.filter { $0.id.hasPrefix("oc_psa_") }
+            XCTAssertEqual(Set(psa.compactMap { $0.subscription?.subscriptionGroupID }).count, 1)
+            XCTAssertNotEqual(psa.first?.subscription?.subscriptionGroupID, ps.first { $0.id == "oc_collector_monthly" }?.subscription?.subscriptionGroupID)
+            XCTAssertEqual(ps.first { $0.id == "oc_psa_yearly" }?.price, 32)
         } catch {
             log("StoreKitTest products failed: \(error)")
             throw error
@@ -381,6 +391,39 @@ final class StoreTests: XCTestCase {
         try await until("two devices") { a.status?.devicesInStore == 2 && !store.busy }
         store.changeDevices(by: 1)
         XCTAssertEqual(store.error, "No more extra devices in the app.")
+    }
+
+    /// PSA prices: an add-on for a running plan, bought as its own subscription beside it; it unlocks psa_prices.
+    func testPsaAddonNeedsAPlanAndRunsBesideIt() async throws {
+        let shop = FakeAppStore()
+        let a = try await signedIn()
+        let store = StoreModel(account: a, billing: shop)
+        await store.loadOffers()
+        let psa = try XCTUnwrap(store.addons.first, "the shop's add-ons")
+        XCTAssertEqual(psa.id, "psa_prices")
+        XCTAssertEqual(psa.plans, ["collector", "creator"])
+        XCTAssertEqual(store.price(psa, "monthly")?.displayPrice, "€2.99")
+        XCTAssertEqual(store.price(psa, "yearly")?.displayPrice, "€32.00")
+        // no plan yet: not on sale for this account
+        XCTAssertEqual(store.addonBlocked(psa), "PSA prices is an add-on for a running plan – choose a plan first.")
+        store.buyAddon(psa, "monthly")
+        XCTAssertNotNil(store.error)
+        XCTAssertTrue(StandIn.calls("/store/apple").isEmpty)
+
+        store.buy(try XCTUnwrap(store.onSale.first), "monthly")
+        try await until("active") { a.gate == .open && !store.busy }
+        XCTAssertFalse(a.has("psa_prices"))
+        XCTAssertNil(store.addonBlocked(psa))
+        store.buyAddon(psa, "yearly")
+        try await until("PSA prices unlocked") { a.has("psa_prices") && !store.busy }
+        let reported = StandIn.calls("/store/apple").compactMap { StandIn.payload($0.body["signed_transaction"] as? String ?? "")?["productId"] as? String }
+        XCTAssertEqual(reported, ["oc_collector_monthly", "oc_psa_yearly"])
+        XCTAssertEqual(a.status?.plan, "collector", "the plan runs on")
+        XCTAssertEqual(store.state(psa)?.running, true)
+        XCTAssertEqual(store.state(psa)?.basePlan, "yearly")
+        XCTAssertEqual(store.addonBlocked(psa), "PSA prices is already running.")
+        XCTAssertEqual(shop.held.count, 2, "two subscriptions side by side")
+        log("PSA add-on: \(store.state(psa)?.stateText ?? "-") beside \(a.status?.planName ?? "-")")
     }
 
     func testCollectionQueueWithoutStoreKit() async throws {

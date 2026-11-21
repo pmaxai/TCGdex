@@ -200,6 +200,57 @@
           "winbackOffers": []
         }
       ]
+    },
+    {
+      "id": "21582203",
+      "localizations": [],
+      "name": "PSA prices (add-on)",
+      "subscriptions": [
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "2.99",
+          "familyShareable": false,
+          "groupNumber": 1,
+          "internalID": "6740000031",
+          "introductoryOffer": null,
+          "localizations": [
+            {
+              "description": "What PSA 10, 9 and 8 copies sold for on eBay",
+              "displayName": "PSA prices",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "oc_psa_monthly",
+          "recurringSubscriptionPeriod": "P1M",
+          "referenceName": "PSA prices monthly",
+          "subscriptionGroupID": "21582203",
+          "type": "RecurringSubscription",
+          "winbackOffers": []
+        },
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "32.00",
+          "familyShareable": false,
+          "groupNumber": 1,
+          "internalID": "6740000032",
+          "introductoryOffer": null,
+          "localizations": [
+            {
+              "description": "What PSA 10, 9 and 8 copies sold for on eBay",
+              "displayName": "PSA prices",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "oc_psa_yearly",
+          "recurringSubscriptionPeriod": "P1Y",
+          "referenceName": "PSA prices yearly",
+          "subscriptionGroupID": "21582203",
+          "type": "RecurringSubscription",
+          "winbackOffers": []
+        }
+      ]
     }
   ],
   "version": {

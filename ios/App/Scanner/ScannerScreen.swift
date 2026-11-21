@@ -1,22 +1,24 @@
 import PhotosUI
 import SwiftUI
 
-/// The scanner: camera and result share the screen half and half (as on Android).
+/**
+ * The scanner: camera and result share the screen half and half (as on Android). The camera's
+ * corners hold the cart (top right) and a photo from the library (bottom right); Add to cart on the
+ * result opens the popup that prices the card for a deal. Search, alert and settings live in their tabs.
+ */
 struct ScannerScreen: View {
     @ObservedObject var model: ScannerModel
+    @ObservedObject var trading: TradingModel
     @EnvironmentObject var account: AccountModel
     @State private var photoItem: PhotosPickerItem?
     @State private var locked: LockedFeature?
-    @State private var search: SearchMode?
-    @State private var showSettings = false
+    @State private var replacing = false
+    @State private var deal: DealCard?
+    @State private var cartOpen = false
     @State private var cameraAllowed: Bool?
-    @Environment(\.scenePhase) private var phase
-
-    enum SearchMode: Identifiable { case lookUp, replace; var id: Int { self == .lookUp ? 0 : 1 } }
 
     var body: some View {
         VStack(spacing: 0) {
-            topBar
             ZStack {
                 if cameraAllowed == false {
                     VStack(spacing: 12) {
@@ -28,16 +30,18 @@ struct ScannerScreen: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .topTrailing) { cartButton.padding(10) }
+            .overlay(alignment: .bottomTrailing) { photoButton.padding(10) }
             .clipped()
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     if let s = model.shown {
-                        ResultCard(s: s, model: model, onSearch: { search = .replace })
+                        ResultCard(s: s, model: model, onSearch: { replacing = true }, onAddToCart: { openDeal(s) })
                     } else if account.isFree {
-                        Text("Hold a card inside the frame. Its name appears here – reveal its Cardmarket price with a tap (\(AccountModel.freeRevealsPerHour) per hour in the free version). Not recognised? Double-tap the picture to take it anyway. Pinch to zoom.")
+                        Text("Hold a card inside the frame. Its name appears here – reveal its price with a tap (\(AccountModel.freeRevealsPerHour) per hour in the free version). Not recognised? Double-tap the picture to take it anyway. Pinch to zoom.")
                             .foregroundStyle(Theme.muted)
                     } else {
-                        Text("Hold a card inside the frame. Its name and Cardmarket price appear here; the phone vibrates when any printing of it is worth at least your alert price. Not recognised? Double-tap the picture to take it anyway. Pinch to zoom.")
+                        Text("Hold a card inside the frame. Its name and prices appear here – Add to cart prices it for a deal. The phone vibrates when a card is worth at least your alert price (Settings). Not recognised? Double-tap the picture to take it anyway. Pinch to zoom.")
                             .foregroundStyle(Theme.muted)
                     }
                     if model.settings.showDebug || (model.shown?.fromPhoto == true && model.shown?.fromSearch == false), !model.debugLines.isEmpty {
@@ -53,6 +57,7 @@ struct ScannerScreen: View {
         .cameraLifecycle(model: model, allowed: $cameraAllowed)
         // the free version: no price alerts (they would tell the price)
         .task(id: account.isFree) { model.alertsAllowed = !account.isFree }
+        .lockedAlert($locked)
         .onChange(of: photoItem) { _, item in
             guard let item else { return }
             Task {
@@ -66,61 +71,86 @@ struct ScannerScreen: View {
                       onSearch: {
                           model.closePicks()
                           // after the sheet has gone (an alert can't come up while it's leaving)
-                          if account.isFree { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { locked = .search } } else { search = .replace }
+                          if account.isFree { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { locked = .search } } else { replacing = true }
                       })
                 .presentationDetents([.medium, .large])
         }
-        .sheet(item: $search) { mode in
+        // "Not this card? Search…": the card found replaces the one shown
+        .sheet(isPresented: $replacing) {
             CardSearchSheet(resolver: model.resolver) { c in
-                search = nil
-                if mode == .replace && model.shown != nil { model.replaceWith(c) } else { model.lookUp(c) }
+                replacing = false
+                if model.shown != nil { model.replaceWith(c) } else { model.lookUp(c) }
             }
         }
-        .sheet(isPresented: $showSettings) { ScannerSettingsView(settings: $model.settings, alertsLocked: account.isFree) }
+        .sheet(item: $deal) { d in DealSheet(d: d, trading: trading).presentationDetents([.large]) }
+        .sheet(isPresented: $cartOpen) { CartSheet(trading: trading) }
         .alert(model.message ?? "", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
             Button("OK", role: .cancel) {}
         }
+        .alert("Add the cards to your collection?", isPresented: Binding(get: { trading.offerCart != nil }, set: { if !$0 { trading.offerCart = nil } })) {
+            Button("Add") { if let id = trading.offerCart { trading.addCartToCollection(id, account: account) } }
+            Button("Not now", role: .cancel) { trading.offerCart = nil }
+        } message: { Text("Each with its condition and the price you paid per copy.") }
+        .overlay(alignment: .bottom) {
+            if let m = trading.message {
+                Text(m).font(.footnote).foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(.black.opacity(0.8), in: Capsule()).padding(.bottom, 12)
+                    .task(id: m) { try? await Task.sleep(nanoseconds: 1_800_000_000); trading.message = nil }
+            }
+        }
     }
 
-    /// the free version shows Search, the price alert and photos locked
-    private var topBar: some View {
-        HStack(spacing: 6) {
-            Button { if account.isFree { locked = .search } else { search = .lookUp } } label: {
-                Label("Search cards", systemImage: account.isFree ? "lock.fill" : "magnifyingglass")
-                    .lineLimit(1).foregroundStyle(Theme.muted)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Theme.panel, in: Capsule())
-            }
-            Button { if account.isFree { locked = .alert } else { showSettings = true } } label: {
-                Group {
-                    if account.isFree { Label("Alert", systemImage: "lock.fill") }
-                    else { Text(model.settings.threshold > 0 ? "Alert ≥ \(Int(model.settings.threshold)) €" : "Alert off") }
+    private func openDeal(_ s: Shown) {
+        trading.startDeal()
+        deal = DealCard(s)
+    }
+
+    /// the active cart, with its number of cards; locked in the free version
+    private var cartButton: some View {
+        let open = account.has("trading")
+        let count = open ? (trading.book.active.map { $0.cards + $0.giveCards } ?? 0) : 0
+        return Button { if open { cartOpen = true } else { locked = .trading } } label: {
+            CornerIcon(icon: "cart", locked: !open)
+                .overlay(alignment: .topTrailing) {
+                    if count > 0 {
+                        Text("\(count)").font(.caption2.bold().monospacedDigit()).foregroundStyle(Theme.ink)
+                            .padding(.horizontal, 5).frame(minWidth: 18, minHeight: 18)
+                            .background(Theme.gold, in: Capsule()).offset(x: 6, y: -6)
+                    }
                 }
-                .font(.footnote).lineLimit(1)
-                .padding(.horizontal, 10).padding(.vertical, 7)
-                .overlay(Capsule().stroke(Theme.muted.opacity(0.5)))
-            }
-            .foregroundStyle(account.isFree ? Theme.muted : .white)
-            if account.isFree {
-                Button { locked = .photo } label: {
-                    Image(systemName: "photo")
-                        .overlay(alignment: .bottomTrailing) { Image(systemName: "lock.fill").font(.system(size: 9)).offset(x: 4, y: 4) }
-                }
-                .foregroundStyle(Theme.muted)
-                .accessibilityLabel("Photo, needs a subscription")
-            } else {
-                PhotosPicker(selection: $photoItem, matching: .images) { Image(systemName: "photo") }
-                    .foregroundStyle(.white)
-                    .accessibilityLabel("Photo")
-            }
-            Button { showSettings = true } label: { Image(systemName: "gearshape") }
-                .foregroundStyle(.white)
-                .accessibilityLabel("Settings")
         }
-        .font(.body)
-        .padding(.horizontal, 8).padding(.vertical, 6)
-        .lockedAlert($locked)
+        .buttonStyle(.plain)
+        .accessibilityLabel(open ? "Cart" + (count > 0 ? ", \(count) cards" : "") : "Cart, needs a subscription")
+    }
+
+    /// a card on a photo from the library; locked in the free version
+    @ViewBuilder private var photoButton: some View {
+        if account.isFree {
+            Button { locked = .photo } label: { CornerIcon(icon: "photo", locked: true) }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Photo, needs a subscription")
+        } else {
+            PhotosPicker(selection: $photoItem, matching: .images) { CornerIcon(icon: "photo", locked: false) }
+                .accessibilityLabel("Scan a photo")
+        }
+    }
+}
+
+/// A round button in a corner of the camera picture (a small lock when the plan lacks it).
+struct CornerIcon: View {
+    let icon: String
+    var locked = false
+
+    var body: some View {
+        Image(systemName: icon)
+            .font(.system(size: 19, weight: .semibold))
+            .foregroundStyle(locked ? Theme.muted : .white)
+            .frame(width: 44, height: 44)
+            .background(.black.opacity(0.55), in: Circle())
+            .overlay(alignment: .bottomTrailing) {
+                if locked { Image(systemName: "lock.fill").font(.system(size: 10)).foregroundStyle(Theme.muted).offset(x: -4, y: -4) }
+            }
+            .contentShape(Circle())
     }
 }
 
@@ -146,10 +176,11 @@ struct CameraArea: View {
                 }
                 if !model.paused {
                     Text(hint)
-                        .font(.subheadline).foregroundStyle(.white).lineLimit(1)
+                        .font(.subheadline).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.75)
                         .padding(.horizontal, 12).padding(.vertical, 4)
                         .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom).padding(10)
+                        // clear of the photo button in the corner
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom).padding(.vertical, 10).padding(.horizontal, 60)
                 } else {
                     Color.black.opacity(0.66)
                         .overlay(Text(model.shown?.fromSearch == true ? "Looked up · tap to scan again" : "Tap to scan again")

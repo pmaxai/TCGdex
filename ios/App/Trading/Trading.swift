@@ -40,13 +40,6 @@ enum Side: String, Codable {
     var label: String { self == .GET ? "I get" : "I give" }
 }
 
-/// Which Cardmarket price the market value starts from.
-enum Reference: String, CaseIterable, Identifiable {
-    case TREND, AVG30, LOW
-    var id: String { rawValue }
-    var label: String { ["TREND": "Trend", "AVG30": "30-day average", "LOW": "Lowest price"][rawValue]! }
-}
-
 /// A card show (or a day of trading): its name and the budget for it.
 struct ShowInfo: Codable, Equatable, Identifiable {
     let id: Int64
@@ -56,7 +49,7 @@ struct ShowInfo: Codable, Equatable, Identifiable {
 }
 
 /**
- * The numbers of Trading Mode, in one place (as TradingMath.kt): market value for a condition, the
+ * The numbers of carts and deals, in one place (as TradingMath.kt): market value for a condition, the
  * verdict on a price, the opening offer and the walk-away price.
  */
 enum TradingMath {
@@ -77,15 +70,10 @@ enum TradingMath {
     /// to the cent, halves away from zero (as Kotlin's roundToLong for positive values)
     static func round2(_ v: Double) -> Double { (v * 100).rounded(.toNearestOrAwayFromZero) / 100 }
 
-    /// The Cardmarket price of a printing the market value starts from (falls back to the trend).
-    static func reference(_ p: Printing?, _ ref: Reference) -> Double? {
-        let v: Double?
-        switch ref {
-        case .TREND: v = p?.eur
-        case .AVG30: v = p?.eur30 ?? p?.eur
-        case .LOW: v = p?.eurLow ?? p?.eur
-        }
-        return v.flatMap { $0 > 0 ? $0 : nil }
+    /// The price of a printing the market value starts from, in EUR: the default price source
+    /// (Settings › Prices), else the next one with a price; TCGplayer at the data pack's rate.
+    static func reference(_ p: Printing?, _ source: PriceSource) -> Double? {
+        p?.shown(source)?.eur.flatMap { $0 > 0 ? $0 : nil }
     }
 
     static func market(_ reference: Double, _ condition: Condition, languageFactor: Double = 1) -> Double {

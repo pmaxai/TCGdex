@@ -10,7 +10,7 @@ final class FixedPrices: AppStoreBilling {
         for id in ids {
             let yearly = id.hasSuffix("yearly")
             let creator = id.contains("creator")
-            let price = creator ? (yearly ? "€129.49" : "€11.99") : (yearly ? "€75.49" : "€6.99")
+            let price = id.hasPrefix("oc_psa_") ? (yearly ? "€32.00" : "€2.99") : creator ? (yearly ? "€129.49" : "€11.99") : (yearly ? "€75.49" : "€6.99")
             out[id] = StoreProduct(id: id, displayPrice: price, price: 0, period: yearly ? "yearly" : "monthly")
         }
         return out
@@ -113,7 +113,7 @@ final class ScreenshotTests: XCTestCase {
         try await shot("ios-plans", AccountGateView(account: a, store: store))
     }
 
-    func testResultAndTrading() async throws {
+    func testResultAndCart() async throws {
         guard let pack = ParityTests.pack ?? Pack.bundledDir.flatMap({ try? Pack(dir: $0) }) else { throw XCTSkip("no data pack") }
         let cat = Catalog(db: pack.db)
         let resolver = CardResolver(catalog: cat, pack: pack)
@@ -129,15 +129,15 @@ final class ScreenshotTests: XCTestCase {
         let result = ScrollView { ResultCard(s: s, model: scanner, onSearch: {}).padding(12) }.background(Theme.ink).environmentObject(a)
         try await shot("ios-result", result)
 
+        // Add to cart: the popup that prices the card for a deal, then the cart
         let trading = TradingModel(store: TradingStore(file: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)))
-        trading.shown(s)
+        trading.startDeal()
         trading.condition = .EX
         trading.asking = 0.03
-        let price = ScrollView { CardPrice(s: s, scanner: scanner, trading: trading, onSearch: {}).padding(12) }.background(Theme.ink).environmentObject(a)
-        try await shot("ios-trading", price)
-        trading.addToCart(s)
+        try await shot("ios-add-to-cart", DealSheet(d: DealCard(s), trading: trading))
+        trading.addToCart(DealCard(s))
         trading.side = .GIVE
-        trading.addToCart(s)
+        trading.addToCart(DealCard(s))
         try await shot("ios-cart", CartSheet(trading: trading))
     }
 
@@ -254,11 +254,30 @@ final class ScreenshotTests: XCTestCase {
         let made = await a.makePublic()
         XCTAssertNil(made)
         try await shot("ios-share-public", ShareCollectionSheet(account: a))
+        // a card opened in the search: prices of every source, the chart, PSA, + Collection / ☆ Missing, Add to cart
+        let trading = TradingModel(store: TradingStore(file: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)))
         let card = try XCTUnwrap(cat.cardExact("sv08-059", "de"))
-        try await shot("ios-search-card", NavigationStack { CardDetail(card: card) }.environmentObject(a))
+        let detail = NavigationStack { CardDetail(card: card, catalog: cat, trading: trading) }.environmentObject(a)
+        try await shot("ios-search-card", detail)
+        try await shot("ios-search-card-bottom", detail, scrolledToBottom: true)
+        // the scanner: no top bar, the cart (top right) and a photo (bottom right) in the camera's corners
+        let scanner = ScannerModel(engine: try ScannerEngine(pack: pack), catalog: cat)
+        let resolver = CardResolver(catalog: cat, pack: pack)
+        scanner.show(resolver.build(group: cat.groupOf(card.id), version: card, text: nil, confidence: .sure, alternatives: [], locked: true,
+                                    fromPhoto: false, scan: nil, serial: 1))
+        trading.addToCart(DealCard(card: card, priceCard: card, printing: card.printings.first))
+        try await shot("ios-scanner", ScannerScreen(model: scanner, trading: trading).environmentObject(a))
+        // Settings: the account and the pages; Prices (the default price); Price data & add-ons
+        let store = StoreModel(account: a, billing: FixedPrices())
+        await store.loadOffers()
+        try await shot("ios-settings", SettingsScreen(account: a, store: store, trading: trading, scanner: scanner, catalog: cat, path: .constant([])))
+        try await shot("ios-settings-prices", NavigationStack { PricesSettingsView(scanner: scanner).navigationTitle("Prices").navigationBarTitleDisplayMode(.inline) })
+        try await shot("ios-settings-price-data", NavigationStack {
+            PriceDataView(account: a, store: store).navigationTitle("Price data & add-ons").navigationBarTitleDisplayMode(.inline)
+        })
         let bar = VStack(spacing: 0) {
             Spacer()
-            BottomBar(tab: .constant(.mode), modes: [.scanner, .trading], mode: .trading, hasCollection: true) { _ in }
+            BottomBar(tab: .constant(.scanner), hasCollection: true)
         }
         .background(Theme.ink)
         try await shot("ios-bottom-bar", bar, height: 160)

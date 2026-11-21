@@ -18,8 +18,69 @@ struct Printing: Equatable, Hashable {
     /// TCGplayer market price, USD, and in EUR at the data pack's rate
     var usd: Double?
     var usdEur: Double? = nil
-    /// the price to judge this printing by: Cardmarket, else TCGplayer (in EUR where the rate is known)
-    var value: Double? { eur ?? usdEur ?? usd }
+    /// every source on its own (the price table and the default price): Cardmarket trend and average sell price (EUR),
+    /// TCGplayer market, mid and low (USD); USD per EUR of the data pack's day
+    var cmTrend: Double? = nil, cmAvg: Double? = nil
+    var tcgMarket: Double? = nil, tcgMid: Double? = nil, tcgLow: Double? = nil
+    var usdPerEur: Double? = nil
+    /// made with the single sources (the data pack); without them the trend is `eur` and the market price `usd`
+    var sourced = false
+
+    /// the price to judge this printing by: the person's default price source (or the next one with a price), in EUR where known
+    var value: Double? { let p = shown(PriceSource.current); return p?.eur ?? p?.native }
+
+    /// a source's price as the source gives it (EUR for Cardmarket, USD for TCGplayer)
+    func raw(_ s: PriceSource) -> Double? {
+        let v: Double?
+        switch s {
+        case .cmTrend: v = sourced ? cmTrend : eur
+        case .cmAvg30: v = eur30
+        case .cmAvg: v = cmAvg
+        case .cmLow: v = eurLow
+        case .tcgMarket: v = sourced ? tcgMarket : usd
+        case .tcgMid: v = tcgMid
+        case .tcgLow: v = tcgLow
+        }
+        return v.flatMap { $0 > 0 ? $0 : nil }
+    }
+
+    /// a source's price in EUR (TCGplayer at the data pack's rate; nil without one)
+    func eurValue(_ s: PriceSource) -> Double? {
+        guard let v = raw(s) else { return nil }
+        if !s.isUSD { return v }
+        guard let r = usdPerEur, r > 0 else { return nil }
+        return (v / r * 100).rounded() / 100
+    }
+
+    /// The price to show for the default source: that one, else the next one with a price (PriceSource.fallback).
+    func shown(_ s: PriceSource) -> PriceShown? {
+        for src in [s] + PriceSource.fallback {
+            if let v = raw(src) { return PriceShown(source: src, native: v, eur: eurValue(src)) }
+        }
+        // printings made without the single sources (older code paths): the headline prices
+        if let e = eur { return PriceShown(source: .cmTrend, native: e, eur: e) }
+        if let u = usd { return PriceShown(source: .tcgMarket, native: u, eur: usdEur) }
+        return nil
+    }
+}
+
+/// One price shown: from which source, as it gives it, and in EUR.
+struct PriceShown: Equatable {
+    let source: PriceSource
+    let native: Double
+    let eur: Double?
+
+    /// "€12.30", "≈ €11.40" for TCGplayer in EUR, "$12.80" without a rate
+    var text: String {
+        if let eur { return source.isUSD ? "≈ \(Money.eur(eur))" : Money.eur(eur) }
+        return Money.usd(native)
+    }
+}
+
+/// TCGplayer's prices of one printing (USD).
+struct TcgPrice: Equatable {
+    var market: Double?, mid: Double?, low: Double?
+    var best: Double? { market ?? mid ?? low }
 }
 
 struct CardInfo: Equatable, Identifiable {
@@ -50,6 +111,8 @@ struct CardInfo: Equatable, Identifiable {
     var thumbnailUrl: String? { imageUrl.map { "\($0)/low.webp" } ?? imageAlt }
     var highUrl: String? { imageUrl.map { "\($0)/high.webp" } ?? imageAltLarge ?? imageAlt }
     var bestValue: Double? { printings.compactMap(\.value).max() }
+    /// the most valuable printing's price in the default source, for the lists ("€12.30", "≈ €11.40")
+    var bestPriceText: String { printings.max { ($0.value ?? -1) < ($1.value ?? -1) }.flatMap { $0.value == nil ? nil : $0.priceText } ?? "–" }
     func printing(_ kind: Printing.Kind?) -> Printing? { printings.first { $0.kind == kind } ?? printings.first }
 
     /// PSA prices of this printing only; a row without a stated printing counts for the card's main printing
@@ -339,6 +402,7 @@ final class Catalog {
         let printings = Catalog.printings(variants: c[18].string, rarity: rarity, p: prices, tcg: tcgplayer(cardId)).map { pr -> Printing in
             var p = pr
             if let u = p.usd, let r = rate { p.usdEur = (u / r * 100).rounded() / 100 }
+            p.usdPerEur = rate
             return p
         }
         return CardInfo(id: cardId, lang: c[1].string ?? "", name: c[2].string ?? "?", number: c[3].string ?? "",
@@ -449,17 +513,18 @@ final class Catalog {
         return Set(db.query(q, [englishName] + langs).compactMap { $0[0].string })
     }
 
-    /// TCGplayer market price (USD) per printing key, e.g. normal, holofoil, reverse-holofoil, 1st-edition.
-    private func tcgplayer(_ id: String) -> [String: Double] {
+    /// TCGplayer's prices (USD) per printing key, e.g. normal, holofoil, reverse-holofoil, 1st-edition: market, mid, low.
+    private func tcgplayer(_ id: String) -> [String: TcgPrice] {
         guard hasTcg, let json = db.query("SELECT data FROM tcgplayer WHERE id = ?", [id]).first?.first?.string,
               let o = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] else { return [:] }
-        var out: [String: Double] = [:]
+        var out: [String: TcgPrice] = [:]
         for (k, v) in o {
-            var p: Double?
+            var p = TcgPrice()
             if let nested = v as? [String: Any] {
-                p = ["marketPrice", "midPrice", "lowPrice"].lazy.compactMap { (nested[$0] as? NSNumber)?.doubleValue }.first { $0 > 0 }
-            } else if let n = v as? NSNumber, n.doubleValue > 0 { p = n.doubleValue }
-            if let p { out[k.lowercased()] = p }
+                func num(_ key: String) -> Double? { (nested[key] as? NSNumber)?.doubleValue.flatMap { $0 > 0 ? $0 : nil } }
+                p = TcgPrice(market: num("marketPrice"), mid: num("midPrice"), low: num("lowPrice"))
+            } else if let n = v as? NSNumber, n.doubleValue > 0 { p.market = n.doubleValue }
+            if p.best != nil { out[k.lowercased()] = p }
         }
         return out
     }
@@ -468,7 +533,20 @@ final class Catalog {
      * Which printings exist and their prices. TCGplayer lists every printing it sells separately,
      * the more reliable "does a reverse holo exist" source; TCGdex variants fill in where it has none.
      */
-    static func printings(variants: String?, rarity: String?, p: Prices?, tcg: [String: Double]) -> [Printing] {
+    static func printings(variants: String?, rarity: String?, p: Prices?, tcg tcgAll: [String: TcgPrice]) -> [Printing] {
+        let tcg = tcgAll.compactMapValues(\.best)
+        let tcgNormalAll = tcgAll["normal"] ?? tcgAll["unlimited"]
+        let tcgHoloAll = tcgAll["holofoil"] ?? tcgAll["unlimited-holofoil"]
+        let tcgReverseAll = tcgAll["reverse-holofoil"] ?? tcgAll["reverseholofoil"]
+        let tcgFirstAll = tcgAll["1st-edition-holofoil"] ?? tcgAll["1st-edition"] ?? tcgAll["1stedition"] ?? tcgAll["1st-edition-normal"]
+        /// the single sources of a printing
+        func withSources(_ pr: Printing, cm: (trend: Double?, avg: Double?)?, tp: TcgPrice?) -> Printing {
+            var x = pr
+            x.sourced = true
+            x.cmTrend = cm?.trend; x.cmAvg = cm?.avg
+            x.tcgMarket = tp?.market; x.tcgMid = tp?.mid; x.tcgLow = tp?.low
+            return x
+        }
         let v = variants.flatMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any] }
         func has(_ k: String) -> Bool { (v?[k] as? Bool) == true || (v?[k] as? NSNumber)?.boolValue == true }
         let holoRarity = rarity?.range(of: "holo", options: .caseInsensitive) != nil
@@ -482,14 +560,22 @@ final class Catalog {
         let reverse = has("reverse") || tcgReverse != nil
         let first = has("firstEdition") || tcgFirst != nil
         var out: [Printing] = []
-        if normal { out.append(Printing(kind: .normal, eur: p?.headline, eur30: p?.avg30, eurLow: p?.low, usd: tcgNormal)) }
+        let std = p.map { (trend: $0.trend, avg: $0.avg) }
+        if normal { out.append(withSources(Printing(kind: .normal, eur: p?.headline, eur30: p?.avg30, eurLow: p?.low, usd: tcgNormal), cm: std, tp: tcgNormalAll)) }
         if holo {
             // Cardmarket's standard price is the holo price when the card has no non-holo printing
-            out.append(Printing(kind: .holo, eur: normal ? nil : p?.headline, eur30: normal ? nil : p?.avg30, eurLow: normal ? nil : p?.low, usd: tcgHolo))
+            out.append(withSources(Printing(kind: .holo, eur: normal ? nil : p?.headline, eur30: normal ? nil : p?.avg30, eurLow: normal ? nil : p?.low, usd: tcgHolo),
+                                   cm: normal ? nil : std, tp: tcgHoloAll))
         }
-        if reverse { out.append(Printing(kind: .reverse, eur: p?.headlineHolo, eur30: p?.avg30Holo, eurLow: p?.lowHolo, usd: tcgReverse)) }
-        if first { out.append(Printing(kind: .firstEdition, eur: nil, eur30: nil, eurLow: nil, usd: tcgFirst)) }
-        if out.isEmpty { out.append(Printing(kind: .normal, eur: p?.headline, eur30: p?.avg30, eurLow: p?.low, usd: tcg.values.max())) }
+        if reverse {
+            out.append(withSources(Printing(kind: .reverse, eur: p?.headlineHolo, eur30: p?.avg30Holo, eurLow: p?.lowHolo, usd: tcgReverse),
+                                   cm: p.map { (trend: $0.trendHolo, avg: $0.avgHolo) }, tp: tcgReverseAll))
+        }
+        if first { out.append(withSources(Printing(kind: .firstEdition, eur: nil, eur30: nil, eurLow: nil, usd: tcgFirst), cm: nil, tp: tcgFirstAll)) }
+        if out.isEmpty {
+            let any = tcgAll.values.max { ($0.best ?? 0) < ($1.best ?? 0) }
+            out.append(withSources(Printing(kind: .normal, eur: p?.headline, eur30: p?.avg30, eurLow: p?.low, usd: tcg.values.max()), cm: std, tp: any))
+        }
         return out
     }
 }
