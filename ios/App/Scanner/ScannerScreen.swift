@@ -4,7 +4,6 @@ import SwiftUI
 /// The scanner: camera and result share the screen half and half (as on Android).
 struct ScannerScreen: View {
     @ObservedObject var model: ScannerModel
-    @State private var torch = false
     @State private var photoItem: PhotosPickerItem?
     @State private var search: SearchMode?
     @State private var showSettings = false
@@ -47,7 +46,6 @@ struct ScannerScreen: View {
         }
         .background(Theme.ink)
         .cameraLifecycle(model: model, allowed: $cameraAllowed)
-        .onChange(of: torch) { _, on in model.camera.setTorch(on) }
         .onChange(of: photoItem) { _, item in
             guard let item else { return }
             Task {
@@ -88,9 +86,6 @@ struct ScannerScreen: View {
                     .overlay(Capsule().stroke(Theme.muted.opacity(0.5)))
             }
             .foregroundStyle(.white)
-            Button { torch.toggle() } label: { Image(systemName: torch ? "flashlight.on.fill" : "flashlight.off.fill") }
-                .foregroundStyle(torch ? Theme.gold : .white)
-                .accessibilityLabel("Light")
             PhotosPicker(selection: $photoItem, matching: .images) { Image(systemName: "photo") }
                 .foregroundStyle(.white)
                 .accessibilityLabel("Photo")
@@ -168,6 +163,16 @@ struct CameraArea: View {
     }
 }
 
+/// false while the page with a camera screen is hidden behind another page (the camera then stops)
+private struct CameraActiveKey: EnvironmentKey { static let defaultValue = true }
+
+extension EnvironmentValues {
+    var cameraActive: Bool {
+        get { self[CameraActiveKey.self] }
+        set { self[CameraActiveKey.self] = newValue }
+    }
+}
+
 extension View {
     /// The camera runs while this screen is shown and the app is in front.
     func cameraLifecycle(model: ScannerModel, allowed: Binding<Bool?>) -> some View {
@@ -179,15 +184,26 @@ private struct CameraLifecycle: ViewModifier {
     let model: ScannerModel
     @Binding var allowed: Bool?
     @State private var acquired = false
+    @State private var onScreen = false
     @Environment(\.scenePhase) private var phase
+    @Environment(\.cameraActive) private var active
+
+    /// the camera is used while the screen is there, its page is the one shown, and access is allowed
+    private func update() {
+        let use = onScreen && active && allowed == true
+        if use && !acquired { acquired = true; model.camera.acquire(); model.camera.setZoom(model.settings.zoom) }
+        else if !use && acquired { acquired = false; model.camera.release() }
+    }
 
     func body(content: Content) -> some View {
         content
             .task {
+                onScreen = true
                 allowed = await Camera.authorized()
-                if allowed == true && !acquired { acquired = true; model.camera.acquire(); model.camera.setZoom(model.settings.zoom) }
+                update()
             }
-            .onDisappear { if acquired { acquired = false; model.camera.release() } }
+            .onDisappear { onScreen = false; update() }
+            .onChange(of: active) { _, _ in update() }
             .onChange(of: phase) { _, p in
                 if p == .active { model.camera.resume() } else if p == .background { model.camera.pause() }
             }

@@ -117,15 +117,6 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unc
         return fourThree.min { CMVideoFormatDescriptionGetDimensions($0.formatDescription).width < CMVideoFormatDescriptionGetDimensions($1.formatDescription).width }
     }
 
-    func setTorch(_ on: Bool) {
-        queue.async { [self] in
-            guard let d = device, d.hasTorch else { return }
-            try? d.lockForConfiguration()
-            d.torchMode = on ? .on : .off
-            d.unlockForConfiguration()
-        }
-    }
-
     /// zoom as a person sees it (1 = no zoom)
     func setZoom(_ z: CGFloat) {
         queue.async { [self] in

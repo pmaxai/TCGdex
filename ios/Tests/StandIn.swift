@@ -36,10 +36,14 @@ final class StandIn: URLProtocol {
     nonisolated(unsafe) static var nextId = 1
     /// the line-up of the Apple setup guide: 1 to 4 extra devices for both plans and periods (review screenshots)
     nonisolated(unsafe) static var fullLineup = false
+    /// GET /collection/items: this many per page instead of the asked limit (paging tests)
+    nonisolated(unsafe) static var pageSize: Int?
+    /// what the server fills into a collection item per card id: name, set, number, value of a copy (cents)
+    nonisolated(unsafe) static var cards: [String: (name: String, set: String, number: String, cents: Int)] = [:]
 
     static func reset() {
         lock.lock(); defer { lock.unlock() }
-        accounts = [:]; tokens = [:]; calls = []; failNextReport = false; offline = false; nextId = 1; fullLineup = false
+        accounts = [:]; tokens = [:]; calls = []; failNextReport = false; offline = false; nextId = 1; fullLineup = false; pageSize = nil; cards = [:]
     }
 
     static func session() -> URLSession {
@@ -68,6 +72,10 @@ final class StandIn: URLProtocol {
             body = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] ?? [:]
         }
         let path = r.url!.path
+        // a GET's query (cursor, limit) comes to handle() as its body
+        if (r.httpMethod ?? "GET") == "GET", let items = URLComponents(url: r.url!, resolvingAgainstBaseURL: false)?.queryItems {
+            for q in items { body[q.name] = q.value ?? "" }
+        }
         Self.lock.lock()
         let offline = Self.offline
         Self.calls.append(Call(method: r.httpMethod ?? "GET", path: path, body: body))
@@ -205,9 +213,22 @@ final class StandIn: URLProtocol {
         case ("POST", "/collection/items"):
             var item = body
             item["id"] = Self.nextId
+            let c = Self.cards[body["card_id"] as? String ?? ""]
+            item["name"] = c?.name ?? body["card_id"]
+            item["set_name"] = c?.set ?? ""
+            item["number"] = c?.number ?? ""
+            item["value_cents"] = c.map { $0.cents as Any } ?? NSNull()
+            item["updated_at"] = String(format: "2026-11-21T10:%02d:%02d.000Z", (Self.nextId / 60) % 60, Self.nextId % 60)
             Self.nextId += 1
             a.collection.append(item)
             return (201, ["item": item])
+        case ("GET", "/collection/items"):
+            let limit = Self.pageSize ?? Int(body["limit"] as? String ?? "") ?? 200
+            let start = Int(body["cursor"] as? String ?? "") ?? 0
+            let page = Array(a.collection.dropFirst(start).prefix(limit))
+            let end = start + page.count
+            return (200, ["items": page, "next_cursor": end < a.collection.count ? String(end) as Any : NSNull(),
+                          "server_time": "2026-11-21T11:00:00.000Z"])
         default:
             if method == "DELETE", p.hasPrefix("/wanted/"), let id = Int(p.dropFirst("/wanted/".count)) {
                 a.wanted.removeAll { ($0["id"] as? Int) == id }

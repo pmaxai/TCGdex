@@ -31,7 +31,6 @@ struct TradingScreen: View {
     @ObservedObject var scanner: ScannerModel
     @ObservedObject var trading: TradingModel
     @EnvironmentObject var account: AccountModel
-    @State private var torch = false
     @State private var cameraAllowed: Bool?
     @State private var cartOpen = false
     @State private var dealsOpen = false
@@ -76,7 +75,6 @@ struct TradingScreen: View {
         }
         .background(Theme.ink)
         .cameraLifecycle(model: scanner, allowed: $cameraAllowed)
-        .onChange(of: torch) { _, on in scanner.camera.setTorch(on) }
         .onChange(of: scanner.shown?.serial) { _, _ in if let s = scanner.shown { trading.shown(s) } }
         .sheet(isPresented: $cartOpen) { CartSheet(trading: trading) }
         .sheet(isPresented: $dealsOpen) { DealsSheet(trading: trading) }
@@ -119,8 +117,6 @@ struct TradingScreen: View {
                         .font(.footnote.bold()).lineLimit(1)
                 }
                 Button { dealsOpen = true } label: { Image(systemName: "clock.arrow.circlepath") }.accessibilityLabel("Deal history")
-                Button { torch.toggle() } label: { Image(systemName: torch ? "flashlight.on.fill" : "flashlight.off.fill") }
-                    .foregroundStyle(torch ? Theme.gold : .white).accessibilityLabel("Light")
                 Button { settingsOpen = true } label: { Image(systemName: "gearshape") }.accessibilityLabel("Trading settings")
             }
             if let budget = b.show?.budget, budget > 0 { BudgetBar(book: b, budget: budget) }

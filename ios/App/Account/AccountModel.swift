@@ -30,6 +30,38 @@ struct CollectionLine: Equatable {
     let graded: String?
 }
 
+/// A copy (or several) in the collection, as the collection page lists it.
+struct CollectionItem: Equatable, Identifiable {
+    let id: Int64
+    let cardId: String
+    let language: String, finish: String, condition: String
+    let graded: String?
+    let quantity: Int
+    let name: String, setName: String, number: String
+    /// the server's value of one copy (nil: no price)
+    let valueCents: Int64?
+    let updatedAt: String
+
+    init?(_ o: JSON) {
+        guard (o["deleted"] as? Bool) != true, let id = (o["id"] as? NSNumber)?.int64Value, let card = AccountStatus.str(o, "card_id") else { return nil }
+        self.id = id
+        cardId = card
+        language = AccountStatus.str(o, "language") ?? ""
+        finish = AccountStatus.str(o, "finish") ?? ""
+        condition = AccountStatus.str(o, "condition") ?? ""
+        graded = (o["grading"] as? JSON).map { g in "\(AccountStatus.str(g, "company") ?? "") \(AccountStatus.str(g, "grade") ?? "")".trimmingCharacters(in: .whitespaces) }
+        quantity = (o["quantity"] as? NSNumber)?.intValue ?? 1
+        name = AccountStatus.str(o, "name") ?? card
+        setName = AccountStatus.str(o, "set_name") ?? ""
+        number = AccountStatus.str(o, "number") ?? ""
+        valueCents = (o["value_cents"] as? NSNumber)?.int64Value
+        updatedAt = AccountStatus.str(o, "updated_at") ?? ""
+    }
+
+    /// "Glurak-ex 151 199/165 de holo …" for the filter
+    var searchText: String { "\(name) \(setName) \(number) \(cardId) \(language) \(ShopTerms.finishLabel(finish)) \(condition)".lowercased() }
+}
+
 /// The shop's words: card languages, conditions and finishes (Shop API v1 enums).
 enum ShopTerms {
     struct Grade: Identifiable { let code: String; let label: String; var id: String { code } }
@@ -56,6 +88,17 @@ enum ShopTerms {
         case "id": return "ID"
         case "th": return "TH"
         default: return "EN"
+        }
+    }
+
+    /// The data pack's language for the shop's card_language (the other way round).
+    static func appLang(_ shopLang: String?) -> String {
+        let l = (shopLang ?? "").uppercased()
+        switch l {
+        case "": return "en"
+        case "ZH-HANT": return "zh-tw"
+        case "ZH-HANS": return "zh-cn"
+        default: return l.lowercased()
         }
     }
 
@@ -101,6 +144,12 @@ final class AccountModel: ObservableObject {
     /// the collection's lines per card id (cards looked at so far)
     @Published private(set) var collection: [String: [CollectionLine]] = [:]
     @Published private(set) var binders: [Binder] = []
+    /// the whole collection, for the collection page (newest first; nil: not loaded yet)
+    @Published private(set) var items: [CollectionItem]?
+    @Published private(set) var itemsLoading = false
+    @Published private(set) var itemsError: String?
+    /// goes up when a copy reached the collection (the collection page loads again)
+    @Published private(set) var collectionEdits = 0
     /// Use another email: where the code went, and from when another may be asked for
     @Published private(set) var emailSentTo: String?
     @Published private(set) var resendAt = Date.distantPast
@@ -308,7 +357,7 @@ final class AccountModel: ObservableObject {
         load()
         busy = false
         error = nil
-        wanted = []; collection = [:]; binders = []
+        wanted = []; collection = [:]; binders = []; items = nil
     }
 
     /// the app came to the front: after more than an hour away, check
@@ -358,7 +407,7 @@ final class AccountModel: ObservableObject {
             do { try await api.disconnect(token: token) } catch let e as AccountError where e.lostToken { lost(e); return }
             store.forget(notice: "This phone was disconnected from the account.")
             load()
-            wanted = []; collection = [:]; binders = []
+            wanted = []; collection = [:]; binders = []; items = nil
         }
     }
 
@@ -378,7 +427,7 @@ final class AccountModel: ObservableObject {
             store.forget(notice: "The account was deleted.")
             store.saveQueue([])
             load()
-            wanted = []; collection = [:]; binders = []
+            wanted = []; collection = [:]; binders = []; items = nil
             if let url = AccountStatus.str(o, "manage_url") {
                 message = "The account is deleted. Cancel the subscription in the App Store too (Settings › Apple Account › Subscriptions): \(url)"
             } else {
@@ -410,6 +459,36 @@ final class AccountModel: ObservableObject {
                 binders = list.compactMap { b in (b["id"] as? NSNumber).map { Binder(id: $0.int64Value, name: AccountStatus.str(b, "name") ?? "Binder") } }
             }
         }
+    }
+
+    /// The whole collection, page by page (the collection page; again after each add).
+    func loadItems() async {
+        guard has("collection"), !itemsLoading, let token = store.token, let api = api() else { return }
+        itemsLoading = true
+        defer { itemsLoading = false }
+        do {
+            var all: [CollectionItem] = []
+            var cursor: String?
+            repeat {
+                let page = try await api.collectionItems(token: token, cursor: cursor)
+                all += page.items.compactMap(CollectionItem.init)
+                cursor = page.next
+            } while cursor != nil && all.count < 100_000
+            items = all.sorted { ($0.updatedAt, $0.id) > ($1.updatedAt, $1.id) }
+            itemsError = nil
+        } catch let e as AccountError {
+            if e.lostToken { lost(e) } else { itemsError = e.friendly }
+        } catch {
+            itemsError = offline(error, "the collection couldn't be loaded.")
+        }
+    }
+
+    /// A missing card turned up elsewhere: into the collection, and off the missing cards.
+    func foundElsewhere(_ w: WantedItem, condition: String, quantity: Int = 1, purchaseCents: Int64? = nil, binderId: Int64? = nil,
+                        note: String? = nil, defaultLanguage: String, defaultFinish: String, label: String) {
+        addToCollection(cardId: w.cardId, language: w.language ?? defaultLanguage, finish: w.finish ?? defaultFinish, condition: condition,
+                        quantity: quantity, purchaseCents: purchaseCents, binderId: binderId, note: note, label: label)
+        toggleWanted(cardId: w.cardId, language: w.language, finish: w.finish, label: label)
     }
 
     /// + Collection: queued with its own client_ref and sent at once (later when offline).
@@ -538,6 +617,7 @@ final class AccountModel: ObservableObject {
         case "collection_add":
             _ = try await api.addToCollection(token: token, body: body)
             loadCollection(op.cardId, force: true)
+            collectionEdits += 1
         case "wanted_add":
             wantedEdits += 1
             let o = try await api.addWanted(token: token, body: body)

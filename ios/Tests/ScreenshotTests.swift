@@ -177,4 +177,44 @@ final class ScreenshotTests: XCTestCase {
             try await shot("review-devices-\(plan)", tab, width: 400, height: 575, scrolledBy: 60)
         }
     }
+
+    /// The collection page (both tabs), a searched card with + Collection / ☆ Missing, and the bottom bar.
+    func testCollectionSearchAndBar() async throws {
+        guard let pack = ParityTests.pack ?? Pack.bundledDir.flatMap({ try? Pack(dir: $0) }) else { throw XCTSkip("no data pack") }
+        let cat = Catalog(db: pack.db)
+        StandIn.reset()
+        let email = "review@overpricedcardboard.com"
+        let a = account()
+        a.signInApple(identityToken: "test_apple:\(email)", authorizationCode: nil)
+        try await until { a.status != nil && !a.busy }
+        StandIn.lock.lock()
+        if let acc = StandIn.accounts[email] { acc.active = true; acc.plan = "collector"; acc.source = "web"; acc.emailVerified = true }
+        StandIn.lock.unlock()
+        a.check(force: true)
+        try await until { a.has("collection") && !a.busy }
+        // a few cards of the data pack, with names and values as the server fills them in
+        let picks = [("sv08-059", "de", "NM", 2), ("sv08-059", "en", "EX", 1), ("base1-4", "en", "GD", 1), ("swsh12pt5-160", "en", "NM", 1)]
+        for (id, lang, _, _) in picks {
+            if let c = cat.card(id, lang) {
+                StandIn.cards[id] = (c.name, c.setName, c.numberText, Int(((c.bestValue ?? 0) * 100).rounded()))
+            }
+        }
+        for (id, lang, cond, qty) in picks {
+            a.addToCollection(cardId: id, language: ShopTerms.languageOf(lang), finish: "normal", condition: cond, quantity: qty, label: id)
+        }
+        a.toggleWanted(cardId: "base1-2", language: "EN", finish: nil, label: "base1-2")
+        a.toggleWanted(cardId: "sv08-238", language: "DE", finish: nil, label: "sv08-238")
+        try await until { a.pending.isEmpty }
+        await a.loadItems()
+        try await shot("ios-collection", CollectionScreen(account: a, catalog: cat).environmentObject(a))
+        try await shot("ios-missing", CollectionScreen(account: a, catalog: cat, start: .missing).environmentObject(a))
+        let card = try XCTUnwrap(cat.cardExact("sv08-059", "de"))
+        try await shot("ios-search-card", NavigationStack { CardDetail(card: card) }.environmentObject(a))
+        let bar = VStack(spacing: 0) {
+            Spacer()
+            BottomBar(tab: .constant(.mode), modes: [.scanner, .trading], mode: .trading, hasCollection: true) { _ in }
+        }
+        .background(Theme.ink)
+        try await shot("ios-bottom-bar", bar, height: 160)
+    }
 }

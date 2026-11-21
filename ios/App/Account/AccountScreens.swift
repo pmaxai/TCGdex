@@ -353,17 +353,39 @@ struct AccountView: View {
 /// + Collection and ☆ Missing for the shown card, with what the collection already holds.
 struct CollectionBar: View {
     @ObservedObject var account: AccountModel
-    let s: Shown
+    let cardId: String
+    /// the shop's card language and finish of the copy
+    let lang: String
+    let finish: String
+    let label: String
     /// the condition + Collection adds the copy in (Trading: the one chosen)
     var condition = "NM"
     @State private var sheet = false
 
+    /// a scanned card
+    init(account: AccountModel, s: Shown, condition: String = "NM") {
+        self.init(account: account, cardId: s.version.id, lang: ShopTerms.languageOf(s.printedOnly ?? s.version.lang),
+                  finish: ShopTerms.finishOf(s.printing), label: "\(s.version.name) · \(s.version.setName) \(s.version.numberText)",
+                  condition: condition)
+    }
+
+    /// a card from the search or the collection, in the printing chosen there
+    init(account: AccountModel, card: CardInfo, printing: Printing.Kind?) {
+        self.init(account: account, cardId: card.id, lang: ShopTerms.languageOf(card.lang), finish: ShopTerms.finishOf(printing),
+                  label: "\(card.name) · \(card.setName) \(card.numberText)")
+    }
+
+    init(account: AccountModel, cardId: String, lang: String, finish: String, label: String, condition: String = "NM") {
+        _account = ObservedObject(wrappedValue: account)
+        self.cardId = cardId
+        self.lang = lang
+        self.finish = finish
+        self.label = label
+        self.condition = condition
+    }
+
     var body: some View {
         let coll = account.has("collection"), want = account.has("wanted")
-        let cardId = s.version.id
-        let lang = ShopTerms.languageOf(s.printedOnly ?? s.version.lang)
-        let finish = ShopTerms.finishOf(s.printing)
-        let label = "\(s.version.name) · \(s.version.setName) \(s.version.numberText)"
         let wanted = account.wanted.first { $0.matches(cardId, lang, finish) }
         if coll || want {
             VStack(alignment: .leading, spacing: 4) {
@@ -412,6 +434,7 @@ struct CollectionBar: View {
 /// Long press on + Collection: the details of the copy.
 struct CollectionSheet: View {
     @ObservedObject var account: AccountModel
+    var title = "Add to the collection"
     let onAdd: (String, Int, Int64?, Int64?, String?) -> Void
     @State private var cond = "NM"
     @State private var qty = 1
@@ -438,7 +461,7 @@ struct CollectionSheet: View {
                 }
                 TextField("Note", text: $note, axis: .vertical)
             }
-            .navigationTitle("Add to the collection")
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -448,40 +471,5 @@ struct CollectionSheet: View {
                 }
             }
         }
-    }
-}
-
-/// The missing cards list: what the shop looks for, with offers.
-struct MissingCardsView: View {
-    @ObservedObject var account: AccountModel
-    let catalog: Catalog
-
-    var body: some View {
-        List {
-            if account.wanted.isEmpty {
-                Text("No missing cards yet. Tap ☆ Missing on a scanned card to add it.").foregroundStyle(Theme.muted)
-            }
-            ForEach(account.wanted) { w in
-                let card = catalog.card(w.cardId, "en")
-                HStack(spacing: 12) {
-                    if let card { CardPicture(card: card).frame(width: 40) }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(card?.name ?? w.cardId).font(.body.weight(.semibold))
-                        Text([card?.setLine(withLang: false), w.language, w.finish.map(ShopTerms.finishLabel)].compactMap { $0 }.joined(separator: " · "))
-                            .font(.caption).foregroundStyle(Theme.muted)
-                    }
-                    Spacer()
-                    Text(w.pending ? "waiting to sync" : w.state == "offer" ? "Offer ›" : w.state == "available" ? "In the shop ›" : "searching")
-                        .font(.caption).foregroundStyle(w.state == "offer" ? Theme.gold : w.state == "available" ? Theme.sure : Theme.muted)
-                }
-                .swipeActions {
-                    Button("Remove", role: .destructive) {
-                        account.toggleWanted(cardId: w.cardId, language: w.language, finish: w.finish, label: card?.name ?? w.cardId)
-                    }
-                }
-            }
-        }
-        .navigationTitle("Missing cards")
-        .refreshable { account.check(force: true) }
     }
 }

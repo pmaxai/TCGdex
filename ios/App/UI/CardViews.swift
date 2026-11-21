@@ -41,6 +41,15 @@ struct CardRow: View {
 struct CardDetail: View {
     let card: CardInfo
     var fallback: UIImage? = nil
+    @EnvironmentObject var account: AccountModel
+    /// the printing + Collection and ☆ Missing are for (the card's default one to start)
+    @State private var printing: Printing.Kind?
+
+    init(card: CardInfo, fallback: UIImage? = nil) {
+        self.card = card
+        self.fallback = fallback
+        _printing = State(initialValue: defaultPrinting(card))
+    }
 
     var body: some View {
         ScrollView {
@@ -54,6 +63,17 @@ struct CardDetail: View {
                 PriceTable(card: card)
                 if let d = card.prices?.updated {
                     Text("Cardmarket prices of \(String(d.prefix(10)))").font(.caption).foregroundStyle(Theme.muted)
+                }
+                if account.has("collection") || account.has("wanted") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if card.printings.count > 1 {
+                            Picker("Printing", selection: $printing) {
+                                ForEach(card.printings, id: \.kind) { p in Text(p.kind.rawValue).tag(Optional(p.kind)) }
+                            }
+                            .pickerStyle(.segmented)
+                        }
+                        CollectionBar(account: account, card: card, printing: printing)
+                    }
                 }
             }
             .padding(16)

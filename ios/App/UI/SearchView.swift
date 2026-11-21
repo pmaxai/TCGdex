@@ -33,7 +33,7 @@ struct SearchView: View {
             let q = query
             try? await Task.sleep(nanoseconds: 200_000_000)
             guard !Task.isCancelled, let cat = model.catalog else { return }
-            let found = await Task.detached { cat.search(q) }.value
+            let found = await Task.detached { cat.search(q, limit: 150) }.value
             if !Task.isCancelled { results = found }
         }
     }

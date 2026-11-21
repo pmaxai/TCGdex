@@ -129,6 +129,14 @@ final class AccountApi: @unchecked Sendable {
 
     func addToCollection(token: String, body: JSON) async throws -> JSON { try need(await call("POST", ["collection", "items"], token, body)) }
 
+    /// One page of the whole collection (newest change last); next: the cursor of the next page, nil at the end.
+    func collectionItems(token: String, cursor: String?, limit: Int = 500) async throws -> (items: [JSON], next: String?) {
+        var q = [URLQueryItem(name: "limit", value: String(limit))]
+        if let cursor { q.append(URLQueryItem(name: "cursor", value: cursor)) }
+        let o = try need(await call("GET", ["collection", "items"], token, query: q))
+        return (o["items"] as? [JSON] ?? [], AccountStatus.str(o, "next_cursor"))
+    }
+
     func binders(token: String) async throws -> [JSON] { try need(await call("GET", ["collection", "binders"], token))["binders"] as? [JSON] ?? [] }
 
     func wanted(token: String) async throws -> [JSON] { try need(await call("GET", ["wanted"], token))["items"] as? [JSON] ?? [] }
@@ -152,8 +160,14 @@ final class AccountApi: @unchecked Sendable {
     }
 
     /// One call; the answer's JSON (nil for 204).
-    private func call(_ method: String, _ segments: [String], _ token: String?, _ body: JSON? = nil) async throws -> JSON? {
-        var req = URLRequest(url: url(segments))
+    private func call(_ method: String, _ segments: [String], _ token: String?, _ body: JSON? = nil,
+                      query: [URLQueryItem] = []) async throws -> JSON? {
+        var u = url(segments)
+        if !query.isEmpty, var c = URLComponents(url: u, resolvingAgainstBaseURL: false) {
+            c.queryItems = query
+            if let withQuery = c.url { u = withQuery }
+        }
+        var req = URLRequest(url: u)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
