@@ -12,6 +12,7 @@ import io.github.pmaxai.cardscanner.account.Paired
 import io.github.pmaxai.cardscanner.account.PendingOp
 import io.github.pmaxai.cardscanner.account.TransferCode
 import io.github.pmaxai.cardscanner.account.unpairedText
+import io.github.pmaxai.cardscanner.shop.ShopTerms
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -36,6 +37,34 @@ data class WantedItem(
 
 /** A line of the collection for one card: "2 × DE Holo NM". */
 data class CollectionLine(val language: String, val finish: String, val condition: String, val quantity: Int, val graded: String?)
+
+/** A copy in the collection (`GET /collection/items`), as the collection page lists it. */
+data class CollectionItem(
+    val id: Long, val cardId: String, val language: String, val finish: String, val condition: String, val graded: String?,
+    val quantity: Int, val name: String, val setName: String, val number: String, val imageUrl: String?,
+    /** the server's value of one copy (null: no price) */
+    val valueCents: Long?, val updatedAt: String,
+) {
+    /** "glurak-ex 151 199/165 de holo nm …" for the filter */
+    val searchText: String = "$name $setName $number $cardId $language ${ShopTerms.finishLabel(finish)} $condition".lowercase()
+
+    companion object {
+        /** null: a deleted copy, or not one at all */
+        fun of(o: JSONObject): CollectionItem? {
+            if (o.optBoolean("deleted") || !o.has("id") || o.isNull("id")) return null
+            val card = AccountStatus.str(o, "card_id") ?: return null
+            return CollectionItem(
+                o.optLong("id"), card, AccountStatus.str(o, "language") ?: "", AccountStatus.str(o, "finish") ?: "",
+                AccountStatus.str(o, "condition") ?: "",
+                o.optJSONObject("grading")?.let { g -> "${g.optString("company")} ${g.optString("grade")}".trim() },
+                o.optInt("quantity", 1), AccountStatus.str(o, "name") ?: card, AccountStatus.str(o, "set_name") ?: "",
+                AccountStatus.str(o, "number") ?: "", AccountStatus.str(o, "image_url"),
+                if (!o.has("value_cents") || o.isNull("value_cents")) null else o.optLong("value_cents"),
+                AccountStatus.str(o, "updated_at") ?: "",
+            )
+        }
+    }
+}
 
 /** Move to a new phone: the code shown, and what happened. */
 data class TransferUi(val code: TransferCode? = null, val busy: Boolean = false, val error: String? = null)
@@ -62,6 +91,14 @@ data class AccountUi(
     val collection: Map<String, List<CollectionLine>> = emptyMap(),
     /** the customer's binders: id → name */
     val binders: List<Pair<Long, String>> = emptyList(),
+    /** the collection page: every copy, newest first (null: not loaded yet) */
+    val items: List<CollectionItem>? = null,
+    val itemsLoading: Boolean = false,
+    /** why the collection couldn't be loaded */
+    val itemsError: String? = null,
+    /** grows with every copy sent to the collection; [itemsAt]: its value when [items] were loaded */
+    val collectionEdits: Int = 0,
+    val itemsAt: Int = 0,
     /** S3 storage: still being set up by the shop, or why it couldn't be read */
     val s3Note: String? = null,
     /** Trading: a cart just paid whose cards could go into the collection */
@@ -289,7 +326,7 @@ class AccountCoordinator(
         stopTransfer()
         store.forget(why)
         load()
-        publish { it.copy(busy = false, error = null, transfer = null, wanted = emptyList(), collection = emptyMap(), binders = emptyList(), store = StoreUi()) }
+        publish { it.copy(busy = false, error = null, transfer = null, wanted = emptyList(), collection = emptyMap(), binders = emptyList(), items = null, itemsError = null, store = StoreUi()) }
         onS3(null)
     }
 
@@ -366,7 +403,7 @@ class AccountCoordinator(
                 api()!!.disconnect(token)
                 store.forget("This phone was disconnected from the account.")
                 load()
-                publish { it.copy(busy = false, wanted = emptyList(), collection = emptyMap(), binders = emptyList(), store = StoreUi()) }
+                publish { it.copy(busy = false, wanted = emptyList(), collection = emptyMap(), binders = emptyList(), items = null, itemsError = null, store = StoreUi()) }
                 onS3(null)
             } catch (e: AccountException) {
                 if (e.lostToken) lost(e) else publish { it.copy(busy = false, error = e.friendly) }
@@ -389,7 +426,7 @@ class AccountCoordinator(
                 store.forget("The account was deleted.")
                 store.saveQueue(emptyList())
                 load()
-                publish { it.copy(busy = false, wanted = emptyList(), collection = emptyMap(), binders = emptyList(), store = StoreUi()) }
+                publish { it.copy(busy = false, wanted = emptyList(), collection = emptyMap(), binders = emptyList(), items = null, itemsError = null, store = StoreUi()) }
                 onS3(null)
                 o.optString("manage_url").takeIf { it.isNotBlank() && !o.isNull("manage_url") }?.let {
                     message("The account is deleted. Cancel the subscription in the App Store too: $it")
@@ -430,6 +467,45 @@ class AccountCoordinator(
                 publish { it.copy(binders = (0 until a.length()).mapNotNull { a.optJSONObject(it) }.map { b -> b.optLong("id") to b.optString("name") }) }
             }
         }
+    }
+
+    @Volatile private var loadingItems = false
+
+    /** The collection page: the whole collection, page by page, newest first. */
+    fun loadItems() {
+        if (!current().has("collection")) return
+        val token = store.token ?: return
+        synchronized(this) { if (loadingItems) return; loadingItems = true }
+        val at = current().collectionEdits
+        publish { it.copy(itemsLoading = true) }
+        scope.launch(Dispatchers.IO) {
+            try {
+                val api = api() ?: throw IOException("not connected")
+                val all = ArrayList<CollectionItem>()
+                var cursor: String? = null
+                do {
+                    val (page, next) = api.collectionItems(token, cursor)
+                    (0 until page.length()).mapNotNullTo(all) { i -> page.optJSONObject(i)?.let { o -> CollectionItem.of(o) } }
+                    cursor = next
+                } while (cursor != null && all.size < 100_000)
+                val sorted = all.sortedWith(compareByDescending<CollectionItem> { it.updatedAt }.thenByDescending { it.id })
+                publish { it.copy(items = sorted, itemsAt = at, itemsLoading = false, itemsError = null) }
+            } catch (e: AccountException) {
+                if (e.lostToken) lost(e)
+                publish { it.copy(itemsLoading = false, itemsError = if (e.lostToken) null else e.friendly) }
+            } catch (e: Exception) {
+                publish { it.copy(itemsLoading = false, itemsError = offline(e, "the collection can't be loaded now.")) }
+            } finally {
+                loadingItems = false
+            }
+        }
+    }
+
+    /** A missing card turned up elsewhere: into the collection (the missing card's language and finish, else the card's own), and off the missing cards. */
+    fun foundElsewhere(w: WantedItem, condition: String, quantity: Int = 1, purchaseCents: Long? = null, binderId: Long? = null,
+                       note: String? = null, defaultLanguage: String, defaultFinish: String, label: String) {
+        addToCollection(w.cardId, w.language ?: defaultLanguage, w.finish ?: defaultFinish, condition, quantity, purchaseCents, binderId, note, label)
+        removeWanted(w, label)
     }
 
     /** + Collection: queued with its own client_ref and sent at once (later when offline). */
@@ -484,9 +560,17 @@ class AccountCoordinator(
                 val body = JSONObject().put("card_id", cardId).put("language", language ?: JSONObject.NULL).put("finish", finish ?: JSONObject.NULL)
                 enqueue(PendingOp("wanted_add", UUID.randomUUID().toString(), acc, cardId, body, label = label))
             }
+            else -> removeWanted(hit, label)
+        }
+    }
+
+    /** This card off the missing cards (the collection page's Remove, and Found it). */
+    fun removeWanted(w: WantedItem, label: String) {
+        when {
             // added here and not sent yet: it simply goes
-            hit.pending -> { store.saveQueue(store.queue().filter { it.clientRef != hit.clientRef }); publishWanted() }
-            hit.id != null -> enqueue(PendingOp("wanted_delete", UUID.randomUUID().toString(), acc, cardId, wantedId = hit.id, label = label))
+            w.pending -> { store.saveQueue(store.queue().filter { it.clientRef != w.clientRef }); publishWanted() }
+            w.id != null -> enqueue(PendingOp("wanted_delete", UUID.randomUUID().toString(), current().status?.accountId, w.cardId,
+                wantedId = w.id, label = label))
         }
     }
 
@@ -559,6 +643,8 @@ class AccountCoordinator(
             "collection_add" -> {
                 api.addToCollection(token, JSONObject(op.body!!.toString()).put("client_ref", op.clientRef))
                 loadCollection(op.cardId, force = true)
+                // the collection page loads again
+                publish { it.copy(collectionEdits = it.collectionEdits + 1) }
             }
             "wanted_add" -> {
                 wantedEdits.incrementAndGet()

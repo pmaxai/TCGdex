@@ -2,8 +2,10 @@ package io.github.pmaxai.cardscanner.ui
 
 import io.github.pmaxai.cardscanner.shop.ShopTerms
 import androidx.compose.runtime.collectAsState
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -36,12 +38,15 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import io.github.pmaxai.cardscanner.data.CardInfo
 import kotlinx.coroutines.delay
 
 /**
@@ -50,9 +55,12 @@ import kotlinx.coroutines.delay
  * recognise (no picture). LOOK_UP shows the card without it being in front of the camera;
  * REPLACE puts it in place of the shown card (and its pack entry).
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SearchDialog(mode: SearchMode, vm: ScannerViewModel) {
     val account = vm.state.collectAsState().value.account
+    /** long press on +: the copy's details for this card */
+    var sheetFor by remember { mutableStateOf<CardInfo?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
     var results by remember { mutableStateOf<List<Candidate>>(emptyList()) }
     var searched by remember { mutableStateOf("") }
@@ -93,18 +101,36 @@ fun SearchDialog(mode: SearchMode, vm: ScannerViewModel) {
                 }
                 LazyColumn(Modifier.weight(1f)) {
                     items(results, key = { "${it.info.id}/${it.info.lang}" }) { c ->
-                        // ☆ Missing: the card in its language, any printing (a second tap takes it off the list)
-                        val star: (@Composable () -> Unit)? = if (mode == SearchMode.LOOK_UP && account.has("wanted")) { {
-                            val on = account.wanted.any { it.matches(c.info.id, ShopTerms.languageOf(c.info.lang), null) }
-                            Text(if (on) "★" else "☆", color = if (on) Gold else Muted, fontSize = 22.sp,
-                                modifier = Modifier.padding(start = 10.dp).clickable { vm.toggleWanted(c.info) }.padding(6.dp))
+                        val coll = mode == SearchMode.LOOK_UP && account.has("collection")
+                        val want = mode == SearchMode.LOOK_UP && account.has("wanted")
+                        val trailing: (@Composable () -> Unit)? = if (coll || want) { {
+                            // + Collection: the card in its language and first printing, NM (long press: the details)
+                            if (coll) Box(Modifier.padding(start = 10.dp).size(32.dp).background(Gold, CircleShape)
+                                .semantics { contentDescription = "Add to the collection" }
+                                .combinedClickable(onClick = { vm.addToCollection(c.info) },
+                                    onLongClick = { keyboard?.hide(); vm.account.loadBinders(); sheetFor = c.info }),
+                                contentAlignment = Alignment.Center) {
+                                Text("+", color = Ink, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            }
+                            // ☆ Missing: the card in its language, any printing (a second tap takes it off the list)
+                            if (want) {
+                                val on = account.wanted.any { it.matches(c.info.id, ShopTerms.languageOf(c.info.lang), null) }
+                                Text(if (on) "★" else "☆", color = if (on) Gold else Muted, fontSize = 22.sp,
+                                    modifier = Modifier.padding(start = if (coll) 4.dp else 10.dp).clickable { vm.toggleWanted(c.info) }.padding(6.dp))
+                            }
                         } } else null
-                        CardRow(c, trailing = star) { keyboard?.hide(); vm.pickFromSearch(c) }
+                        CardRow(c, trailing = trailing) { keyboard?.hide(); vm.pickFromSearch(c) }
                     }
                 }
-                if (results.size >= 50) Hint("Showing the first 50 – add a word to narrow it down.")
+                if (results.size >= ScannerViewModel.SEARCH_LIMIT)
+                    Hint("Showing the first ${ScannerViewModel.SEARCH_LIMIT} – add a word to narrow it down.")
                 Spacer(Modifier.height(4.dp))
             }
+        }
+    }
+    sheetFor?.let { card ->
+        CollectionSheet(account, "NM", onClose = { sheetFor = null }) { cond, qty, cents, binder, note ->
+            vm.addToCollection(card, cond, qty, cents, binder, note)
         }
     }
 }

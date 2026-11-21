@@ -198,6 +198,9 @@ private fun TradingTopBar(state: UiState, vm: ScannerViewModel, torch: Boolean, 
                 DropdownMenuItem(text = { Text(state.book.show?.let { "Show: ${it.name}" } ?: "Show & budget…") },
                     onClick = { menu = false; onShow() })
                 DropdownMenuItem(text = { Text("New cart (next booth)") }, onClick = { menu = false; vm.newCart() })
+                if (state.account.status != null && (state.account.has("collection") || state.account.has("wanted")))
+                    DropdownMenuItem(text = { Text(if (state.account.has("collection")) "Collection" else "Missing cards") },
+                        onClick = { menu = false; vm.openCollection(if (state.account.has("collection")) CollectionPart.COLLECTION else CollectionPart.MISSING) })
                 DropdownMenuItem(text = { Text(if (torch) "Light off" else "Light on") }, onClick = { menu = false; onTorch(!torch) })
                 HorizontalDivider()
                 DropdownMenuItem(text = { Text("Settings…") }, onClick = { menu = false; onSettings() })

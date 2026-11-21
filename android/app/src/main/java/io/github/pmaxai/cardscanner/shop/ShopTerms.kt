@@ -29,6 +29,14 @@ object ShopTerms {
         else -> "EN"
     }
 
+    /** The data pack's language for the shop's card_language (the other way round from [languageOf]). */
+    fun appLang(shopLang: String?): String = when (val l = shopLang.orEmpty().uppercase()) {
+        "" -> "en"
+        "ZH-HANT" -> "zh-tw"
+        "ZH-HANS" -> "zh-cn"
+        else -> l.lowercase()
+    }
+
     fun languageName(code: String): String = LANGUAGES.firstOrNull { it.first == code }?.second ?: code
 
     /** The shop's finish for a printing the app knows. */

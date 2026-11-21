@@ -187,7 +187,8 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
     Surface(Modifier.fillMaxSize(), color = Ink) {
         Column(Modifier.fillMaxSize()) {
             // a newer app with newer prices (not over the YouTube picture)
-            state.update?.takeIf { !state.loading && !state.settings.youtube && state.settingsPage == null && !state.account.locked }?.let { u ->
+            state.update?.takeIf { !state.loading && !state.settings.youtube && state.settingsPage == null && state.collectionPage == null &&
+                !state.account.locked }?.let { u ->
                 UpdateBanner(u, state.pricesDate, onUpdate = vm::startUpdate, onLater = vm::dismissUpdate)
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -197,6 +198,8 @@ fun App(openCvReady: Boolean, vm: ScannerViewModel = viewModel()) {
                     // not connected to an account, the subscription ended, or the saved answer ran out offline
                     state.account.locked || state.account.justConnected -> AccountGateScreen(state, vm)
                     state.loading -> Loading(state.loadingText)
+                    // over the settings when opened from there (Back returns to them)
+                    state.collectionPage != null -> CollectionScreen(state, vm, state.collectionPage ?: CollectionPart.COLLECTION)
                     state.settingsPage != null -> SettingsScreen(state, vm, state.settingsPage ?: SettingsPage.MODE)
                     !granted -> Message("The scanner needs the camera.") { Button({ ask.launch(Manifest.permission.CAMERA) }) { Text("Allow camera") } }
                     state.settings.youtube -> YouTubeScreen(state, vm)
@@ -282,6 +285,7 @@ private fun Scanner(state: UiState, vm: ScannerViewModel) {
                 Text("Hold a card inside the frame. Its name and Cardmarket price appear here; " +
                         "the phone vibrates when any printing of it is worth at least your alert price. " +
                         "Not recognised? Double-tap the picture to take it anyway. Pinch to zoom.", color = Muted)
+                CollectionLinks(state, vm, Modifier.padding(top = 12.dp))
             } else {
                 ResultCard(s, state, vm)
             }

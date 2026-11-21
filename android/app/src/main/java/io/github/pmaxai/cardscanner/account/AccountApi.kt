@@ -100,6 +100,14 @@ class AccountApi(baseUrl: String, private val appVersion: String?, http: OkHttpC
 
     fun binders(token: String): JSONArray = need(call("GET", url("collection", "binders"), token)).optJSONArray("binders") ?: JSONArray()
 
+    /** One page of the whole collection (the collection page): its copies, and the cursor of the next page (null: the last one). */
+    fun collectionItems(token: String, cursor: String?, limit: Int = 500): Pair<JSONArray, String?> {
+        val u = url("collection", "items").newBuilder().addQueryParameter("limit", limit.coerceIn(1, 500).toString())
+            .apply { cursor?.let { addQueryParameter("cursor", it) } }.build()
+        val o = need(call("GET", u, token))
+        return (o.optJSONArray("items") ?: JSONArray()) to AccountStatus.str(o, "next_cursor")
+    }
+
     // ---------------------------------------------------------------- missing cards
     fun wanted(token: String): JSONArray = need(call("GET", url("wanted"), token)).optJSONArray("items") ?: JSONArray()
 

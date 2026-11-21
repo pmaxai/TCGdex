@@ -226,6 +226,11 @@ fun AccountPage(state: UiState, vm: ScannerViewModel) {
     if (storeEdition) StorePart(state, vm, st)
     else Button({ openUrl(ctx, a.portalUrl) }, modifier = Modifier.padding(top = 10.dp)) { Text("Manage subscription") }
 
+    if (a.has("collection") || a.has("wanted")) {
+        Text("Collection", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 18.dp))
+        CollectionLinks(state, vm, Modifier.padding(top = 8.dp))
+    }
+
     Text("Move to a new phone", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 18.dp))
     Text("On the new phone, open the app and scan this code. It takes over this phone's place; this one is disconnected then.",
         color = Muted, fontSize = 13.sp)
@@ -560,16 +565,17 @@ fun CollectionBar(state: UiState, vm: ScannerViewModel, s: Shown, condition: Str
     }
 }
 
-/** Long press on + Collection: the details of the copy. */
+/** Long press on + Collection (and the missing cards' Found it): the details of the copy. */
 @Composable
-private fun CollectionSheet(a: AccountUi, condition: String, onClose: () -> Unit, onAdd: (String, Int, Long?, Long?, String?) -> Unit) {
+internal fun CollectionSheet(a: AccountUi, condition: String, title: String = "Add to the collection", onClose: () -> Unit,
+                             onAdd: (String, Int, Long?, Long?, String?) -> Unit) {
     var cond by remember { mutableStateOf(condition) }
     var qty by remember { mutableIntStateOf(1) }
     var price by remember { mutableStateOf("") }
     var binder by remember { mutableStateOf<Long?>(null) }
     var note by remember { mutableStateOf("") }
     val cents = price.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it >= 0 }?.let { Math.round(it * 100) }
-    AlertDialog(onDismissRequest = onClose, title = { Text("Add to the collection") }, text = {
+    AlertDialog(onDismissRequest = onClose, title = { Text(title) }, text = {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             Text("Condition", color = Muted, fontSize = 12.sp)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {

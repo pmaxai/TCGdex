@@ -11,6 +11,7 @@ import io.github.pmaxai.cardscanner.account.AccountStatus
 import io.github.pmaxai.cardscanner.account.AccountStore
 import io.github.pmaxai.cardscanner.account.PairCode
 import io.github.pmaxai.cardscanner.ui.AccountCoordinator
+import io.github.pmaxai.cardscanner.shop.ShopTerms
 import io.github.pmaxai.cardscanner.ui.AccountUi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -67,6 +68,12 @@ class AccountTest {
         val items = ConcurrentHashMap<String, JSONObject>()      // client_ref → item
         val wanted = ConcurrentHashMap<Long, JSONObject>()
         @Volatile var nextId = 100L
+        /** the collection page: a card's name, set, number and value per copy as the shop knows them */
+        val cards = ConcurrentHashMap<String, JSONObject>()
+        /** copies per page of GET /collection/items (whatever limit the app asks for) */
+        @Volatile var pageSize = 500
+        /** the cursors GET /collection/items was asked with ("" for the first page) */
+        val pages: MutableList<String> = java.util.Collections.synchronizedList(ArrayList())
         @Volatile var statusCalls = 0
 
         fun status(): JSONObject = TestAccount.statusJson(plan = plan, active = active, state = if (active) "active" else "ended",
@@ -113,9 +120,25 @@ class AccountTest {
                     if (body.optString("card_id") == "nope-1") return err(400, "invalid_request", JSONObject().put("fields", JSONObject().put("card_id", "unknown")))
                     val ref = body.optString("client_ref")
                     val known = items[ref]
-                    val item = known ?: JSONObject(body.toString()).put("id", nextId++).put("source", "app").also { items[ref] = it }
+                    val item = known ?: JSONObject(body.toString()).put("id", nextId++).put("source", "app").also { o ->
+                        val c = cards[o.optString("card_id")]
+                        o.put("name", c?.optString("name") ?: o.optString("card_id")).put("set_name", c?.optString("set_name") ?: "")
+                            .put("number", c?.optString("number") ?: "").put("value_cents", c?.opt("value_cents") ?: JSONObject.NULL)
+                            .put("updated_at", java.time.Instant.ofEpochSecond(1_790_000_000L + o.getLong("id")).toString())
+                        items[ref] = o
+                    }
                     val r = json(if (known != null) 200 else 201, item)
                     if (slowOnce.remove(ref)) r.setHeadersDelay(3, TimeUnit.SECONDS) else r
+                }
+                request.method == "GET" && path == "/collection/items" -> {
+                    val cursor = request.requestUrl!!.queryParameter("cursor")
+                    pages += cursor ?: ""
+                    val all = items.values.sortedBy { it.getLong("id") }
+                    val from = cursor?.toInt() ?: 0
+                    val n = minOf(pageSize, request.requestUrl!!.queryParameter("limit")?.toInt() ?: 100)
+                    val next = (from + n).takeIf { it < all.size }
+                    json(200, JSONObject().put("items", JSONArray(all.drop(from).take(n))).put("next_cursor", next?.toString() ?: JSONObject.NULL)
+                        .put("server_time", java.time.Instant.now().toString()))
                 }
                 request.method == "GET" && path.startsWith("/collection/cards/") -> {
                     val id = path.removePrefix("/collection/cards/")
@@ -313,6 +336,74 @@ class AccountTest {
         assertNotNull(ui.value.wanted.first().id)
         account.toggleWanted("base1-4", "EN", "holo", "Charizard · Base Set 4/102")
         waitUntil("off the list") { fake.wanted.isEmpty() && ui.value.wanted.isEmpty() }
+    }
+
+    /** The collection page: every page of the collection, newest first, with names and values. */
+    @Test
+    fun theCollectionLoadsEveryPageNewestFirst() {
+        fake.cards["sv08-059"] = JSONObject().put("name", "Pikachu-ex").put("set_name", "Surging Sparks").put("number", "059/191").put("value_cents", 1890)
+        fake.cards["base1-4"] = JSONObject().put("name", "Charizard").put("set_name", "Base Set").put("number", "4/102").put("value_cents", 41200)
+        pair()
+        account.addToCollection("base1-4", "EN", "holo", "EX", label = "Charizard")
+        account.addToCollection("sv08-059", "DE", "normal", "NM", quantity = 2, label = "Pikachu-ex")
+        account.addToCollection("sv08-059", "EN", "normal", "NM", label = "Pikachu-ex")
+        waitUntil("3 copies sent") { AccountStore(app).queue().isEmpty() && ui.value.collectionEdits == 3 }
+        fake.pageSize = 2
+        account.loadItems()
+        waitUntil("loaded") { ui.value.items != null && !ui.value.itemsLoading }
+        val items = ui.value.items!!
+        Log.i("Account", "collection: ${items.map { "${it.quantity} × ${it.name} ${it.language}" }}")
+        assertEquals("both pages", 3, items.size)
+        assertEquals("newest first", "Pikachu-ex", items.first().name)
+        assertEquals("EN", items.first().language)
+        assertEquals("Charizard", items.last().name)
+        assertEquals(4, items.sumOf { it.quantity })
+        assertEquals(1890L * 2 + 41200, items.mapNotNull { it.valueCents }.sum())
+        assertEquals("two pages asked for", listOf("", "2"), fake.pages.toList())
+        assertTrue(items.first().searchText.contains("surging"))
+        assertEquals("the page knows it's current", ui.value.collectionEdits, ui.value.itemsAt)
+    }
+
+    /** Found it on the missing cards: into the collection (the missing card's language, the card's finish), off the list. */
+    @Test
+    fun aMissingCardFoundElsewhereGoesIntoTheCollection() {
+        pair()
+        account.toggleWanted("base1-4", "EN", null, "Charizard")
+        waitUntil("on the missing cards") { AccountStore(app).queue().isEmpty() && ui.value.wanted.firstOrNull()?.id != null }
+        val w = ui.value.wanted.first()
+        account.foundElsewhere(w, "GD", 1, 25000, defaultLanguage = "DE", defaultFinish = "holo", label = "Charizard")
+        waitUntil("in the collection, off the list") {
+            AccountStore(app).queue().isEmpty() && ui.value.wanted.isEmpty() && ui.value.collectionEdits == 1 && fake.wanted.isEmpty()
+        }
+        val copy = fake.items.values.single()
+        Log.i("Account", "found elsewhere: $copy")
+        assertEquals("the missing card's language", "EN", copy.optString("language"))
+        assertEquals("no finish on the missing card: the card's own", "holo", copy.optString("finish"))
+        assertEquals("GD", copy.optString("condition"))
+        assertEquals(25000, copy.optInt("purchase_price_cents"))
+    }
+
+    /** Remove on the missing cards takes off that entry only, not another of the same card. */
+    @Test
+    fun removeTakesOffThatEntryOnly() {
+        pair()
+        account.toggleWanted("base1-4", "EN", null, "Charizard")
+        account.toggleWanted("base1-4", "DE", null, "Glurak")
+        waitUntil("both on the list") { AccountStore(app).queue().isEmpty() && ui.value.wanted.size == 2 && ui.value.wanted.all { it.id != null } }
+        val de = ui.value.wanted.single { it.language == "DE" }
+        account.removeWanted(de, "Glurak")
+        waitUntil("the German one off") { AccountStore(app).queue().isEmpty() && fake.wanted.size == 1 && ui.value.wanted.size == 1 }
+        assertEquals("EN", ui.value.wanted.single().language)
+        assertEquals("EN", fake.wanted.values.single().optString("language"))
+    }
+
+    /** The shop's card languages back to the data pack's. */
+    @Test
+    fun shopLanguagesMapBackToThePack() {
+        assertEquals("de", ShopTerms.appLang("DE"))
+        assertEquals("zh-tw", ShopTerms.appLang("ZH-HANT"))
+        assertEquals("en", ShopTerms.appLang(null))
+        assertEquals("ja", ShopTerms.appLang(ShopTerms.languageOf("ja")))
     }
 
     /** Disconnect this phone: the slot is free, the app asks for a QR code again. */

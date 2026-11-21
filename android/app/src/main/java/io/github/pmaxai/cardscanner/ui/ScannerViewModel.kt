@@ -373,6 +373,8 @@ data class UiState(
     val scanTarget: Side = Side.GET,
     /** the settings screen is open on this page (null: closed) */
     val settingsPage: SettingsPage? = null,
+    /** the collection page is open on this tab (null: closed) */
+    val collectionPage: CollectionPart? = null,
     /** Webshop Mode: the connection, the shown card in the shop, the booking form */
     val shop: ShopState = ShopState(),
     /** a newer app with newer prices is out (null: none, or not checked yet) */
@@ -1352,6 +1354,53 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     fun toggleWanted(c: CardInfo) =
         account.toggleWanted(c.id, ShopTerms.languageOf(c.lang), null, "${c.name} · ${c.setName} ${c.numberText}")
 
+    /** + in the search list: the card in its language and its first printing (Normal when it has one), NM unless the sheet says otherwise. */
+    fun addToCollection(c: CardInfo, condition: String = "NM", quantity: Int = 1, purchaseCents: Long? = null, binderId: Long? = null,
+                        note: String? = null) {
+        val finish = ShopTerms.finishOf(defaultPrinting(c))
+        account.addToCollection(c.id, ShopTerms.languageOf(c.lang), finish, condition, quantity, purchaseCents, binderId, note,
+            label = "${c.name} · ${c.setName} ${c.numberText}")
+        _state.update { it.copy(message = "Added to the collection: ${quantity} × ${c.name} · ${ShopTerms.finishLabel(finish)} · $condition") }
+    }
+
+    // ------------------------------------------------------------------ the collection page
+    fun openCollection(part: CollectionPart = CollectionPart.COLLECTION) =
+        _state.update { it.copy(collectionPage = part, search = null, picks = null) }
+
+    fun closeCollection() = _state.update { it.copy(collectionPage = null) }
+
+    /** A card of the collection or the missing cards, as the search lists it (null: not in the data pack). */
+    suspend fun candidate(cardId: String, lang: String): Candidate? = withContext(Dispatchers.IO) {
+        val cat = catalog ?: return@withContext null
+        runCatching { cat.card(cardId, lang)?.let { candidateOf(cat, it) } }.getOrNull()
+    }
+
+    /** A card tapped on the collection page: shown as a looked-up card (the page closes). */
+    fun showFromCollection(c: Candidate) {
+        _state.update { it.copy(collectionPage = null, settingsPage = null) }
+        lookUp(c)
+    }
+
+    private fun missingLabel(w: WantedItem, c: CardInfo?): String = c?.let { "${it.name} · ${it.setName} ${it.numberText}" } ?: w.cardId
+
+    /** The missing cards' Remove. */
+    fun removeMissing(w: WantedItem) {
+        viewModelScope.launch {
+            val c = candidate(w.cardId, ShopTerms.appLang(w.language))?.info
+            account.removeWanted(w, missingLabel(w, c))
+        }
+    }
+
+    /** The missing cards' Found it: into the collection with the sheet's details, and off the list. */
+    fun foundMissing(w: WantedItem, condition: String, quantity: Int, purchaseCents: Long?, binderId: Long?, note: String?) {
+        viewModelScope.launch {
+            val c = candidate(w.cardId, ShopTerms.appLang(w.language))?.info
+            account.foundElsewhere(w, condition, quantity, purchaseCents, binderId, note,
+                defaultLanguage = ShopTerms.languageOf(c?.lang), defaultFinish = ShopTerms.finishOf(c?.let(::defaultPrinting)),
+                label = missingLabel(w, c))
+        }
+    }
+
     /** Trading, after Paid: the cards of the cart go into the collection (one per line, its price per copy). */
     fun addCartToCollection(cartId: Long) {
         val c = _state.value.book.carts.firstOrNull { it.id == cartId } ?: return
@@ -1889,13 +1938,16 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun search(query: String): List<Candidate> = withContext(Dispatchers.IO) {
         val cat = catalog ?: return@withContext emptyList()
         runCatching {
-            cat.search(query).map { info ->
-                val group = cat.groupOf(info.id)
-                val image = info.thumbnailUrl ?: cat.cardExact(info.id, "en")?.thumbnailUrl
-                    ?: cat.versions(group).firstNotNullOfOrNull { (id, l) -> cat.cardExact(id, l)?.thumbnailUrl }
-                Candidate(group, info, 0f, "search", image)
-            }
+            cat.search(query, SEARCH_LIMIT).map { info -> candidateOf(cat, info) }
         }.onFailure { Log.e(TAG, "search failed", it) }.getOrDefault(emptyList())
+    }
+
+    /** a card as the search lists it, with a picture to show (another language's when its own has none) */
+    private fun candidateOf(cat: Catalog, info: CardInfo): Candidate {
+        val group = cat.groupOf(info.id)
+        val image = info.thumbnailUrl ?: cat.cardExact(info.id, "en")?.thumbnailUrl
+            ?: cat.versions(group).firstNotNullOfOrNull { (id, l) -> cat.cardExact(id, l)?.thumbnailUrl }
+        return Candidate(group, info, 0f, "search", image)
     }
 
     /** A card from the search, the way the search was opened. */
@@ -2098,6 +2150,8 @@ class ScannerViewModel(app: Application) : AndroidViewModel(app) {
 
     companion object {
         const val TAG = "CardScanner"
+        /** the card search lists at most this many */
+        const val SEARCH_LIMIT = 150
         /** further than this the analysed picture gets too coarse */
         const val MAX_ZOOM = 5f
         /** scanned cards kept in Trading Mode's tray */
