@@ -213,10 +213,15 @@ final class EventLog: @unchecked Sendable {
         remember(shown, session)
     }
 
-    /// The last frame: the recording ends.
-    func stop(reason: String) {
+    /// The last frame: the recording ends (error: what stopped it, with the system's codes).
+    func stop(reason: String, error: String? = nil) {
         lock.lock(); defer { lock.unlock() }
-        if zeroNanos != nil { emit("recording_stopped", now()) { $0["reason"] = reason } }
+        if zeroNanos != nil {
+            emit("recording_stopped", now()) { o in
+                o["reason"] = reason
+                if let error { o["error"] = error }
+            }
+        }
     }
 
     /// The reveal of the card with this serial is on screen now (drawNanos, host time): its waiting event takes this time.

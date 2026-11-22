@@ -161,17 +161,24 @@ final class RecordingModel: ObservableObject {
         let dir = f.dir
         let s0 = loadSettings()
         await cameraFile.stop()
-        guard let log, f.durationMs > 0, let sc = scanner else {
+        // the video stopped working during the recording: what was written until then is kept
+        var durationMs = f.durationMs
+        if f.failedMidway && RecordingDir.size(dir.video) > 0 {
+            let playable = await RecordingStore.playableMs(dir.video)
+            durationMs = playable > 0 ? playable : f.appendedMs
+        }
+        guard let log, durationMs > 0, let sc = scanner else {
             try? FileManager.default.removeItem(at: dir.dir)
-            error = "Recording could not start" + (f.error.map { ": \($0)" } ?? "")
+            error = (f.failedMidway ? "Recording stopped: the video failed before any of it could be kept" : "Recording could not start")
+                + (f.error.map { ": \($0)" } ?? "")
             refresh()
             return
         }
-        log.stop(reason: f.reason)
+        log.stop(reason: f.reason, error: f.reason == "error" ? f.error : nil)
         var header = RecJSON.read(dir.header) ?? [:]
         if var v = header["video"] as? JSON {
             v["started_at"] = RecJSON.iso(f.startedAt)
-            v["duration_ms"] = f.durationMs
+            v["duration_ms"] = durationMs
             v["width"] = f.width
             v["height"] = f.height
             v["audio"] = f.hasAudio ? "mic" : "none"
@@ -186,9 +193,10 @@ final class RecordingModel: ObservableObject {
         let hits = session.filter { isHit($0.value, sc.settings.threshold) }.count
         // kept on the phone until the person says: submit (upload), save or delete
         dir.updateMeta {
-            $0["status"] = RecStatus.LOCAL.rawValue; $0["duration_ms"] = f.durationMs; $0["cards"] = session.count; $0["hits"] = hits
+            $0["status"] = RecStatus.LOCAL.rawValue; $0["duration_ms"] = durationMs; $0["cards"] = session.count; $0["hits"] = hits
             $0["stop_reason"] = f.reason; $0["decide"] = true
             if let e = f.error, f.reason == "error" { $0["stop_error"] = e }
+            if f.failedMidway { $0["video_failed"] = true }
         }
         contentRect = nil
         refresh()
@@ -251,7 +259,9 @@ final class RecordingModel: ObservableObject {
             switch m["stop_reason"] as? String {
             case "low_storage": why = " · stopped: storage low"
             case "background": why = " · stopped: the app left the screen"
-            case "error": why = " · stopped: " + ((m["stop_error"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "encoder error")
+            case "error":
+                let e = (m["stop_error"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "encoder error"
+                why = (m["video_failed"] as? Bool) == true ? " · stopped by a video error, kept until then: " + e : " · stopped: " + e
             default: why = ""
             }
         }

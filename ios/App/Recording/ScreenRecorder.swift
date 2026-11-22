@@ -13,6 +13,10 @@ struct FinishedCapture {
     let startedAt: Date
     let hasAudio: Bool
     var error: String? = nil
+    /// the video stopped working during the recording: the file holds what was written until then
+    var failedMidway = false
+    /// how much video went into the writer (for a file that failed: the most it can hold)
+    var appendedMs: Int64 = 0
 }
 
 /**
@@ -35,6 +39,8 @@ final class ScreenRecorder {
     private var background: NSObjectProtocol?
     private var stopRequested = false
     private var startedAt = Date()
+    /// why the video stopped working during the recording (with the system's error codes)
+    private var failure: String?
 
     /// the first frame is in the video: its host time in nanoseconds (the event log's zero)
     var onFirstFrame: ((Int64) -> Void)?
@@ -56,6 +62,7 @@ final class ScreenRecorder {
         guard self.dir == nil else { return }
         self.dir = dir
         stopRequested = false
+        failure = nil
         let screen = UIScreen.main.bounds.size, scale = UIScreen.main.scale
         let size = Self.outputSize(screen: CGSize(width: screen.width * scale, height: screen.height * scale), longSide: longSide)
         if let e = writer.open(dir.video, size: size, bitrate: bitrate, mic: mic) { finish(reason: "error", error: e); return }
@@ -67,10 +74,12 @@ final class ScreenRecorder {
                 self?.onPhase?(.recording(since: Date()))
             }
         }
+        // the video stopped working: the recording stops right away (not at the next Stop)
+        w.onFailure = { [weak self] text in Task { @MainActor in self?.failed(text) } }
         let rec = RPScreenRecorder.shared()
         rec.isMicrophoneEnabled = mic
         rec.startCapture(handler: { sample, type, error in
-            guard error == nil else { return }
+            if let error { w.captureFailed(error); return }
             w.enqueue(sample, type)
         }, completionHandler: { [weak self] error in
             let why = error.map(Self.why)
@@ -88,7 +97,14 @@ final class ScreenRecorder {
     nonisolated private static func why(_ e: Error) -> String {
         let ns = e as NSError
         if ns.domain == RPRecordingErrorDomain && ns.code == RPRecordingErrorCode.userDeclined.rawValue { return "screen recording wasn't allowed" }
-        return e.localizedDescription
+        return ScreenWriter.describe(e)
+    }
+
+    /// The video stopped working during the recording.
+    private func failed(_ text: String) {
+        guard dir != nil else { return }
+        if failure == nil { failure = text }
+        stop(reason: "error")
     }
 
     private func watchStorage() {
@@ -116,11 +132,14 @@ final class ScreenRecorder {
         dir = nil
         let screen = UIScreen.main.bounds.size
         let started = startedAt
+        let failedBefore = failure
+        failure = nil
         Task { @MainActor in
             let r = await writer.close()
-            let e = error ?? r.error
-            let f = FinishedCapture(dir: d, reason: e != nil && reason == "user" ? "error" : reason, durationMs: r.durationMs,
-                                    width: r.size.0, height: r.size.1, screen: screen, startedAt: started, hasAudio: r.audio, error: e)
+            let e = error ?? failedBefore ?? r.error
+            let f = FinishedCapture(dir: d, reason: e != nil && (reason == "user" || r.failedMidway) ? "error" : reason, durationMs: r.durationMs,
+                                    width: r.size.0, height: r.size.1, screen: screen, startedAt: started, hasAudio: r.audio, error: e,
+                                    failedMidway: r.failedMidway, appendedMs: r.appendedMs)
             onPhase?(.idle)
             onFinished?(f)
         }
@@ -140,6 +159,40 @@ final class ScreenWriter: @unchecked Sendable {
     private var failure: String?
     /// set before the capture starts; called once, on the writer's queue
     var onFirstFrame: ((Int64) -> Void)?
+    /// the video stopped working (the error with its codes); called once, on the writer's queue
+    var onFailure: ((String) -> Void)?
+
+    /**
+     * An error as the person can pass it on: its text, the reason if the system gives one, and every
+     * code down the chain ("The operation could not be completed – … (AVFoundationErrorDomain -11800 ›
+     * NSOSStatusErrorDomain -16364)").
+     */
+    static func describe(_ e: Error?) -> String {
+        guard let e else { return "the video stopped working" }
+        let top = e as NSError
+        var codes: [String] = []
+        var cur: NSError? = top
+        while let n = cur, codes.count < 6 {
+            codes.append("\(n.domain) \(n.code)")
+            cur = n.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        var text = top.localizedDescription
+        if let r = top.localizedFailureReason, !r.isEmpty, r != text { text += " – " + r }
+        return text + " (" + codes.joined(separator: " › ") + ")"
+    }
+
+    /// once: the first reason counts
+    private func fail(_ text: String) {
+        guard failure == nil else { return }
+        failure = text
+        onFailure?(text)
+    }
+
+    /// ReplayKit reports that the capture failed (any thread).
+    func captureFailed(_ e: Error) {
+        let text = "screen capture: " + Self.describe(e)
+        queue.async { self.fail(text) }
+    }
 
     private struct Failure: Error, LocalizedError { let text: String; var errorDescription: String? { text } }
 
@@ -193,7 +246,10 @@ final class ScreenWriter: @unchecked Sendable {
     }
 
     private func append(_ sample: CMSampleBuffer, _ type: RPSampleBufferType) {
-        guard let w = writer, w.status == .writing, !closed else { return }
+        guard let w = writer, !closed else { return }
+        // the writer can fail between two frames, too
+        if w.status == .failed { fail(Self.describe(w.error)); return }
+        guard w.status == .writing else { return }
         let pts = CMSampleBufferGetPresentationTimeStamp(sample)
         switch type {
         case .video:
@@ -208,35 +264,50 @@ final class ScreenWriter: @unchecked Sendable {
             } else if lastPTS.isValid, CMTimeGetSeconds(CMTimeSubtract(pts, lastPTS)) < 1.0 / 30 - 0.004 {
                 return       // 30 frames a second are enough
             }
-            if v.append(sample) { lastPTS = pts } else if let e = w.error { failure = e.localizedDescription }
+            if v.append(sample) { lastPTS = pts } else { fail(Self.describe(w.error)) }
         case .audioMic:
             guard let a = audioIn, firstPTS != nil, a.isReadyForMoreMediaData else { return }
-            a.append(sample)
+            if !a.append(sample) { fail("sound: " + Self.describe(w.error)) }
         default:
             break
         }
     }
 
-    struct Closed { let durationMs: Int64; let size: (Int, Int); let audio: Bool; let error: String? }
+    struct Closed {
+        let durationMs: Int64
+        let size: (Int, Int)
+        let audio: Bool
+        let error: String?
+        /// it failed during the recording: the file stays as it is, playable up to its last whole fragment
+        var failedMidway = false
+        /// the video that went in, first to last frame
+        var appendedMs: Int64 = 0
+    }
 
-    /// The file is finished (or thrown away when no frame came).
+    /// The file is finished; thrown away when no frame came; left as it is when it failed during the recording.
     func close() async -> Closed {
         let (w, first, last, size, audio, failure): (AVAssetWriter?, CMTime?, CMTime, (Int, Int), Bool, String?) = queue.sync {
             closed = true
-            defer { writer = nil; videoIn = nil; audioIn = nil; onFirstFrame = nil }
+            defer { writer = nil; videoIn = nil; audioIn = nil; onFirstFrame = nil; onFailure = nil }
             return (writer, firstPTS, lastPTS, self.size, audioIn != nil, self.failure)
         }
         guard let w else { return Closed(durationMs: 0, size: size, audio: audio, error: failure) }
-        guard let first, w.status == .writing else {
-            w.cancelWriting()
-            return Closed(durationMs: 0, size: size, audio: audio, error: failure ?? w.error?.localizedDescription)
+        guard let first else {
+            if w.status == .writing { w.cancelWriting() }
+            return Closed(durationMs: 0, size: size, audio: audio, error: failure ?? w.error.map { Self.describe($0) })
+        }
+        let end = last.isValid ? last : first
+        let ms = max(0, Int64(CMTimeGetSeconds(CMTimeSubtract(end, first)) * 1000))
+        guard w.status == .writing else {
+            // a failed writer can't be finished, and cancelling would delete the file: it stays as it is
+            return Closed(durationMs: 0, size: size, audio: audio, error: failure ?? Self.describe(w.error), failedMidway: true, appendedMs: ms)
         }
         for i in w.inputs { i.markAsFinished() }
-        let end = last.isValid ? last : first
         w.endSession(atSourceTime: end)
         await w.finishWriting()
-        let ms = Int64(CMTimeGetSeconds(CMTimeSubtract(end, first)) * 1000)
-        return Closed(durationMs: max(0, ms), size: size, audio: audio, error: w.status == .completed ? failure : (w.error?.localizedDescription ?? "the video couldn't be finished"))
+        return Closed(durationMs: ms, size: size, audio: audio,
+                      error: w.status == .completed ? failure : (w.error.map { Self.describe($0) } ?? "the video couldn't be finished"),
+                      appendedMs: ms)
     }
 }
 

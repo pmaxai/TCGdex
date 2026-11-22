@@ -1,4 +1,6 @@
+import AVFoundation
 import CryptoKit
+import ReplayKit
 import XCTest
 @testable import OverpricedCardboard
 
@@ -518,5 +520,58 @@ final class RecordingTests: XCTestCase {
         XCTAssertNil(prefs.s3Config())
         XCTAssertFalse(prefs.load().managed)
         XCTAssertNil(vault.read("s3_secret"))
+    }
+
+    // ------------------------------------------------------------------ a video that stops working
+    func testErrorsKeepTheirCodes() {
+        let inner = NSError(domain: NSOSStatusErrorDomain, code: -16364, userInfo: nil)
+        let e = NSError(domain: "AVFoundationErrorDomain", code: -11800, userInfo: [
+            NSLocalizedDescriptionKey: "The operation could not be completed",
+            NSLocalizedFailureReasonErrorKey: "An unknown error occurred (-16364)",
+            NSUnderlyingErrorKey: inner,
+        ])
+        XCTAssertEqual(ScreenWriter.describe(e),
+                       "The operation could not be completed – An unknown error occurred (-16364) (AVFoundationErrorDomain -11800 › NSOSStatusErrorDomain -16364)")
+        XCTAssertEqual(ScreenWriter.describe(nil), "the video stopped working")
+    }
+
+    private func screenFrame(_ pts: CMTime) -> CMSampleBuffer? {
+        var pb: CVPixelBuffer?
+        let attrs: [String: Any] = [kCVPixelBufferIOSurfacePropertiesKey as String: [:] as [String: Any]]
+        guard CVPixelBufferCreate(nil, 1179, 2556, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, attrs as CFDictionary, &pb) == kCVReturnSuccess,
+              let pb else { return nil }
+        CVPixelBufferLockBaseAddress(pb, [])
+        for p in 0..<CVPixelBufferGetPlaneCount(pb) {
+            memset(CVPixelBufferGetBaseAddressOfPlane(pb, p), p == 0 ? Int32(40 + Int(CMTimeGetSeconds(pts) * 30) % 160) : 128,
+                   CVPixelBufferGetBytesPerRowOfPlane(pb, p) * CVPixelBufferGetHeightOfPlane(pb, p))
+        }
+        CVPixelBufferUnlockBaseAddress(pb, [])
+        var desc: CMVideoFormatDescription?
+        CMVideoFormatDescriptionCreateForImageBuffer(allocator: nil, imageBuffer: pb, formatDescriptionOut: &desc)
+        var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 30), presentationTimeStamp: pts, decodeTimeStamp: .invalid)
+        var sb: CMSampleBuffer?
+        CMSampleBufferCreateReadyWithImageBuffer(allocator: nil, imageBuffer: pb, formatDescription: desc!, sampleTiming: &timing, sampleBufferOut: &sb)
+        return sb
+    }
+
+    /// What "keep what was recorded" stands on: a screen video the writer never finished is readable up to its last whole fragment.
+    func testAnUnfinishedVideoIsReadableUpToItsLastFragment() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("frag-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("video.mp4")
+        let w = ScreenWriter()
+        XCTAssertNil(w.open(url, size: ScreenRecorder.outputSize(screen: CGSize(width: 1179, height: 2556), longSide: 1280), bitrate: 4_000_000, mic: false))
+        let start = CACurrentMediaTime()
+        // 5 seconds of frames, never finished (as when the writer fails or the app is stopped)
+        for i in 0..<150 {
+            if let sb = screenFrame(CMTime(seconds: start + Double(i) / 30, preferredTimescale: 1_000_000_000)) { w.enqueue(sb, .video) }
+            if i % 10 == 0 { try await Task.sleep(nanoseconds: 50_000_000) }
+        }
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        let ms = await RecordingStore.playableMs(url)
+        print("StoreTest: RecordingTest: unfinished video \(RecordingDir.size(url)) bytes, playable \(ms) ms")
+        XCTAssertGreaterThan(RecordingDir.size(url), 0)
+        XCTAssertGreaterThanOrEqual(ms, 2000, "at least the first 2-second fragment")
+        _ = await w.close()
     }
 }
