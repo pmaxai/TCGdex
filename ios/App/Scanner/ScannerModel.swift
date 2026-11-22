@@ -268,12 +268,16 @@ final class ScannerModel: ObservableObject {
         maybeAlert(updated)
     }
 
+    /// The camera's outline and how sure it is, after every analysed frame – each value only when it
+    /// changed: every assignment redraws the screens that follow the scanner (YouTube Mode's open menus too).
     private func publishLive(_ r: Scan, _ img: RGBImage, _ conf: Confidence, ms: Double) {
-        liveQuad = r.quad
-        liveFrame = CGSize(width: img.width, height: img.height)
-        liveConfidence = conf
+        if liveQuad != r.quad { liveQuad = r.quad }
+        let frame = CGSize(width: img.width, height: img.height)
+        if liveFrame != frame { liveFrame = frame }
+        if liveConfidence != conf { liveConfidence = conf }
         let delay = settings.triggerDelayMs
-        liveProgress = delay > 0 ? tracker.streakMillis().map { min(1, max(0, Double($0) / Double(delay))) } : nil
+        let progress = delay > 0 ? tracker.streakMillis().map { min(1, max(0, Double($0) / Double(delay))) } : nil
+        if liveProgress != progress { liveProgress = progress }
         guard settings.showDebug || shown?.fromPhoto == true else { return }
         var lines = [String(format: "card found: %@   margin %.3f (%@)", r.detected ? "yes" : "no", r.margin, "\(conf)")]
         lines.append(r.timingsMs.sorted { $0.key < $1.key }.map { "\($0.key) \(Int($0.value)) ms" }.joined(separator: "  ") + (ms > 0 ? String(format: "  (all %.0f ms)", ms) : ""))

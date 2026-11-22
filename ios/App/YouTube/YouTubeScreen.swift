@@ -107,7 +107,11 @@ struct YouTubeScreen: View {
                 Reveal(model: model, psaPrices: account.has("psa_prices"), onSearch: { search = .replace },
                        onDrawn: { rec.revealDrawn($0) })
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                SessionBar(model: model, rec: { RecButton(rec: rec, onStart: startRecording) }, menu: { menu })
+                SessionBar(model: model, rec: { RecButton(rec: rec, onStart: startRecording) }, menu: {
+                    YouTubeMenu(packEmpty: model.session.isEmpty, hasTorch: model.camera.hasTorch, torch: torch, recording: rec.recording,
+                                act: menuAction)
+                        .equatable()
+                })
             }
             .padding(.horizontal, 16).padding(.vertical, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -147,21 +151,56 @@ struct YouTubeScreen: View {
         } catch { model.message = "Could not save: \(error.localizedDescription)" }
     }
 
-    /// ⚙: the YouTube Mode's menu
-    private var menu: some View {
+    /// what an entry of the ⚙ menu does
+    private func menuAction(_ a: YouTubeMenu.Action) {
+        switch a {
+        case .savePack: savePack()
+        case .newPack: model.resetSession()
+        case .removeLast: model.undoLast()
+        case .next: model.next()
+        case .light: torch.toggle()
+        case .search: search = .lookUp
+        case .startRecording: startRecording()
+        case .stopRecording: rec.stop(reason: "user")
+        case .recordings: recordings = true
+        case .settings: NotificationCenter.default.post(name: .openSettingsPage, object: SettingsPage.youtube)
+        case .exit: model.settings.youtube = false
+        }
+    }
+}
+
+/**
+ * ⚙: YouTube Mode's menu. It is drawn again only when what it shows changes – not with every
+ * camera frame the scanner reports: an open menu that is rebuilt under the finger loses the tap.
+ */
+struct YouTubeMenu: View, Equatable {
+    enum Action { case savePack, newPack, removeLast, next, light, search, startRecording, stopRecording, recordings, settings, exit }
+
+    let packEmpty: Bool
+    let hasTorch: Bool
+    let torch: Bool
+    let recording: Bool
+    let act: (Action) -> Void
+
+    /// the actions don't count: they stay the same
+    static func == (a: YouTubeMenu, b: YouTubeMenu) -> Bool {
+        a.packEmpty == b.packEmpty && a.hasTorch == b.hasTorch && a.torch == b.torch && a.recording == b.recording
+    }
+
+    var body: some View {
         Menu {
-            Button("Save pack (CSV)", action: savePack).disabled(model.session.isEmpty)
-            Button("New pack (reset value)") { model.resetSession() }
-            Button("Remove last card") { model.undoLast() }.disabled(model.session.isEmpty)
-            Button("Next card") { model.next() }
-            if model.camera.hasTorch { Button(torch ? "Light off" : "Light on") { torch.toggle() } }
+            Button("Save pack (CSV)") { act(.savePack) }.disabled(packEmpty)
+            Button("New pack (reset value)") { act(.newPack) }
+            Button("Remove last card") { act(.removeLast) }.disabled(packEmpty)
+            Button("Next card") { act(.next) }
+            if hasTorch { Button(torch ? "Light off" : "Light on") { act(.light) } }
             Divider()
-            Button("Search a card…") { search = .lookUp }
-            if rec.recording { Button("Stop recording") { rec.stop(reason: "user") } }
-            else { Button("Start recording", action: startRecording) }
-            Button("Recordings…") { recordings = true }
-            Button("Settings…") { NotificationCenter.default.post(name: .openSettingsPage, object: SettingsPage.youtube) }
-            Button("Exit YouTube mode") { model.settings.youtube = false }.disabled(rec.recording)
+            Button("Search a card…") { act(.search) }
+            if recording { Button("Stop recording") { act(.stopRecording) } }
+            else { Button("Start recording") { act(.startRecording) } }
+            Button("Recordings…") { act(.recordings) }
+            Button("Settings…") { act(.settings) }
+            Button("Exit YouTube mode") { act(.exit) }.disabled(recording)
         } label: {
             Image(systemName: "gearshape.fill").font(.system(size: 20)).foregroundStyle(.white)
                 .frame(width: 44, height: 44).background(Theme.panel, in: Circle())
@@ -344,6 +383,7 @@ struct RevealCard: View {
                     if let e = s.english { fit(e.name, 16, .regular, .white.opacity(0.8)) }
                     fit(s.version.setLine(withLang: false), 15, .regular, Theme.muted)
                     VersionSwitcher(s: s, onStep: model.stepVersion, onVersion: model.chooseVersion, onOther: model.choose, onSearch: onSearch)
+                        .equatable()
                     if s.priceCard.printings.count <= 1, let p = s.selected { fit(p.kind.rawValue, 15, .bold, Theme.gold) }
                     Spacer().frame(height: 4)
                     // sized for the final price, so it doesn't jump while counting up
@@ -491,15 +531,23 @@ struct SplitMix {
 
 /**
  * Other versions of the same artwork (sets, languages): ‹ › step through them, the middle opens
- * the list, with the other candidate cards below it ("Not this card?") and the search.
+ * the list, with the other candidate cards below it ("Not this card?") and the search. Drawn again
+ * only when the card or its versions change, so the open list keeps its taps (as the ⚙ menu).
  */
-private struct VersionSwitcher: View {
+private struct VersionSwitcher: View, Equatable {
     let s: Shown
     let onStep: (Int) -> Void
     let onVersion: (CardInfo) -> Void
     let onOther: (Candidate) -> Void
     let onSearch: () -> Void
     private let chip = Color(red: 0x2A / 255, green: 0x2D / 255, blue: 0x34 / 255)
+
+    /// what the switcher shows; the actions don't count
+    static func == (a: VersionSwitcher, b: VersionSwitcher) -> Bool {
+        a.s.serial == b.s.serial && a.s.version.id == b.s.version.id && a.s.version.lang == b.s.version.lang
+            && a.s.versionIndex == b.s.versionIndex && a.s.versions.map(\.versionKey) == b.s.versions.map(\.versionKey)
+            && a.s.alternatives.map(\.id) == b.s.alternatives.map(\.id)
+    }
 
     var body: some View {
         let n = s.versions.count
