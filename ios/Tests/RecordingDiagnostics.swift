@@ -1,5 +1,6 @@
 import AVFoundation
 import ReplayKit
+import SwiftUI
 import UIKit
 import XCTest
 @testable import OverpricedCardboard
@@ -7,7 +8,7 @@ import XCTest
 /// Diagnostics only (branch diag/ios-recording): where the screen recording fails. Prints DIAG lines into test.log.
 @MainActor
 final class RecordingDiagnostics: XCTestCase {
-    private func say(_ s: String) { print("DIAG: " + s) }
+    private func say(_ s: String) { print("StoreTest: DIAG: " + s) }
 
     private func describe(_ e: Error?) -> String {
         guard let e else { return "nil" }
