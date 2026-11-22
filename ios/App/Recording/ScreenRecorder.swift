@@ -22,7 +22,7 @@ struct FinishedCapture {
 /**
  * The screen as a video (the Android app's RecordingService with MediaProjection): ReplayKit hands
  * the app's own screen, frame by frame, to an H.264 writer at the chosen size and bitrate, with the
- * microphone if asked for. Movie fragments every 2 seconds keep the file playable up to the last
+ * microphone if asked for. Movie fragments every 10 seconds keep the file playable up to the last
  * fragment if the app is stopped. Stops by itself when storage runs low or the app leaves the screen.
  */
 @MainActor
@@ -148,6 +148,13 @@ final class ScreenRecorder {
 
 /// The screen video's writer, on its own queue (ReplayKit's frames arrive on another thread).
 final class ScreenWriter: @unchecked Sendable {
+    /**
+     * How often the file is made playable up to here (what a crash or a failure can lose at most).
+     * Not shorter: with 2 seconds the writer failed during busy pack openings (-11800 / -16341), a
+     * failure others saw go away with longer fragments.
+     */
+    static let fragmentSeconds = 10.0
+
     private let queue = DispatchQueue(label: "recording.screen", qos: .userInitiated)
     private var writer: AVAssetWriter?
     private var videoIn: AVAssetWriterInput?
@@ -204,7 +211,7 @@ final class ScreenWriter: @unchecked Sendable {
             do {
                 try? FileManager.default.removeItem(at: url)
                 let w = try AVAssetWriter(outputURL: url, fileType: .mp4)
-                w.movieFragmentInterval = CMTime(seconds: 2, preferredTimescale: 600)
+                w.movieFragmentInterval = CMTime(seconds: Self.fragmentSeconds, preferredTimescale: 600)
                 w.shouldOptimizeForNetworkUse = false
                 let v = AVAssetWriterInput(mediaType: .video, outputSettings: [
                     AVVideoCodecKey: AVVideoCodecType.h264,
@@ -215,6 +222,8 @@ final class ScreenWriter: @unchecked Sendable {
                         AVVideoExpectedSourceFrameRateKey: 30,
                         AVVideoMaxKeyFrameIntervalKey: 60,
                         AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
+                        // frames in the order they come (no B-frames): fragments and reordered frames trouble the writer
+                        AVVideoAllowFrameReorderingKey: false,
                     ] as [String: Any],
                 ])
                 v.expectsMediaDataInRealTime = true

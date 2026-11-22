@@ -562,8 +562,8 @@ final class RecordingTests: XCTestCase {
         let w = ScreenWriter()
         XCTAssertNil(w.open(url, size: ScreenRecorder.outputSize(screen: CGSize(width: 1179, height: 2556), longSide: 1280), bitrate: 4_000_000, mic: false))
         let start = CACurrentMediaTime()
-        // 5 seconds of frames, never finished (as when the writer fails or the app is stopped)
-        for i in 0..<150 {
+        // 12 seconds of frames, never finished (as when the writer fails or the app is stopped)
+        for i in 0..<360 {
             if let sb = screenFrame(CMTime(seconds: start + Double(i) / 30, preferredTimescale: 1_000_000_000)) { w.enqueue(sb, .video) }
             if i % 10 == 0 { try await Task.sleep(nanoseconds: 50_000_000) }
         }
@@ -571,7 +571,7 @@ final class RecordingTests: XCTestCase {
         let ms = await RecordingStore.playableMs(url)
         print("StoreTest: RecordingTest: unfinished video \(RecordingDir.size(url)) bytes, playable \(ms) ms")
         XCTAssertGreaterThan(RecordingDir.size(url), 0)
-        XCTAssertGreaterThanOrEqual(ms, 2000, "at least the first 2-second fragment")
+        XCTAssertGreaterThanOrEqual(ms, Int64(ScreenWriter.fragmentSeconds * 1000), "at least the first fragment")
         _ = await w.close()
     }
 }
