@@ -56,9 +56,9 @@ final class ReviewPrices: AppStoreBilling {
 @MainActor
 final class ScreenshotTests: XCTestCase {
     /// `scrolledBy` / `scrolledToBottom`: where the screen's scroll view stands
-    /// scale 3 with tag "ASHOT": the App Store's 1179 × 2556 pixels, opaque, only in test.log (too big for the job's log)
+    /// scale 3, opaque: the App Store's 1179 × 2556 pixels without transparency
     private func shot(_ name: String, _ view: some View, width: CGFloat = 393, height: CGFloat = 852,
-                      scrolledBy: CGFloat? = nil, scrolledToBottom: Bool = false, scale: CGFloat = 2, tag: String = "SHOT") async throws {
+                      scrolledBy: CGFloat? = nil, scrolledToBottom: Bool = false, scale: CGFloat = 2, opaque: Bool = false) async throws {
         // a window of the test host's scene (a window without a scene draws nothing)
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first, "no window scene")
         let window = UIWindow(windowScene: scene)
@@ -79,21 +79,21 @@ final class ScreenshotTests: XCTestCase {
         let img = UIGraphicsImageRenderer(bounds: window.bounds, format: {
             let f = UIGraphicsImageRendererFormat()
             f.scale = scale
-            f.opaque = tag != "SHOT"
+            f.opaque = opaque
             return f
         }()).image { _ in
             window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
         }
         window.isHidden = true
         let png = try XCTUnwrap(img.pngData()).base64EncodedString()
-        print("\(tag)-BEGIN \(name)")
+        print("SHOT-BEGIN \(name)")
         var i = png.startIndex
         while i < png.endIndex {
             let j = png.index(i, offsetBy: 3000, limitedBy: png.endIndex) ?? png.endIndex
-            print("\(tag) " + png[i..<j])
+            print("SHOT " + png[i..<j])
             i = j
         }
-        print("\(tag)-END")
+        print("SHOT-END")
     }
 
     private static func scrollViews(_ v: UIView) -> [UIScrollView] {
@@ -461,7 +461,7 @@ final class ScreenshotTests: XCTestCase {
     }
 
     private func storeShot(_ name: String, _ v: some View) async throws {
-        try await shot(name, v, scale: 3, tag: "ASHOT")
+        try await shot(name, v, scale: 3, opaque: true)
     }
 
     /**
