@@ -159,6 +159,7 @@ struct CornerIcon: View {
 struct CameraArea: View {
     @ObservedObject var model: ScannerModel
     var video = false
+    @Environment(\.cameraStandIn) private var standIn
     @State private var flash = 0.0
     @State private var pinchStart: Double?
     @State private var showZoom = false
@@ -166,7 +167,7 @@ struct CameraArea: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                CameraPreview(camera: model.camera)
+                if let standIn { standIn } else { CameraPreview(camera: model.camera) }
                 GuideOverlay(model: model, size: geo.size, dim: !video)
                 Color.white.opacity(flash).allowsHitTesting(false)
                 if showZoom || (!video && model.settings.zoom > 1.01) {
@@ -226,6 +227,16 @@ struct CameraArea: View {
 
 /// false while the page with a camera screen is hidden behind another page (the camera then stops)
 private struct CameraActiveKey: EnvironmentKey { static let defaultValue = true }
+
+/// A picture in the camera's place: the App Store screenshots, made on the simulator, which has no camera.
+private struct CameraStandInKey: EnvironmentKey { static let defaultValue: AnyView? = nil }
+
+extension EnvironmentValues {
+    var cameraStandIn: AnyView? {
+        get { self[CameraStandInKey.self] }
+        set { self[CameraStandInKey.self] = newValue }
+    }
+}
 
 extension EnvironmentValues {
     var cameraActive: Bool {

@@ -56,8 +56,9 @@ final class ReviewPrices: AppStoreBilling {
 @MainActor
 final class ScreenshotTests: XCTestCase {
     /// `scrolledBy` / `scrolledToBottom`: where the screen's scroll view stands
+    /// scale 3 with tag "ASHOT": the App Store's 1179 × 2556 pixels, opaque, only in test.log (too big for the job's log)
     private func shot(_ name: String, _ view: some View, width: CGFloat = 393, height: CGFloat = 852,
-                      scrolledBy: CGFloat? = nil, scrolledToBottom: Bool = false) async throws {
+                      scrolledBy: CGFloat? = nil, scrolledToBottom: Bool = false, scale: CGFloat = 2, tag: String = "SHOT") async throws {
         // a window of the test host's scene (a window without a scene draws nothing)
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first, "no window scene")
         let window = UIWindow(windowScene: scene)
@@ -75,19 +76,24 @@ final class ScreenshotTests: XCTestCase {
             sv.setContentOffset(CGPoint(x: 0, y: max(-sv.adjustedContentInset.top, min(bottom, y))), animated: false)
             for _ in 0..<5 { try await Task.sleep(nanoseconds: 100_000_000); window.layoutIfNeeded() }
         }
-        let img = UIGraphicsImageRenderer(bounds: window.bounds, format: { let f = UIGraphicsImageRendererFormat(); f.scale = 2; return f }()).image { _ in
+        let img = UIGraphicsImageRenderer(bounds: window.bounds, format: {
+            let f = UIGraphicsImageRendererFormat()
+            f.scale = scale
+            f.opaque = tag != "SHOT"
+            return f
+        }()).image { _ in
             window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
         }
         window.isHidden = true
         let png = try XCTUnwrap(img.pngData()).base64EncodedString()
-        print("SHOT-BEGIN \(name)")
+        print("\(tag)-BEGIN \(name)")
         var i = png.startIndex
         while i < png.endIndex {
             let j = png.index(i, offsetBy: 3000, limitedBy: png.endIndex) ?? png.endIndex
-            print("SHOT " + png[i..<j])
+            print("\(tag) " + png[i..<j])
             i = j
         }
-        print("SHOT-END")
+        print("\(tag)-END")
     }
 
     private static func scrollViews(_ v: UIView) -> [UIScrollView] {
@@ -407,5 +413,150 @@ final class ScreenshotTests: XCTestCase {
         try await shot("ios-recordings", RecordingsSheet(rec: rec, account: a))
         sc.settings.youtube = false
         sc.settings.title = ""
+    }
+
+    // ------------------------------------------------------------------ the App Store's screenshots
+
+    /// The status bar as on a phone (the simulator's window draws none): 9:41, signal, Wi-Fi, battery.
+    private struct StatusBar: View {
+        var body: some View {
+            HStack {
+                Text("9:41").font(.system(size: 17, weight: .semibold))
+                Spacer()
+                HStack(spacing: 6) {
+                    Image(systemName: "cellularbars")
+                    Image(systemName: "wifi")
+                    Image(systemName: "battery.100percent").font(.system(size: 19))
+                }
+                .font(.system(size: 15, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 34)
+            .frame(height: 54, alignment: .center)
+            .padding(.top, 2)
+        }
+    }
+
+    private func onPhone(_ v: some View) -> some View {
+        ZStack(alignment: .top) {
+            v
+            StatusBar().frame(maxHeight: .infinity, alignment: .top).ignoresSafeArea().allowsHitTesting(false)
+        }
+    }
+
+    /// What the camera would see: the card on a dark table (the simulator has no camera; the picture is the card's own).
+    private func onTable(_ card: CardInfo) -> AnyView {
+        AnyView(GeometryReader { g in
+            ZStack {
+                RadialGradient(colors: [Color(red: 0.24, green: 0.2, blue: 0.17), Color(red: 0.08, green: 0.07, blue: 0.06)],
+                               center: .center, startRadius: 10, endRadius: max(g.size.width, g.size.height) * 0.75)
+                CardPicture(card: card, large: true)
+                    .frame(height: g.size.height * 0.66)
+                    .rotation3DEffect(.degrees(8), axis: (x: 1, y: -0.3, z: 0), perspective: 0.6)
+                    .rotationEffect(.degrees(-2.5))
+                    .shadow(color: .black.opacity(0.6), radius: 14, x: 4, y: 10)
+            }
+            .frame(width: g.size.width, height: g.size.height)
+        })
+    }
+
+    private func storeShot(_ name: String, _ v: some View) async throws {
+        try await shot(name, v, scale: 3, tag: "ASHOT")
+    }
+
+    /**
+     * The App Store's screenshots, 1179 × 2556 (iPhone with Dynamic Island, medium): the scanner with a card, a card's
+     * prices and chart, YouTube Mode with a HIT, the collection, Add to cart, the cart, the missing cards. Card
+     * pictures come from the network while the test runs (none is kept in the repo).
+     */
+    func testAppStoreScreenshots() async throws {
+        guard let pack = ParityTests.pack ?? Pack.bundledDir.flatMap({ try? Pack(dir: $0) }) else { throw XCTSkip("no data pack") }
+        let cat = Catalog(db: pack.db)
+        let d0 = UserDefaults.standard
+        let saved = ["youtube", "title", "threshold"].map { ($0, d0.object(forKey: $0)) }
+        defer { for (k, v) in saved { if let v { d0.set(v, forKey: k) } else { d0.removeObject(forKey: k) } } }
+        func card(_ id: String, _ lang: String = "en") -> CardInfo? { cat.cardExact(id, lang) ?? cat.card(id, lang) }
+        let charizardEx = try XCTUnwrap(card("sv03.5-199") ?? card("base1-4"))
+        let umbreon = try XCTUnwrap(card("swsh7-215") ?? card("base1-4"))
+        let charizard = try XCTUnwrap(card("base1-4"))
+        let pikachu = card("sv08-238") ?? card("sv08-059")
+        print("StoreTest: App Store cards: \(charizardEx.id) \(umbreon.id) \(charizard.id) \(pikachu?.id ?? "-")")
+
+        StandIn.reset()
+        let email = "creator@overpricedcardboard.com"
+        let a = account()
+        a.signInApple(identityToken: "test_apple:\(email)", authorizationCode: nil)
+        try await until { a.status != nil && !a.busy }
+        StandIn.lock.lock()
+        if let acc = StandIn.accounts[email] { acc.active = true; acc.plan = "creator"; acc.source = "app_store"; acc.emailVerified = true }
+        StandIn.lock.unlock()
+        a.check(force: true)
+        try await until { a.has("youtube") && a.has("collection") && !a.busy }
+
+        // 1 the scanner: a card in front of the camera, its prices below
+        let trading = TradingModel(store: TradingStore(file: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)))
+        let scanner = ScannerModel(engine: try ScannerEngine(pack: pack), catalog: cat)
+        let resolver = CardResolver(catalog: cat, pack: pack)
+        func shown(_ c: CardInfo, serial: Int) -> Shown {
+            resolver.build(group: cat.groupOf(c.id), version: c, text: nil, confidence: .sure, alternatives: [], locked: true,
+                           fromPhoto: false, scan: nil, serial: serial)
+        }
+        scanner.show(shown(charizardEx, serial: 1))
+        trading.addToCart(DealCard(card: umbreon, priceCard: umbreon, printing: umbreon.printings.first))
+        try await storeShot("appstore-1-scanner", onPhone(ScannerScreen(model: scanner, trading: trading)
+            .environment(\.cameraStandIn, onTable(charizardEx)).environmentObject(a)))
+
+        // 2 a card's page: every price source, the chart, PSA
+        try await storeShot("appstore-2-card", onPhone(NavigationStack { CardDetail(card: umbreon, catalog: cat, trading: trading) }.environmentObject(a)))
+
+        // 3 YouTube Mode: the pack's reveal, a HIT
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("as-\(UUID().uuidString)")
+        let q = UploadQueue()
+        q.store = RecordingStore(root: tmp.appendingPathComponent("recordings"))
+        q.prefs = RecordingPrefs(defaults: UserDefaults(suiteName: "as-\(UUID().uuidString)")!, vault: MemoryVault())
+        let rec = RecordingModel(store: q.store, prefs: q.prefs, uploads: q, templatesCache: tmp.appendingPathComponent("templates/index.json"))
+        let yt = ScannerModel(engine: try ScannerEngine(pack: pack), catalog: cat)
+        yt.settings.youtube = true
+        yt.settings.threshold = 50
+        yt.settings.title = "Opening a booster bundle"
+        for c in [pikachu, umbreon, charizard].compactMap({ $0 }) {
+            yt.show(shown(c, serial: 0))
+            yt.addAgain()
+        }
+        try await storeShot("appstore-3-youtube", YouTubeScreen(model: yt, rec: rec).environment(\.cameraStandIn, onTable(charizard)).environmentObject(a))
+
+        // 4 the collection, 7 the missing cards
+        let picks: [(CardInfo, String, Int)] = [(charizard, "EX", 1), (charizardEx, "NM", 2), (umbreon, "NM", 1)] + (pikachu.map { [($0, "NM", 1)] } ?? [])
+        for (c, _, _) in picks {
+            StandIn.cards[c.id] = (c.name, c.setName, c.numberText, Int(((c.bestValue ?? 0) * 100).rounded()))
+        }
+        for (c, cond, qty) in picks {
+            a.addToCollection(cardId: c.id, language: ShopTerms.languageOf(c.lang), finish: "normal", condition: cond, quantity: qty, label: c.id)
+        }
+        for id in ["base1-2", "base1-15", "swsh7-218", "sv03.5-205"] {
+            if let c = card(id) {
+                StandIn.cards[id] = (c.name, c.setName, c.numberText, Int(((c.bestValue ?? 0) * 100).rounded()))
+                a.toggleWanted(cardId: id, language: "EN", finish: nil, label: id)
+            }
+        }
+        try await until { a.pending.isEmpty }
+        await a.loadItems()
+        try await storeShot("appstore-4-collection", onPhone(CollectionScreen(account: a, catalog: cat).environmentObject(a)))
+
+        // 5 Add to cart: a price for a deal; 6 the cart, both sides
+        let deal = shown(charizard, serial: 2)
+        trading.startDeal()
+        trading.condition = .EX
+        trading.asking = (deal.value ?? 300) * 0.8
+        try await storeShot("appstore-5-add-to-cart", onPhone(DealSheet(d: DealCard(deal), trading: trading)))
+        trading.addToCart(DealCard(deal))
+        if let p = pikachu {
+            trading.side = .GIVE
+            trading.addToCart(DealCard(card: p, priceCard: p, printing: p.printings.first))
+        }
+        try await storeShot("appstore-6-cart", onPhone(CartSheet(trading: trading)))
+        try await storeShot("appstore-7-missing", onPhone(CollectionScreen(account: a, catalog: cat, start: .missing).environmentObject(a)))
+        yt.settings.youtube = false
+        yt.settings.title = ""
     }
 }
