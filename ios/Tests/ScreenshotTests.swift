@@ -444,13 +444,14 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
-    /// What the camera would see: the card on a dark table (the simulator has no camera; the picture is the card's own).
+    /// What the camera would see: a card on a dark table (the simulator has no camera; the card is a drawn one).
     private func onTable(_ card: CardInfo) -> AnyView {
         AnyView(GeometryReader { g in
             ZStack {
                 RadialGradient(colors: [Color(red: 0.24, green: 0.2, blue: 0.17), Color(red: 0.08, green: 0.07, blue: 0.06)],
                                center: .center, startRadius: 10, endRadius: max(g.size.width, g.size.height) * 0.75)
-                CardPicture(card: card, large: true)
+                DrawnCard(seed: card.id)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
                     .frame(height: g.size.height * 0.66)
                     .rotation3DEffect(.degrees(8), axis: (x: 1, y: -0.3, z: 0), perspective: 0.6)
                     .rotationEffect(.degrees(-2.5))
@@ -460,14 +461,15 @@ final class ScreenshotTests: XCTestCase {
         })
     }
 
+    /// no card artwork in the store's images: every card picture is a drawn card
     private func storeShot(_ name: String, _ v: some View) async throws {
-        try await shot(name, v, scale: 3, opaque: true)
+        try await shot(name, v.environment(\.cardArtStandIn, true), scale: 3, opaque: true)
     }
 
     /**
      * The App Store's screenshots, 1179 × 2556 (iPhone with Dynamic Island, medium): the scanner with a card, a card's
-     * prices and chart, YouTube Mode with a HIT, the collection, Add to cart, the cart, the missing cards. Card
-     * pictures come from the network while the test runs (none is kept in the repo).
+     * prices and chart, YouTube Mode with a HIT, the collection, Add to cart, the cart, the missing cards. No card
+     * artwork: every card picture is drawn by the app (cardArtStandIn).
      */
     func testAppStoreScreenshots() async throws {
         guard let pack = ParityTests.pack ?? Pack.bundledDir.flatMap({ try? Pack(dir: $0) }) else { throw XCTSkip("no data pack") }

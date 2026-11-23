@@ -365,12 +365,18 @@ struct CartSheet: View {
 
 struct LineRow: View {
     let l: CartLine
+    @Environment(\.cardArtStandIn) private var standIn
     var body: some View {
         HStack(spacing: 10) {
-            AsyncImage(url: l.image.flatMap(URL.init(string:))) { phase in
-                switch phase {
-                case .success(let img): img.resizable().scaledToFit()
-                default: RoundedRectangle(cornerRadius: 3).fill(Theme.panel)
+            Group {
+                if standIn { DrawnCard(seed: l.cardId) }
+                else {
+                    AsyncImage(url: l.image.flatMap(URL.init(string:))) { phase in
+                        switch phase {
+                        case .success(let img): img.resizable().scaledToFit()
+                        default: RoundedRectangle(cornerRadius: 3).fill(Theme.panel)
+                        }
+                    }
                 }
             }
             .frame(width: 34, height: 48)
