@@ -153,10 +153,27 @@ struct CollectionItem: Equatable, Identifiable {
 
 /// The shop's words: card languages, conditions and finishes (Shop API v1 enums).
 enum ShopTerms {
-    struct Grade: Identifiable { let code: String; let label: String; var id: String { code } }
-    static let conditions: [Grade] = [Grade(code: "M", label: "Mint"), Grade(code: "NM", label: "Near Mint"), Grade(code: "EX", label: "Excellent"),
-                                      Grade(code: "GD", label: "Good"), Grade(code: "LP", label: "Light Played"), Grade(code: "PL", label: "Played"),
-                                      Grade(code: "PO", label: "Poor")]
+    /// a condition, best first; share: of the Near Mint price, as in Trading
+    struct Grade: Identifiable { let code: String; let label: String; var share = 1.0; var id: String { code } }
+    static let conditions: [Grade] = [Grade(code: "M", label: "Mint"), Grade(code: "NM", label: "Near Mint"), Grade(code: "EX", label: "Excellent", share: 0.85),
+                                      Grade(code: "GD", label: "Good", share: 0.75), Grade(code: "LP", label: "Light Played", share: 0.65),
+                                      Grade(code: "PL", label: "Played", share: 0.5), Grade(code: "PO", label: "Poor", share: 0.3)]
+
+    /// the share of the Near Mint price a card in this condition is worth
+    static func share(_ condition: String) -> Double { conditions.first { $0.code == condition }?.share ?? 1 }
+
+    /// "Deutsch" for DE
+    static func languageName(_ code: String) -> String { languages.first { $0.code == code }?.name ?? code }
+
+    /// a product's status in words
+    static func statusLabel(_ s: String) -> String {
+        switch s {
+        case "active": return "for sale"
+        case "draft": return "draft (not in the shop)"
+        case "archived": return "archived"
+        default: return s
+        }
+    }
 
     /// The shop's card_language for the language the app read off the card.
     static func languageOf(_ appLang: String?) -> String {

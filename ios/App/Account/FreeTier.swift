@@ -145,7 +145,7 @@ extension AccountModel {
 
 /// A feature the free version shows but doesn't include.
 enum LockedFeature: String, Identifiable {
-    case search, trading, missing, photo, alert, collectionFull, values, share, psa, youtube, recording
+    case search, trading, missing, photo, alert, collectionFull, values, share, psa, youtube, recording, webshop
 
     var id: String { rawValue }
 
@@ -162,6 +162,7 @@ enum LockedFeature: String, Identifiable {
         case .psa: return "PSA prices are an add-on"
         case .youtube: return "YouTube Mode comes with the Creator plan"
         case .recording: return "Recording comes with the Creator plan"
+        case .webshop: return "Webshop Mode needs a connected webshop"
         }
     }
 
@@ -178,11 +179,14 @@ enum LockedFeature: String, Identifiable {
         case .psa: return "What PSA 10, 9 and 8 copies of a card sold for on eBay – an add-on for Collector and Creator, monthly or yearly."
         case .youtube: return "Full screen for unboxing and price-check videos: an animated price reveal for every card, a HIT at your alert price, the pack's running value."
         case .recording: return "● REC records YouTube Mode with a log of every card, saved in Photos or uploaded for the video pipeline."
+        case .webshop: return "Book scanned cards into your webshop's stock with price, condition and box, and sell a customer's order at your table. It appears once a webshop is connected to your account."
         }
     }
 
     /// the alert's way forward: the plans, or (an add-on) the price data page
     var isAddon: Bool { self == .psa }
+    /// no plan brings it: the shop connects a webshop to the account (Webshop as a Service)
+    var byTheShop: Bool { self == .webshop }
 }
 
 extension Notification.Name {
@@ -197,10 +201,14 @@ extension View {
     func lockedAlert(_ feature: Binding<LockedFeature?>) -> some View {
         alert(feature.wrappedValue?.title ?? "", isPresented: Binding(get: { feature.wrappedValue != nil }, set: { if !$0 { feature.wrappedValue = nil } }),
               presenting: feature.wrappedValue) { f in
-            Button(f.isAddon ? "See the add-on" : "See the plans") {
-                NotificationCenter.default.post(name: f.isAddon ? .showAddons : .showPlans, object: nil)
+            if f.byTheShop {
+                Button("OK", role: .cancel) {}
+            } else {
+                Button(f.isAddon ? "See the add-on" : "See the plans") {
+                    NotificationCenter.default.post(name: f.isAddon ? .showAddons : .showPlans, object: nil)
+                }
+                Button("Not now", role: .cancel) {}
             }
-            Button("Not now", role: .cancel) {}
         } message: { f in Text(f.text) }
     }
 }
@@ -215,8 +223,10 @@ struct LockedPage: View {
             Image(systemName: icon).font(.system(size: 40)).foregroundStyle(Theme.gold)
             Text(feature.title).font(.title3.bold()).foregroundStyle(.white).multilineTextAlignment(.center)
             Text(feature.text).font(.subheadline).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
-            Button("See the plans") { NotificationCenter.default.post(name: .showPlans, object: nil) }
-                .buttonStyle(.borderedProminent).foregroundStyle(Theme.ink).padding(.top, 6)
+            if !feature.byTheShop {
+                Button("See the plans") { NotificationCenter.default.post(name: .showPlans, object: nil) }
+                    .buttonStyle(.borderedProminent).foregroundStyle(Theme.ink).padding(.top, 6)
+            }
         }
         .padding(28)
         .frame(maxWidth: 420)

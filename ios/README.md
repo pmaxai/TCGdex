@@ -28,7 +28,21 @@ App Store.
 - **Nightly prices:** the data pack downloads from the shop (only the changed files), also in the
   background, and is used from the next start.
 
-YouTube mode with recording, and Webshop mode, come later.
+- **YouTube Mode** (hold Scanner in the bottom bar → YouTube Mode; Creator plan): full screen, a price
+  reveal for every card, a HIT at the alert price, the pack's value, ● REC with a log of every card,
+  saved in Photos or uploaded to the account's storage.
+- **Webshop Mode** (hold Scanner → Webshop Mode; appears once a webshop is connected to the account):
+  as on Android. **Stock in**: scan or search a card, see its prices and what the shop holds of it
+  (one line per product with price, stock per box and status), pick language, type (N / H / RH /
+  1st), box (1–999, the last one is remembered), selling price (the shop's, else the market value
+  for the condition, never below the minimum selling price) and condition (sky blue: in stock), then
+  **Add to stock** / **Create in the shop**, with Undo. A card without a picture in its language
+  gets **Create Product Image** (a still, cut to the card's edge and straightened). **Sell**: each
+  card the customer wants goes into the order (🧾, kept on the phone); **Complete sale** takes it out
+  of stock in one batch, with Undo. **Settings › Webshop**: host (filled in from the account), key id
+  and secret (in the Keychain, never shown again), Save & test, the minimum selling price. Every
+  request is signed (HMAC-SHA256) and every write keeps its Idempotency-Key on retries, so nothing
+  is booked or sold twice.
 
 ## How it is built
 
@@ -48,6 +62,9 @@ YouTube mode with recording, and Webshop mode, come later.
     creator codes, Delete account and the offline queue. These run against `StandIn`, a stand-in
     of the shop's API.
   - Trading mode's numbers.
+  - Webshop Mode: the shop API's signing vectors, the client against `FakeShop` (retries with the
+    same key, errors, paging, photos, batches), Stock in and Sell, and a round trip on the staging
+    shop when the secrets `POKESHOP_STAGING_KEY_ID` / `_SECRET` are there (skipped otherwise).
   - Screenshots of the main screens.
 
 The Xcode project is generated from `project.yml` by [XcodeGen](https://github.com/yonaskolb/XcodeGen),

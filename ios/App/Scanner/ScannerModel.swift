@@ -18,6 +18,8 @@ struct ScannerSettings: Equatable {
     var youtube = false
     /// YouTube Mode's title line at the top of the picture (optional)
     var title = ""
+    /// Webshop Mode instead of the scanner (the Scanner tab's mode; with a connected webshop)
+    var webshop = false
     var guideFraction: Double { Double(guideSize) / 100 }
 
     static func load(_ d: UserDefaults = .standard) -> ScannerSettings {
@@ -31,6 +33,7 @@ struct ScannerSettings: Equatable {
         if d.object(forKey: "zoom") != nil { s.zoom = max(1, d.double(forKey: "zoom")) }
         s.youtube = d.bool(forKey: "youtube")
         s.title = d.string(forKey: "title") ?? ""
+        s.webshop = !s.youtube && d.bool(forKey: "webshop")
         return s
     }
 
@@ -44,6 +47,21 @@ struct ScannerSettings: Equatable {
         d.set(zoom, forKey: "zoom")
         d.set(youtube, forKey: "youtube")
         d.set(title, forKey: "title")
+        d.set(webshop, forKey: "webshop")
+    }
+}
+
+/// Frames wanted for something else than recognition (Webshop's product picture without a still camera).
+private final class FrameGrab: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiting: [CheckedContinuation<RGBImage?, Never>] = []
+    var wanted: Bool { lock.lock(); defer { lock.unlock() }; return !waiting.isEmpty }
+    func add(_ c: CheckedContinuation<RGBImage?, Never>) { lock.lock(); waiting.append(c); lock.unlock() }
+    /// hands the frame (or nil: no frame came) to whoever waits; false: nobody waited
+    @discardableResult func deliver(_ img: RGBImage?) -> Bool {
+        lock.lock(); let w = waiting; waiting = []; lock.unlock()
+        w.forEach { $0.resume(returning: img) }
+        return !w.isEmpty
     }
 }
 
@@ -106,6 +124,7 @@ final class ScannerModel: ObservableObject {
     private let tracker: ScanTracker
     private let reader = TextReader()
     private let gate = FrameGate()
+    private let grab = FrameGrab()
     private let textQueue = DispatchQueue(label: "scanner.text", qos: .userInitiated)
     /// recognition runs here, so the camera's queue stays free (a recording's camera file gets every frame)
     private let recognizeQueue = DispatchQueue(label: "scanner.recognize", qos: .userInitiated)
@@ -127,15 +146,26 @@ final class ScannerModel: ObservableObject {
         gate.set(guide: settings.guideFraction)
         applyEnergyFilter(settings.energyFilter)
         camera.onFrame = { [weak self] img in self?.onFrame(img) }
-        camera.wantsFrame = { [gate] in gate.idle }
+        camera.wantsFrame = { [gate, grab] in gate.idle || grab.wanted }
     }
 
     // ------------------------------------------------------------------ frames (camera queue)
 
     /// The camera box's width / height: frames are cut to what it shows.
     func setViewAspect(_ a: Double) { gate.set(aspect: a) }
+    var viewAspect: Double { gate.aspect }
+
+    /// The camera's next whole frame, also while the scanner waits (nil: none came within the time).
+    func grabFrame(timeout: Double = 3) async -> RGBImage? {
+        let grab = self.grab
+        return await withCheckedContinuation { c in
+            grab.add(c)
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { grab.deliver(nil) }
+        }
+    }
 
     nonisolated private func onFrame(_ frame: RGBImage) {
+        if grab.deliver(frame) { return }
         guard gate.tryBegin() else { return }
         recognizeQueue.async { [weak self] in self?.recognize(frame) }
     }
@@ -385,6 +415,13 @@ final class ScannerModel: ObservableObject {
         closePicks()
         setPaused(false)
         logPack(.next)
+    }
+
+    /// Filling something in for the shown card (Webshop Mode): the camera waits, so another card in view can't replace it meanwhile.
+    func hold() {
+        guard !paused, let s = shown else { return }
+        tracker.lock(s.group)
+        setPaused(true)
     }
 
     /// Tap on the waiting camera: scan again.

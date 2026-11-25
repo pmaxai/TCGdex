@@ -27,6 +27,8 @@ final class StandIn: URLProtocol {
         var psa: String?
         /// Creator's S3 storage and Automatic Content Processing, switched on by the shop
         var s3 = false
+        /// the webshop the shop connected to the account (Webshop as a Service): its host
+        var webshop: String?
         init(id: String, email: String) { self.id = id; self.email = email }
     }
 
@@ -111,8 +113,9 @@ final class StandIn: URLProtocol {
             "device": ["id": "dev_1", "name": "iPhone"],
             "features": a.active ? ["scanner": true, "trading": true, "collection": true, "wanted": true, "youtube": a.plan == "creator",
                                     "recording": a.plan == "creator", "s3_upload": a.plan == "creator" && a.s3,
-                                    "pipeline": a.plan == "creator" && a.s3, "psa_prices": a.psa != nil] : [String: Bool](),
+                                    "pipeline": a.plan == "creator" && a.s3, "psa_prices": a.psa != nil, "webshop": a.webshop != nil] : [String: Bool](),
         ]
+        o["webshop"] = a.active ? (a.webshop.map { ["host": $0] as Any } ?? NSNull()) : NSNull()
         o["addons"] = a.psa.map { [["id": "psa_prices", "state": "active", "source": "app_store", "base_plan": $0,
                                     "renews_at": iso.string(from: now.addingTimeInterval(($0 == "yearly" ? 365 : 30) * 86_400)), "ends_at": NSNull()] as [String: Any]] } ?? []
         if a.active {

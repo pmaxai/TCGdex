@@ -135,6 +135,19 @@ private:
     return [NSData dataWithBytes:card.data length:card.total() * 3];
 }
 
+- (NSArray<NSValue *> *)cardQuadOf:(CCRecognition *)r hit:(CCHit *)hit margin:(double)margin {
+    Quad q;
+    if (!_rec->cardQuad(r->_r, hit->_h, margin, q)) return nil;
+    return pointsOf(q);
+}
+
++ (NSData *)rectifyRGB:(NSData *)rgb width:(int)width height:(int)height quad:(NSArray<NSValue *> *)quad
+              outWidth:(int)ow outHeight:(int)oh {
+    cv::Mat card = readings::rectify(rgbMat(rgb, width, height), quadOf(quad), ow, oh);
+    cv::Mat c = card.isContinuous() ? card : card.clone();
+    return [NSData dataWithBytes:c.data length:c.total() * 3];
+}
+
 + (NSArray<NSValue *> *)guideQuadWidth:(int)w height:(int)h prior:(CCPrior)prior {
     return pointsOf(readings::guideQuad(w, h, Prior{prior.cx, prior.cy, prior.h}));
 }

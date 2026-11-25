@@ -15,6 +15,8 @@ final class AppModel: ObservableObject {
     private(set) var catalog: Catalog?
     private(set) var engine: ScannerEngine?
     private(set) var scanner: ScannerModel?
+    /// Webshop Mode: the connected shop, the shown card in it, Stock in and Sell
+    private(set) var webshop: WebshopModel?
     let account: AccountModel
     let store: StoreModel
     let trading = TradingModel()
@@ -29,8 +31,12 @@ final class AppModel: ObservableObject {
         let rec = recording
         rec.uploadAllowed = { [weak account] in account.map { $0.has("s3_upload") && $0.has("pipeline") } ?? false }
         account.onS3 = { [weak rec] o in rec?.applyManagedS3(o) }
-        // a new answer may switch uploading on or off (the storage and Automatic Content Processing)
-        account.onStatus = { [weak rec] _ in rec?.reload() }
+        // a new answer may switch uploading on or off (the storage and Automatic Content Processing),
+        // and bring the webshop connected to the account (its host fills in an empty connection)
+        account.onStatus = { [weak rec, weak self, weak account] st in
+            rec?.reload()
+            self?.webshop?.applyAccount(has: account?.has("webshop") ?? false, host: st?.webshopHost)
+        }
         account.onConnected = { [weak self] in self?.store.start() }
         account.onAffiliate = { [weak self] result, aff in self?.store.signedInWithCode(result, aff) }
         account.start()
@@ -52,6 +58,9 @@ final class AppModel: ObservableObject {
             pack = p; catalog = c; engine = e
             let sc = ScannerModel(engine: e, catalog: c)
             scanner = sc
+            let shop = WebshopModel(scanner: sc)
+            shop.applyAccount(has: account.has("webshop"), host: account.status?.webshopHost)
+            webshop = shop
             recording.packInfo = { [weak self] in (self?.pack?.version, self?.catalog?.pricesDate.map { String($0.prefix(10)) }) }
             recording.attach(sc)
             state = .ready

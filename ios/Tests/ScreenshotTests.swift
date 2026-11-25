@@ -415,6 +415,118 @@ final class ScreenshotTests: XCTestCase {
         sc.settings.title = ""
     }
 
+    /// Webshop Mode: not connected, Settings › Webshop, Stock in (a product of the card, a new one, booked), Sell and the customer's order.
+    func testWebshopMode() async throws {
+        guard let pack = ParityTests.pack ?? Pack.bundledDir.flatMap({ try? Pack(dir: $0) }) else { throw XCTSkip("no data pack") }
+        let cat = Catalog(db: pack.db)
+        let d0 = UserDefaults.standard
+        let saved = ["youtube", "webshop"].map { ($0, d0.object(forKey: $0)) }
+        defer { for (k, v) in saved { if let v { d0.set(v, forKey: k) } else { d0.removeObject(forKey: k) } } }
+        StandIn.reset()
+        FakeShop.reset()
+        let email = "shop@overpricedcardboard.com"
+        let a = account()
+        a.signInApple(identityToken: "test_apple:\(email)", authorizationCode: nil)
+        try await until { a.status != nil && !a.busy }
+        StandIn.lock.lock()
+        if let acc = StandIn.accounts[email] { acc.active = true; acc.plan = "collector"; acc.source = "app_store"; acc.emailVerified = true; acc.webshop = "overpricedcardboard.com" }
+        StandIn.lock.unlock()
+        a.check(force: true)
+        try await until { a.has("webshop") && !a.busy }
+        XCTAssertEqual(a.status?.webshopHost, "overpricedcardboard.com")
+
+        let sc = ScannerModel(engine: try ScannerEngine(pack: pack), catalog: cat)
+        sc.settings.youtube = false
+        sc.settings.webshop = true
+        let trading = TradingModel()
+        func model(_ store: ShopStore) -> WebshopModel {
+            WebshopModel(scanner: sc, store: store, session: FakeShop.session(), sleep: { _ in },
+                         orderFile: FileManager.default.temporaryDirectory.appendingPathComponent("order-\(UUID().uuidString).json"))
+        }
+        func store() -> ShopStore { ShopStore(defaults: UserDefaults(suiteName: "shots-shop-\(UUID().uuidString)")!, vault: MemoryVault()) }
+        func screen(_ web: WebshopModel) -> some View { WebshopScreen(web: web, scanner: sc, trading: trading).environmentObject(a) }
+
+        // the account's webshop: its host is filled in, key id and secret are still to come
+        let fresh = model(store())
+        fresh.applyAccount(has: a.has("webshop"), host: a.status?.webshopHost)
+        XCTAssertEqual(fresh.host, "overpricedcardboard.com")
+        try await shot("ios-webshop-connect", screen(fresh))
+        try await shot("ios-webshop-settings", NavigationStack {
+            WebshopSettingsView(web: fresh).navigationTitle("Webshop").navigationBarTitleDisplayMode(.inline)
+        })
+
+        // connected: the shop holds the card in German (three copies, two held by a checkout) and in English
+        let st = store()
+        st.save(host: "overpricedcardboard.com", keyId: "kid_8Hq2", secret: "sk_demo")
+        st.lastBox = 14
+        let ref = "sv03.5-199"
+        let card = try XCTUnwrap(cat.cardExact(ref, "de") ?? cat.card(ref, "de"), "\(ref) in the data pack")
+        let resolver = CardResolver(catalog: cat, pack: pack)
+        var shown = resolver.build(group: cat.groupOf(card.id), version: card, text: nil, confidence: .sure, alternatives: [], locked: false,
+                                   fromPhoto: false, scan: nil, serial: 1)
+        if shown.priceCard.printings.contains(where: { $0.kind == .holo }) { shown.printing = .holo }
+        let finish = ShopTerms.finishOf(shown.printing)
+        let f1 = finish.prefix(1).uppercased()
+        var items = [
+            WebshopTests.productJSON(sku: "\(ref)-DE-NM-\(f1)", ref: ref, lang: "DE", condition: "NM", finish: finish, cents: 12900, boxes: [("014", 2, 2), ("021", 1, 0)]),
+            WebshopTests.productJSON(sku: "\(ref)-EN-NM-\(f1)", ref: ref, lang: "EN", condition: "NM", finish: finish, cents: 11900, boxes: [("003", 1, 0)]),
+            WebshopTests.productJSON(sku: "\(ref)-DE-EX-\(f1)", ref: ref, lang: "DE", condition: "EX", finish: finish, cents: 10500, status: "draft", boxes: [], images: false),
+        ]
+        FakeShop.handler = { r in
+            let path = r.path.components(separatedBy: "?")[0]
+            switch (r.method, path) {
+            case ("GET", "/api/v1/health"): return .init(status: 200, body: #"{"ok":true,"key_id":"kid_8Hq2","server_time":"2026-11-25T15:30:00.000Z"}"#)
+            case ("GET", "/api/v1/master/cards"): return .init(status: 200, body: #"{"items":[{"card_ref":"\#(ref)","image_url":"https://x/y.png"}]}"#)
+            case ("GET", "/api/v1/products"): return .init(status: 200, body: #"{"items":[\#(items.joined(separator: ","))],"next_cursor":null}"#)
+            case ("POST", "/api/v1/stock/intake"):
+                let p = WebshopTests.productJSON(sku: "\(ref)-FR-NM-\(f1)", ref: ref, lang: "FR", condition: "NM", finish: finish, cents: 11500, boxes: [("014", 1, 0)])
+                return .init(status: 201, body: #"{"created":true,"product":\#(p),"warnings":[]}"#)
+            case ("POST", "/api/v1/batch"):
+                return .init(status: 200, body: #"{"results":[{"status":200,"body":{"quantity":1,"reserved":0,"available":1,"boxes":[]}},{"status":200,"body":{"quantity":0,"reserved":0,"available":0,"boxes":[]}}]}"#)
+            default: return .init(status: 404, body: #"{"error":"not_found"}"#)
+            }
+        }
+        let web = model(st)
+        sc.show(shown)
+        try await until { !web.loading && web.products != nil }
+        XCTAssertEqual(web.match?.sku, "\(ref)-DE-NM-\(f1)")
+        try await shot("ios-webshop-stockin-top", screen(web), scrolledBy: 0)
+        try await shot("ios-webshop-stockin", screen(web), scrolledToBottom: true)
+        // a language the shop doesn't have yet: a new product
+        web.setLanguage("FR")
+        XCTAssertNil(web.match)
+        try await shot("ios-webshop-new", screen(web), scrolledToBottom: true)
+        web.book()
+        try await until { !web.busy && web.booking != nil }
+        XCTAssertTrue(web.booking?.text.hasPrefix("New in the shop: 1 × ") == true, web.booking?.text ?? "")
+        try await shot("ios-webshop-booked", screen(web), scrolledToBottom: true)
+
+        // Sell: a customer's order
+        items.removeLast()
+        web.setSelling(true)
+        web.lookup()
+        try await until { !web.loading && web.products != nil }
+        XCTAssertEqual(web.sellBox, "021", "the box with a free copy")
+        web.addToOrder()
+        web.selectSellProduct("\(ref)-EN-NM-\(f1)")
+        try await shot("ios-webshop-sell", screen(web), scrolledToBottom: true)
+        web.addToOrder()
+        XCTAssertEqual(web.orderCopies, 2)
+        try await shot("ios-webshop-order", OrderSheet(web: web))
+        web.completeSale()
+        try await until { !web.orderBusy && web.sale != nil }
+        XCTAssertTrue(web.order.isEmpty)
+        try await shot("ios-webshop-sold", OrderSheet(web: web))
+
+        let bar = VStack(spacing: 0) {
+            Spacer()
+            BottomBar(tab: .constant(.scanner), hasCollection: true, mode: .webshop)
+        }
+        .background(Theme.ink)
+        try await shot("ios-bottom-bar-webshop", bar, height: 160)
+        sc.settings.webshop = false
+    }
+
     // ------------------------------------------------------------------ the App Store's screenshots
 
     /// The status bar as on a phone (the simulator's window draws none): 9:41, signal, Wi-Fi, battery.

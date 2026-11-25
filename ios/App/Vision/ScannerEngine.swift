@@ -91,6 +91,19 @@ final class ScannerEngine {
         return RGBImage(data: d, width: width, height: height)
     }
 
+    /// The card's outer corners of a match (tl, tr, br, bl in the image's pixels); nil without an outline.
+    func cardQuad(_ scan: Scan, _ hit: Match, margin: Double = 0) -> [CGPoint]? {
+        lock.lock(); defer { lock.unlock() }
+        return recognizer.cardQuad(of: scan.raw, hit: hit.raw, margin: margin)?.map(\.cgPointValue)
+    }
+
+    /// The part of an image inside a quad (tl, tr, br, bl), straightened to width x height.
+    static func rectify(_ img: RGBImage, quad: [CGPoint], width: Int, height: Int) -> RGBImage {
+        let d = CCRecognizer.rectifyRGB(img.data, width: Int32(img.width), height: Int32(img.height), quad: quad.map { NSValue(cgPoint: $0) },
+                                        outWidth: Int32(width), outHeight: Int32(height))
+        return RGBImage(data: d, width: width, height: height)
+    }
+
     /// Entries the search must skip (nil: none), e.g. the cheap energy cards.
     func setExcluded(_ mask: [Bool]?) {
         lock.lock(); defer { lock.unlock() }

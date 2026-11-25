@@ -160,6 +160,11 @@ jobs:
 
       - name: Self-test on the iPhone simulator (app vs. pipeline)
         working-directory: ios
+        env:
+          # the staging shop's key for WebshopTests.testStagingRoundTrip (repository secrets; without them that test is
+          # skipped). xcodebuild hands TEST_RUNNER_* to the tests without the prefix; the tests never print it.
+          TEST_RUNNER_SHOP_KEY_ID: ${{ secrets.POKESHOP_STAGING_KEY_ID }}
+          TEST_RUNNER_SHOP_SECRET: ${{ secrets.POKESHOP_STAGING_SECRET }}
         run: |
           set -o pipefail
           xcrun simctl list runtimes | grep -i ios || true
@@ -179,7 +184,7 @@ jobs:
           xcrun simctl list devices | grep "$udid"
           xcodebuild test -project OverpricedCardboard.xcodeproj -scheme OverpricedCardboard \
             -destination "id=$udid" -derivedDataPath build/sim -resultBundlePath build/Tests.xcresult \
-            CODE_SIGNING_ALLOWED=NO 2>&1 | tee test.log | grep -E '(ParityTest:|StoreTest:|CollectionTest:|FreeTest:|^SHOT|Test Case .*(passed|failed)|error:|\*\* TEST)' || true
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee test.log | grep -E '(ParityTest:|StoreTest:|CollectionTest:|FreeTest:|ShopTest:|^SHOT|Test Case .*(passed|failed)|error:|\*\* TEST)' || true
           grep -q '\*\* TEST SUCCEEDED \*\*' test.log || { grep -E 'error|failed' -A5 test.log | head -n 200; exit 1; }
 
       - uses: actions/upload-artifact@v4

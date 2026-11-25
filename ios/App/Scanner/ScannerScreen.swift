@@ -159,6 +159,9 @@ struct CornerIcon: View {
 struct CameraArea: View {
     @ObservedObject var model: ScannerModel
     var video = false
+    /// Webshop Mode: its words for a kept card, and room under the hint for the product picture button
+    var webshop = false
+    var hintLift: CGFloat = 0
     @Environment(\.cameraStandIn) private var standIn
     @State private var flash = 0.0
     @State private var pinchStart: Double?
@@ -184,12 +187,13 @@ struct CameraArea: View {
                         .padding(.horizontal, 12).padding(.vertical, 4)
                         .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
                         // clear of the photo button in the corner
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom).padding(.vertical, 10).padding(.horizontal, 60)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .padding(.top, 10).padding(.bottom, 10 + hintLift).padding(.horizontal, webshop ? 10 : 60)
                     }
                 } else {
                     Color.black.opacity(0.66)
-                        .overlay(Text(model.shown?.fromSearch == true ? "Looked up · tap to scan again" : "Tap to scan again")
-                            .font(.title3).foregroundStyle(.white))
+                        .overlay(Text(pausedText).font(.title3).foregroundStyle(.white).multilineTextAlignment(.center).padding(.horizontal, 12)
+                            .padding(.bottom, hintLift))
                         .onTapGesture { model.resume() }
                 }
             }
@@ -215,8 +219,14 @@ struct CameraArea: View {
         .background(.black)
     }
 
+    private var pausedText: String {
+        if model.shown?.fromSearch == true { return "Looked up · tap to scan again" }
+        if webshop && model.shown != nil { return "Kept while you fill in · tap to scan again" }
+        return "Tap to scan again"
+    }
+
     private var hint: String {
-        if model.shown?.locked == true { return "Kept – tap “Next card” for the next one" }
+        if model.shown?.locked == true { return webshop ? "Kept – show the next card" : "Kept – tap “Next card” for the next one" }
         switch model.liveConfidence {
         case .sure: return "Got it"
         case .likely: return "Probably…"

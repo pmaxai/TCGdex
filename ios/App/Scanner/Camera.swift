@@ -113,6 +113,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unc
         guard session.canAddOutput(output) else { return }
         session.addOutput(output)
         if let c = output.connection(with: .video), c.isVideoRotationAngleSupported(90) { c.videoRotationAngle = 90 }
+        if wantsStills { attachPhotoOutput() }
     }
 
     /// the smallest 4:3 video format of at least 1280 x 960 (else the device's current one)
@@ -124,6 +125,56 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unc
                 && f.videoSupportedFrameRateRanges.contains { $0.maxFrameRate >= 30 }
         }
         return fourThree.min { CMVideoFormatDescriptionGetDimensions($0.formatDescription).width < CMVideoFormatDescriptionGetDimensions($1.formatDescription).width }
+    }
+
+    // ------------------------------------------------------------------ stills (Webshop's product pictures)
+
+    private var photoOutput: AVCapturePhotoOutput?
+    private var wantsStills = false
+    private let stillLock = NSLock()
+    private var stillDelegates: [StillDelegate] = []
+
+    /// A full-resolution still beside the frames, for product pictures: added once, when Webshop Mode is first used.
+    func enableStills() {
+        queue.async { [self] in
+            wantsStills = true
+            guard configured, photoOutput == nil else { return }
+            session.beginConfiguration()
+            attachPhotoOutput()
+            session.commitConfiguration()
+        }
+    }
+
+    /// (camera queue, inside a configuration)
+    private func attachPhotoOutput() {
+        guard photoOutput == nil, let d = device else { return }
+        let out = AVCapturePhotoOutput()
+        guard session.canAddOutput(out) else { return }
+        session.addOutput(out)
+        // the largest the format offers, up to about 12 MP (a product picture needs no more)
+        let dims = d.activeFormat.supportedMaxPhotoDimensions.filter { Int($0.width) * Int($0.height) <= 12_600_000 }
+        if let best = dims.max(by: { Int($0.width) * Int($0.height) < Int($1.width) * Int($1.height) }) { out.maxPhotoDimensions = best }
+        if let c = out.connection(with: .video), c.isVideoRotationAngleSupported(90) { c.videoRotationAngle = 90 }
+        photoOutput = out
+    }
+
+    /// A still as the photo file's bytes (JPEG or HEIC, with its orientation); nil without a still camera (or on an error).
+    func takeStill() async -> Data? {
+        await withCheckedContinuation { (cont: CheckedContinuation<Data?, Never>) in
+            queue.async { [self] in
+                guard let out = photoOutput, session.isRunning else { cont.resume(returning: nil); return }
+                let settings = AVCapturePhotoSettings()
+                settings.maxPhotoDimensions = out.maxPhotoDimensions
+                var del: StillDelegate?
+                del = StillDelegate { [weak self] data in
+                    cont.resume(returning: data)
+                    guard let self, let d = del else { return }
+                    stillLock.lock(); stillDelegates.removeAll { $0 === d }; stillLock.unlock()
+                }
+                stillLock.lock(); stillDelegates.append(del!); stillLock.unlock()
+                out.capturePhoto(with: settings, delegate: del!)
+            }
+        }
     }
 
     /// the light (YouTube Mode's ⚙ → Light on)
@@ -195,6 +246,27 @@ extension RGBImage {
             }
         }
         return RGBImage(data: out, width: w, height: h)
+    }
+}
+
+/// Receives one still and hands over the photo file's bytes.
+private final class StillDelegate: NSObject, AVCapturePhotoCaptureDelegate {
+    private let done: (Data?) -> Void
+    private var called = false
+    init(_ done: @escaping (Data?) -> Void) { self.done = done }
+
+    func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
+        finish(error == nil ? photo.fileDataRepresentation() : nil)
+    }
+
+    func photoOutput(_ output: AVCapturePhotoOutput, didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings, error: Error?) {
+        finish(nil)        // only counts when no photo came before (an error)
+    }
+
+    private func finish(_ data: Data?) {
+        guard !called else { return }
+        called = true
+        done(data)
     }
 }
 

@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The pages of Settings (as on Android); more come later.
 enum SettingsPage: String, Hashable, CaseIterable, Identifiable {
-    case account, prices, priceData, scanner, trading, youtube, recording, about
+    case account, prices, priceData, scanner, trading, webshop, youtube, recording, about
 
     var id: String { rawValue }
 
@@ -13,6 +13,7 @@ enum SettingsPage: String, Hashable, CaseIterable, Identifiable {
         case .priceData: return "Price data & add-ons"
         case .scanner: return "Scanner"
         case .trading: return "Carts & deals"
+        case .webshop: return "Webshop"
         case .youtube: return "YouTube Mode"
         case .recording: return "Recording"
         case .about: return "About"
@@ -26,6 +27,7 @@ enum SettingsPage: String, Hashable, CaseIterable, Identifiable {
         case .priceData: return "chart.bar.doc.horizontal"
         case .scanner: return "camera.viewfinder"
         case .trading: return "cart"
+        case .webshop: return "storefront"
         case .youtube: return "play.rectangle"
         case .recording: return "record.circle"
         case .about: return "info.circle"
@@ -41,6 +43,7 @@ struct SettingsScreen: View {
     let scanner: ScannerModel?
     var catalog: Catalog? = nil
     var recording: RecordingModel? = nil
+    var webshop: WebshopModel? = nil
     @Binding var path: [SettingsPage]
     @AppStorage(PriceSource.key) private var sourceName = PriceSource.cmTrend.rawValue
 
@@ -57,6 +60,16 @@ struct SettingsScreen: View {
                 Section("Scanner and deals") {
                     row(.scanner, nil)
                     row(.trading, account.has("trading") ? nil : "needs a subscription")
+                }
+                Section("Webshop Mode") {
+                    NavigationLink(value: SettingsPage.webshop) {
+                        HStack {
+                            Label(SettingsPage.webshop.title, systemImage: SettingsPage.webshop.icon)
+                            Spacer()
+                            if account.has("webshop"), let webshop { WebshopConnectionDetail(web: webshop) }
+                            else { Text("with a connected webshop").font(.footnote).foregroundStyle(Theme.muted).lineLimit(1) }
+                        }
+                    }
                 }
                 Section("YouTube Mode") {
                     row(.youtube, account.has("youtube") ? (scanner?.settings.youtube == true ? "on" : nil) : "Creator plan")
@@ -115,6 +128,9 @@ struct SettingsScreen: View {
             if let scanner { ScannerSettingsForm(model: scanner) }
         case .trading:
             if account.has("trading") { TradingSettingsForm(trading: trading) } else { LockedPage(feature: .trading, icon: "cart") }
+        case .webshop:
+            if !account.has("webshop") { LockedPage(feature: .webshop, icon: "storefront") }
+            else if let webshop { WebshopSettingsView(web: webshop) }
         case .youtube:
             if !account.has("youtube") { LockedPage(feature: .youtube, icon: "play.rectangle") }
             else if let scanner { YouTubeSettingsView(model: scanner) }

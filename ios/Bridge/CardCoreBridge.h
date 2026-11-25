@@ -55,6 +55,12 @@ typedef struct { double cx, cy, h; } CCPrior;
 /// text or showing it. margin: room around a card rebuilt from its artwork box. nil without an outline.
 - (nullable NSData *)cardImageRGB:(NSData *)rgb width:(int)width height:(int)height recognition:(CCRecognition *)r
                               hit:(CCHit *)hit margin:(double)margin outWidth:(int)ow outHeight:(int)oh;
+/// The card's outer corners of a reading (tl, tr, br, bl in the recognised image's pixels); nil without an outline.
+- (nullable NSArray<NSValue *> *)cardQuadOf:(CCRecognition *)r hit:(CCHit *)hit margin:(double)margin
+    NS_SWIFT_NAME(cardQuad(of:hit:margin:));
+/// The part of an image inside a quad (tl, tr, br, bl), straightened to ow x oh, as RGB bytes (product pictures).
++ (NSData *)rectifyRGB:(NSData *)rgb width:(int)width height:(int)height quad:(NSArray<NSValue *> *)quad
+              outWidth:(int)ow outHeight:(int)oh;
 /// The guide frame quad for an image of this size.
 + (NSArray<NSValue *> *)guideQuadWidth:(int)w height:(int)h prior:(CCPrior)prior;
 + (CCPrior)guidePriorWidth:(int)w height:(int)h size:(double)size;

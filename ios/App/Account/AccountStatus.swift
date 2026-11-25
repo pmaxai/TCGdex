@@ -40,6 +40,8 @@ struct AccountStatus {
     var basePlan: String?
     /// the add-ons the account has (`addons`), by id; what they unlock is in `features` (psa_prices)
     var addons: [String: AddonState] = [:]
+    /// the webshop connected to the account (`webshop.host`, Webshop as a Service); nil: none
+    var webshopHost: String? = nil
 
     /// a feature the server unlocked (an inactive answer unlocks nothing)
     func has(_ feature: String) -> Bool { active && features[feature] == true }
@@ -79,7 +81,7 @@ struct AccountStatus {
         let f = o["features"] as? JSON ?? [:]
         let server = time(o, "server_time")
         func int(_ d: JSON, _ k: String, _ def: Int) -> Int { (d[k] as? NSNumber)?.intValue ?? def }
-        return AccountStatus(
+        var st = AccountStatus(
             active: o["status"] as? String == "active", serverTime: server,
             validUntil: time(o, "valid_until") ?? server ?? Date(timeIntervalSince1970: 0),
             accountId: str(acc, "id"), email: str(acc, "email"), name: str(acc, "name"),
@@ -93,6 +95,8 @@ struct AccountStatus {
             source: str(sub, "source"), manageUrl: str(sub, "manage_url"),
             devicesInStore: int(dev, "in_store", 0), devicesOnWeb: int(dev, "on_web", 0), basePlan: str(sub, "base_plan"),
             addons: Dictionary((o["addons"] as? [JSON] ?? []).compactMap(AddonState.parse).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }))
+        st.webshopHost = (o["webshop"] as? JSON).flatMap { str($0, "host") }
+        return st
     }
 
     static func str(_ o: JSON, _ k: String) -> String? {

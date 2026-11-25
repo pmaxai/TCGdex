@@ -46,11 +46,22 @@ enum AppTab: Hashable { case scanner, search, collection, settings }
 
 /// The Scanner tab's modes: hold Scanner in the bottom bar to pick one.
 enum ScanMode: String, CaseIterable, Identifiable {
-    case scanner, youtube
+    case scanner, webshop, youtube
     var id: String { rawValue }
-    var title: String { self == .scanner ? "Scanner" : "YouTube Mode" }
-    var short: String { self == .scanner ? "Scanner" : "YouTube" }
-    var icon: String { self == .scanner ? "camera.viewfinder" : "play.rectangle" }
+    var title: String {
+        switch self { case .scanner: return "Scanner"; case .webshop: return "Webshop Mode"; case .youtube: return "YouTube Mode" }
+    }
+    var short: String {
+        switch self { case .scanner: return "Scanner"; case .webshop: return "Webshop"; case .youtube: return "YouTube" }
+    }
+    var icon: String {
+        switch self { case .scanner: return "camera.viewfinder"; case .webshop: return "storefront"; case .youtube: return "play.rectangle" }
+    }
+    /// what a mode the account lacks needs (listed with a lock)
+    var needs: String { self == .webshop ? "with a connected webshop" : "Creator plan" }
+
+    /// the mode the scanner's settings are in
+    static func of(_ s: ScannerSettings) -> ScanMode { s.youtube ? .youtube : s.webshop ? .webshop : .scanner }
 }
 
 /// The app's pages over a bottom bar. Every page stays alive while another is shown (as in a tab
@@ -62,34 +73,37 @@ struct MainView: View {
     @State private var tab: AppTab = .scanner
     @State private var settingsPath: [SettingsPage] = []
     @State private var keyboard = false
-    @State private var youtube = false
+    @State private var mode: ScanMode = .scanner
     @State private var locked: LockedFeature?
 
     /// the free version has its collection on this phone
     private var hasCollection: Bool { account.isFree || account.has("collection") || account.has("wanted") }
-    private var fullScreen: Bool { tab == .scanner && youtube }
+    private var fullScreen: Bool { tab == .scanner && mode == .youtube }
+    /// modes the account lacks: listed with a lock
+    private var lockedModes: Set<ScanMode> {
+        Set([account.has("youtube") ? nil : ScanMode.youtube, account.has("webshop") ? nil : ScanMode.webshop].compactMap { $0 })
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
                 page(.scanner) {
                     if let scanner = model.scanner {
-                        ScannerTab(model: scanner, trading: model.trading, rec: model.recording)
+                        ScannerTab(model: scanner, trading: model.trading, rec: model.recording, webshop: model.webshop)
                     }
                 }
                 page(.search) { if account.isFree { LockedPage(feature: .search, icon: "magnifyingglass") } else { SearchView() } }
                 if hasCollection { page(.collection) { CollectionScreen(account: account, catalog: model.catalog) } }
                 page(.settings) {
                     SettingsScreen(account: account, store: model.store, trading: model.trading, scanner: model.scanner,
-                                   catalog: model.catalog, recording: model.recording, path: $settingsPath)
+                                   catalog: model.catalog, recording: model.recording, webshop: model.webshop, path: $settingsPath)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // the keyboard covers the bar, as it does a tab bar
             if !keyboard && !fullScreen {
-                BottomBar(tab: $tab, hasCollection: hasCollection, mode: youtube ? .youtube : .scanner,
-                          lockedModes: account.has("youtube") ? [] : [.youtube],
-                          onLocked: { _ in locked = .youtube }, onMode: { setMode($0) })
+                BottomBar(tab: $tab, hasCollection: hasCollection, mode: mode, lockedModes: lockedModes,
+                          onLocked: { m in locked = m == .webshop ? LockedFeature.webshop : LockedFeature.youtube }, onMode: { setMode($0) })
             }
         }
         .statusBarHidden(fullScreen)
@@ -101,12 +115,15 @@ struct MainView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openSettingsPage)) { n in
             if let p = n.object as? SettingsPage { tab = .settings; settingsPath = [p] }
         }
-        .onReceive(model.scanner?.$settings.map(\.youtube).removeDuplicates().eraseToAnyPublisher() ?? Just(false).eraseToAnyPublisher()) { youtube = $0 }
+        .onReceive(model.scanner?.$settings.map(ScanMode.of).removeDuplicates().eraseToAnyPublisher() ?? Just(.scanner).eraseToAnyPublisher()) { mode = $0 }
         .onChange(of: tab) { _, _ in UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
         .onChange(of: hasCollection) { _, has in if !has && tab == .collection { tab = .scanner } }
         // a mode that is no longer included falls back to the Scanner (not while it records)
         .onChange(of: account.has("youtube"), initial: true) { _, has in
-            if !has, youtube, !model.recording.recording { model.scanner?.settings.youtube = false }
+            if !has, mode == .youtube, !model.recording.recording { model.scanner?.settings.youtube = false }
+        }
+        .onChange(of: account.has("webshop"), initial: true) { _, has in
+            if !has, mode == .webshop { model.scanner?.settings.webshop = false }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboard = true }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboard = false }
@@ -114,7 +131,10 @@ struct MainView: View {
 
     private func setMode(_ m: ScanMode) {
         guard let s = model.scanner else { return }
-        if (m == .youtube) != s.settings.youtube { s.settings.youtube = m == .youtube }
+        var st = s.settings
+        st.youtube = m == .youtube
+        st.webshop = m == .webshop
+        if st != s.settings { s.settings = st }
         tab = .scanner
     }
 
@@ -127,14 +147,16 @@ struct MainView: View {
     }
 }
 
-/// The Scanner tab: the scanner with carts, or YouTube Mode.
+/// The Scanner tab: the scanner with carts, YouTube Mode or Webshop Mode.
 struct ScannerTab: View {
     @ObservedObject var model: ScannerModel
     @ObservedObject var trading: TradingModel
     @ObservedObject var rec: RecordingModel
+    var webshop: WebshopModel?
 
     var body: some View {
         if model.settings.youtube { YouTubeScreen(model: model, rec: rec) }
+        else if model.settings.webshop, let webshop { WebshopScreen(web: webshop, scanner: model, trading: trading) }
         else { ScannerScreen(model: model, trading: trading) }
     }
 }
@@ -186,7 +208,7 @@ struct BottomBar: View {
         Menu {
             ForEach(ScanMode.allCases) { m in
                 if lockedModes.contains(m) {
-                    Button { onLocked(m) } label: { Label("\(m.title) · Creator plan", systemImage: "lock.fill") }
+                    Button { onLocked(m) } label: { Label("\(m.title) · \(m.needs)", systemImage: "lock.fill") }
                 } else {
                     Button { onMode(m) } label: { Label(m.title, systemImage: m == mode ? "checkmark" : m.icon) }
                 }
