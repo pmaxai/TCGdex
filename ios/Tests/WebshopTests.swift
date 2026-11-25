@@ -478,6 +478,9 @@ final class WebshopTests: XCTestCase {
         XCTAssertEqual(second["description_de"] as? String, "Kleiner Knick oben links", "a new product gets the comment")
         XCTAssertTrue(s.web.booking?.text.hasPrefix("New in the shop: ") == true)
         XCTAssertEqual(s.web.form.comment, "")
+        XCTAssertNotNil(s.web.match, "the next copy goes into the product just made")
+        XCTAssertEqual(s.web.form.price, 12.5, "at its price in the shop")
+        XCTAssertFalse(s.web.form.priceByUser)
         XCTAssertEqual(s.store.lastCondition, "EX")
     }
 

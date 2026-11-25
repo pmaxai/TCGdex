@@ -506,6 +506,8 @@ final class WebshopModel: ObservableObject {
                 form.quantity = 1
                 form.priceByUser = false
                 form.comment = ""
+                // the next copy goes into this product: its price as the shop has it now
+                if let s = shown { form = withSuggestedPrice(form, s, products) }
                 unknownCard = nil
                 // booked: on to the next card
                 if scanner.paused && shown?.fromPhoto != true { scanner.resume() }
