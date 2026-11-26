@@ -608,7 +608,8 @@ private struct PrintingChips: View {
                         Text("\(p.kind.rawValue) \(p.priceText)")
                             .font(.system(size: 14, weight: sel ? .bold : .regular)).foregroundStyle(sel ? Theme.ink : .white)
                             .lineLimit(1).fixedSize()
-                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            // 75 % taller than a chip (about 47 pt): easy to hit while holding a pack
+                            .padding(.horizontal, 10).padding(.vertical, 15)
                             .background(sel ? Theme.gold : Color(red: 0x2A / 255, green: 0x2D / 255, blue: 0x34 / 255),
                                         in: RoundedRectangle(cornerRadius: 10))
                     }

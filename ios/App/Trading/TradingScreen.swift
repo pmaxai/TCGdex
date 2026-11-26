@@ -551,7 +551,7 @@ struct TradingSettingsForm: View {
         Form {
             Picker("A new card starts as", selection: $trading.startCondition) { ForEach(Condition.allCases) { Text($0.label).tag($0) } }
             Picker("− / + changes a price by", selection: $trading.priceStep) {
-                ForEach([0.1, 0.5, 1.0, 5.0], id: \.self) { Text(Money.eur($0)).tag($0) }
+                ForEach(TradingModel.priceSteps, id: \.self) { Text(Money.eur($0)).tag($0) }
             }
             Section {
                 Text("The market value is the default price (Settings › Prices) for the card's condition. Conditions count as Cardmarket's scale: NM 100 %, EX 85 %, GD 75 %, LP 65 %, PL 50 %, PO 30 % of the price. Verdicts: up to 80 % of the market value a great deal, 95 % good, 110 % fair, above that expensive.")

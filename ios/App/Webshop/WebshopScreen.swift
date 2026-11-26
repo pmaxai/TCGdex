@@ -887,7 +887,7 @@ struct WebshopSettingsView: View {
             }
             Section {
                 Picker("− / + changes a price by", selection: $trading.priceStep) {
-                    ForEach([0.1, 0.5, 1.0, 5.0], id: \.self) { Text(Money.eur($0)).tag($0) }
+                    ForEach(TradingModel.priceSteps, id: \.self) { Text(Money.eur($0)).tag($0) }
                 }
             } footer: { Text("One tap on − or + beside the selling price. The same setting as in Carts & deals.") }
             Section {

@@ -20,6 +20,8 @@ final class TradingModel: ObservableObject {
     @Published var startCondition: Condition { didSet { UserDefaults.standard.set(startCondition.rawValue, forKey: "trading.condition") } }
     /// what one tap on − / + beside a price changes it by (EUR)
     @Published var priceStep: Double { didSet { UserDefaults.standard.set(priceStep, forKey: "trading.step") } }
+    /// what − / + can change a price by (Settings › Carts & deals and Settings › Webshop)
+    static let priceSteps = [0.1, 0.2, 0.25, 0.5, 1.0, 5.0]
 
     private let store: TradingStore
 
