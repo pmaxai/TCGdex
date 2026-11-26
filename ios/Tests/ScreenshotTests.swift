@@ -452,8 +452,11 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertEqual(fresh.host, "overpricedcardboard.com")
         try await shot("ios-webshop-connect", screen(fresh))
         try await shot("ios-webshop-settings", NavigationStack {
-            WebshopSettingsView(web: fresh).navigationTitle("Webshop").navigationBarTitleDisplayMode(.inline)
+            WebshopSettingsView(web: fresh, trading: trading).navigationTitle("Webshop").navigationBarTitleDisplayMode(.inline)
         })
+        try await shot("ios-webshop-settings-more", NavigationStack {
+            WebshopSettingsView(web: fresh, trading: trading).navigationTitle("Webshop").navigationBarTitleDisplayMode(.inline)
+        }, scrolledBy: 560)
 
         // connected: the shop holds the card in German (three copies, two held by a checkout) and in English
         let st = store()

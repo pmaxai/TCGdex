@@ -37,6 +37,12 @@ final class ShopStore {
         set { defaults.set(newValue, forKey: "webshop.selling") }
     }
 
+    /// the line under the form after a booking ("✓ Added: …"); on unless switched off in Settings › Webshop
+    var showStatus: Bool {
+        get { defaults.object(forKey: "webshop.show_status") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "webshop.show_status") }
+    }
+
     /// the last condition picked (most cards of a batch are in the same condition)
     var lastCondition: String {
         get { defaults.string(forKey: "webshop.last_condition") ?? "NM" }

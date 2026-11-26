@@ -130,7 +130,7 @@ struct SettingsScreen: View {
             if account.has("trading") { TradingSettingsForm(trading: trading) } else { LockedPage(feature: .trading, icon: "cart") }
         case .webshop:
             if !account.has("webshop") { LockedPage(feature: .webshop, icon: "storefront") }
-            else if let webshop { WebshopSettingsView(web: webshop) }
+            else if let webshop { WebshopSettingsView(web: webshop, trading: trading) }
         case .youtube:
             if !account.has("youtube") { LockedPage(feature: .youtube, icon: "play.rectangle") }
             else if let scanner { YouTubeSettingsView(model: scanner) }

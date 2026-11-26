@@ -110,6 +110,8 @@ final class WebshopModel: ObservableObject {
     @Published private(set) var connection: String?
     @Published private(set) var connectionOk: Bool?
     @Published private(set) var testing = false
+    /// Settings › Webshop › Show Status after Submit: the line about the last booking above the button
+    @Published private(set) var showStatus = true
     // the card in the shop
     /// the scanner's card (kept here, so the panel isn't drawn again with every camera frame)
     @Published private(set) var shown: Shown?
@@ -207,6 +209,12 @@ final class WebshopModel: ObservableObject {
         keyId = store.keyId
         hasSecret = store.hasSecret
         minPrice = store.minPrice
+        showStatus = store.showStatus
+    }
+
+    func setShowStatus(_ on: Bool) {
+        store.showStatus = on
+        showStatus = on
     }
 
     /// The account's connected webshop: its host fills in an empty connection (key and secret are still typed in).

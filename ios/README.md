@@ -40,7 +40,8 @@ App Store.
   gets **Create Product Image** (a still, cut to the card's edge and straightened). **Sell**: each
   card the customer wants goes into the order (🧾, kept on the phone); **Complete sale** takes it out
   of stock in one batch, with Undo. **Settings › Webshop**: host (filled in from the account), key id
-  and secret (in the Keychain, never shown again), Save & test, the minimum selling price. Every
+  and secret (in the Keychain, never shown again), Save & test, the minimum selling price, the − / +
+  step (shared with Carts & deals) and Show Status after Submit (the line after a booking). Every
   request is signed (HMAC-SHA256) and every write keeps its Idempotency-Key on retries, so nothing
   is booked or sold twice.
 

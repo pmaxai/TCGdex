@@ -345,6 +345,9 @@ final class WebshopTests: XCTestCase {
         XCTAssertEqual(s.minPrice, 0.5)
         s.lastBox = 1000
         XCTAssertNil(s.lastBox, "boxes are 1–999")
+        XCTAssertTrue(s.showStatus, "the status line after a booking shows unless switched off")
+        s.showStatus = false
+        XCTAssertFalse(ShopStore(defaults: d, vault: vault).showStatus, "kept")
         s.clear()
         XCTAssertNil(s.credentials())
         XCTAssertFalse(s.hasSecret)

@@ -523,7 +523,9 @@ private struct ShopFormBlock: View {
             }
             .padding(.top, 4)
         }
-        if let b = web.booking { Text((b.undone ? "↩ " : "✓ ") + b.text).font(.caption).foregroundStyle(b.undone ? Theme.muted : Theme.sure).padding(.top, 4) }
+        if web.showStatus, let b = web.booking {
+            Text((b.undone ? "↩ " : "✓ ") + b.text).font(.caption).foregroundStyle(b.undone ? Theme.muted : Theme.sure).padding(.top, 4)
+        }
         // the button is the last thing; Undo (the last booking) beside it
         HStack(spacing: 8) {
             Button { web.book() } label: {
@@ -819,6 +821,8 @@ struct WebshopConnectionDetail: View {
 /// Settings › Webshop: the shop's address, key id and secret (kept in the Keychain), the minimum selling price, how it works.
 struct WebshopSettingsView: View {
     @ObservedObject var web: WebshopModel
+    /// the − / + step lives with Carts & deals (one setting for both)
+    @ObservedObject var trading: TradingModel
     @State private var host = ""
     @State private var keyId = ""
     /// never shown back, only replaced
@@ -881,6 +885,14 @@ struct WebshopSettingsView: View {
             } header: { Text("Prices") } footer: {
                 Text("A new product is suggested at least at this price, even if the card is worth only a few cents (empty: no minimum). Your own price and the shop's price of a product stay as they are.")
             }
+            Section {
+                Picker("− / + changes a price by", selection: $trading.priceStep) {
+                    ForEach([0.1, 0.5, 1.0, 5.0], id: \.self) { Text(Money.eur($0)).tag($0) }
+                }
+            } footer: { Text("One tap on − or + beside the selling price. The same setting as in Carts & deals.") }
+            Section {
+                Toggle("Show Status after Submit", isOn: Binding(get: { web.showStatus }, set: { web.setShowStatus($0) }))
+            } footer: { Text("The line above the button after a booking: what was added, the stock now, the price. Warnings and errors always show.") }
             Section("How booking works") {
                 Text("Scanning a card only looks it up: you see its prices and what the shop holds of it. Stock changes only when you press Add to stock / Create in the shop, after choosing language, condition, price and box. Undo takes the copies out again.")
                     .font(.footnote).foregroundStyle(Theme.muted)
