@@ -402,7 +402,9 @@ struct RevealCard: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if s.priceCard.printings.count > 1 { PrintingChips(s: s, onPrinting: model.choosePrinting).padding(.top, 8) }
+            if s.priceCard.printings.count > 1 {
+                PrintingChips(s: s, lock: model.printingLock, onPrinting: model.choosePrinting, onHold: model.togglePrintingLock).padding(.top, 8)
+            }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -597,24 +599,35 @@ private struct VersionSwitcher: View, Equatable {
 /// Every printing of the card with its price; tap to say which one is in front of the camera.
 private struct PrintingChips: View {
     let s: Shown
+    /// held for a second: kept for the next cards (the repeat symbol)
+    let lock: Printing.Kind?
     let onPrinting: (Printing.Kind) -> Void
+    let onHold: (Printing.Kind) -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(s.priceCard.printings, id: \.kind) { p in
                     let sel = p.kind == s.selected?.kind
+                    let repeats = lock == p.kind
                     Button { onPrinting(p.kind) } label: {
-                        Text("\(p.kind.rawValue) \(p.priceText)")
-                            .font(.system(size: 14, weight: sel ? .bold : .regular)).foregroundStyle(sel ? Theme.ink : .white)
-                            .lineLimit(1).fixedSize()
-                            // 75 % taller than a chip (about 47 pt): easy to hit while holding a pack
-                            .padding(.horizontal, 10).padding(.vertical, 15)
-                            .background(sel ? Theme.gold : Color(red: 0x2A / 255, green: 0x2D / 255, blue: 0x34 / 255),
-                                        in: RoundedRectangle(cornerRadius: 10))
+                        HStack(spacing: 5) {
+                            if repeats { Image(systemName: "repeat").font(.system(size: 14, weight: .bold)) }
+                            Text("\(p.kind.rawValue) \(p.priceText)")
+                                .font(.system(size: 14, weight: sel ? .bold : .regular))
+                                .lineLimit(1).fixedSize()
+                        }
+                        .foregroundStyle(sel ? Theme.ink : .white)
+                        // 75 % taller than a chip (about 47 pt): easy to hit while holding a pack
+                        .padding(.horizontal, 10).padding(.vertical, 15)
+                        .background(sel ? Theme.gold : Color(red: 0x2A / 255, green: 0x2D / 255, blue: 0x34 / 255),
+                                    in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(repeats ? Theme.gold : .clear, lineWidth: 2))
                     }
                     .buttonStyle(.plain)
+                    .holdForASecond { onHold(p.kind) }
                     .accessibilityAddTraits(sel ? .isSelected : [])
+                    .accessibilityHint("Hold for a second to keep this printing for the next cards")
                 }
             }
         }

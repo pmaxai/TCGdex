@@ -401,6 +401,124 @@ final class WebshopTests: XCTestCase {
             """
     }
 
+    // ------------------------------------------------------------------ a type kept, the language, the symbolic picture
+
+    /// Held for a second, a printing is kept: every new card takes it when it has it (in every mode); held again, it's let go.
+    func testAHeldPrintingIsKeptForTheNextCards() throws {
+        let s = try shop()
+        // any mode: the Scanner's here (no shop lookups for every card tried)
+        s.scanner.settings.webshop = false
+        var withReverse: [Candidate] = [], without: Candidate?
+        for c in ["Pikachu", "Bulbasaur", "Eevee", "Charizard", "Snorlax"].flatMap({ s.catalog.search($0) }).prefix(120) {
+            let cand = Candidate(group: s.catalog.groupOf(c.id), info: c, score: 0, reading: "")
+            s.scanner.lookUp(cand)
+            guard let p = s.scanner.shown?.priceCard.printings, !p.isEmpty else { continue }
+            if p.contains(where: { $0.kind == .reverse }) && s.scanner.shown?.printing != .reverse { withReverse.append(cand) }
+            else if !p.contains(where: { $0.kind == .reverse }), without == nil { without = cand }
+            if withReverse.count >= 2 && without != nil { break }
+        }
+        guard withReverse.count >= 2, let without else { throw XCTSkip("no cards with and without a reverse holo in the data pack") }
+        s.scanner.lookUp(withReverse[0])
+        s.scanner.togglePrintingLock(.reverse)
+        XCTAssertEqual(s.scanner.printingLock, .reverse)
+        XCTAssertEqual(s.web.printingLock, .reverse, "Webshop Mode shows it too")
+        XCTAssertEqual(s.scanner.shown?.printing, .reverse, "the shown card takes it at once")
+        s.scanner.lookUp(withReverse[1])
+        XCTAssertEqual(s.scanner.shown?.printing, .reverse, "the next card comes in it")
+        XCTAssertEqual(s.scanner.shown?.printingByUser, true)
+        s.scanner.lookUp(without)
+        let plain = try XCTUnwrap(s.scanner.shown)
+        XCTAssertEqual(plain.printing, defaultPrinting(plain.priceCard), "a card without it: its usual printing")
+        XCTAssertEqual(s.scanner.printingLock, .reverse, "still kept")
+        // the long press ends in a tap too: nothing changes then
+        s.scanner.lookUp(withReverse[1])
+        var printingEvents = 0
+        s.scanner.packObserver = { r, _ in if r == .printing { printingEvents += 1 } }
+        s.scanner.choosePrinting(.reverse)
+        XCTAssertEqual(printingEvents, 0, "already in it")
+        s.scanner.choosePrinting(.normal)
+        XCTAssertEqual(printingEvents, 1, "another printing tapped: this card only")
+        XCTAssertEqual(s.scanner.printingLock, .reverse)
+        s.scanner.packObserver = nil
+        // held again: let go
+        s.scanner.togglePrintingLock(.reverse)
+        XCTAssertNil(s.scanner.printingLock)
+        XCTAssertNil(s.web.printingLock)
+        s.scanner.lookUp(withReverse[0])
+        XCTAssertNotEqual(s.scanner.shown?.printing, .reverse, "the next card in its usual printing again")
+        // held on another printing: that one is kept instead
+        s.scanner.togglePrintingLock(.reverse)
+        s.scanner.togglePrintingLock(.normal)
+        XCTAssertEqual(s.scanner.printingLock, .normal)
+        s.scanner.togglePrintingLock(.normal)
+    }
+
+    /// Webshop Mode: the language switches the card to that version (name, set, picture); another version picked sets the language.
+    func testTheLanguageSwitchesTheCard() throws {
+        let s = try shop()
+        var found: (en: CardInfo, de: CardInfo)?
+        for c in ["Pikachu", "Charizard", "Bulbasaur", "Eevee"].flatMap({ s.catalog.search($0) }).prefix(120) where c.lang == "en" {
+            s.scanner.lookUp(Candidate(group: s.catalog.groupOf(c.id), info: c, score: 0, reading: ""))
+            if let sh = s.scanner.shown, sh.version.lang == "en", let de = sh.versions.first(where: { $0.id == sh.version.id && $0.lang == "de" }) {
+                found = (sh.version, de)
+                break
+            }
+        }
+        let (en, de) = try XCTUnwrap(found, "a card in English and German")
+        XCTAssertEqual(s.web.form.language, "EN")
+        s.web.setLanguage("DE")
+        XCTAssertEqual(s.scanner.shown?.version.lang, "de", "the card in German")
+        XCTAssertEqual(s.scanner.shown?.version.name, de.name)
+        XCTAssertEqual(s.web.shown?.version.lang, "de", "the panel follows")
+        XCTAssertEqual(s.web.form.language, "DE")
+        // another version picked (as in the Scanner): the product's language follows it
+        s.web.chooseVersion(en)
+        XCTAssertEqual(s.scanner.shown?.version.lang, "en")
+        XCTAssertEqual(s.web.form.language, "EN")
+        // a language the data has no version of: the card stays; the English card's picture, marked symbolic
+        let sh = try XCTUnwrap(s.scanner.shown)
+        if let other = ShopTerms.languages.map(\.code).first(where: { code in
+            !CardResolver.asian.contains(ShopTerms.appLang(code)) && !sh.versions.contains { $0.lang == ShopTerms.appLang(code) } }) {
+            s.web.setLanguage(other)
+            XCTAssertEqual(s.scanner.shown?.version.lang, "en")
+            XCTAssertEqual(s.web.form.language, other)
+            if sh.version.highUrl != nil {
+                XCTAssertEqual(sh.shopPicture(language: other)?.band, "Symbolic picture – English print")
+                XCTAssertTrue(s.web.pictureNote?.hasPrefix("Symbolic picture – English print") == true, s.web.pictureNote ?? "no note")
+            }
+        }
+    }
+
+    /// The shop gets the card's picture in the product's language; without one, the English card's, with a band saying it's symbolic.
+    func testWithoutAPictureInItsLanguageTheEnglishOneStandsIn() {
+        func card(_ lang: String, image: Bool) -> CardInfo {
+            CardInfo(id: "x1-4", lang: lang, name: "Card \(lang)", number: "4", setName: "Set", setTotal: 102, series: "S", rarity: "Rare",
+                     imageUrl: image ? "https://assets.tcgdex.net/\(lang)/x/x1/4" : nil, prices: nil,
+                     printings: [Printing(kind: .normal, eur: 1, eur30: nil, eurLow: nil, usd: nil)])
+        }
+        let en = card("en", image: true), de = card("de", image: true), fr = card("fr", image: false)
+        func shown(_ v: CardInfo) -> Shown {
+            var s = Shown(group: "x1-4", version: v, english: v.lang == "en" ? nil : en, priceCard: en, printing: .normal, confidence: .sure,
+                          alternatives: [], languages: [], text: nil, locked: false, fromPhoto: false, serial: 1)
+            s.versions = [en, de, fr]
+            return s
+        }
+        XCTAssertEqual(shown(de).shopPicture(language: "DE"), ShopPicture(card: de, url: "https://assets.tcgdex.net/de/x/x1/4/high.webp", band: nil))
+        XCTAssertNil(shown(de).symbolicPictureNote)
+        // no French picture: the English one, marked
+        XCTAssertEqual(shown(fr).shopPicture(language: "FR"), ShopPicture(card: en, url: "https://assets.tcgdex.net/en/x/x1/4/high.webp",
+                                                                         band: "Symbolic picture – English print"))
+        XCTAssertEqual(shown(fr).symbolicPictureNote, "Symbolic picture – English print")
+        // a product language the card isn't shown in: not its German picture, the English one, marked
+        XCTAssertEqual(shown(de).shopPicture(language: "IT")?.card, en)
+        XCTAssertEqual(shown(de).shopPicture(language: "IT")?.band, "Symbolic picture – English print")
+        // the version a language switches to
+        XCTAssertEqual(WebshopModel.version(of: shown(en), in: "DE"), de)
+        XCTAssertNil(WebshopModel.version(of: shown(en), in: "IT"), "none in Italian: the card stays")
+        XCTAssertNil(WebshopModel.version(of: shown(en), in: "EN"), "already")
+        XCTAssertEqual(ShopTerms.englishName("zh-tw"), "Chinese")
+    }
+
     /// Stock in: a card is looked up (nothing booked), the form is filled from the scan and the shop, the button books one copy; Undo takes it out.
     func testStockIn() async throws {
         let s = try shop()

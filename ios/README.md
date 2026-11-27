@@ -13,7 +13,10 @@ App Store.
   result shows the printings, the default price with a table of every source (Cardmarket trend,
   30-day average, average sell price, lowest offer; TCGplayer market, mid and low, also in €), the
   price check's notes, the price history, PSA (an add-on) and gem rate, other versions and
-  languages, and the alternatives.
+  languages, and the alternatives. Holding a printing (Holo, Reverse holo, …) for a second keeps it
+  for the next cards, in every mode (🔁 on its button; held again, it's let go): each new card comes
+  in that printing when it has it. A card without a picture in its language shows another print's,
+  marked "Symbolic picture – English print".
 - **Carts and deals (Add to cart):** a popup prices the card for its condition against the vendor's
   price with a verdict (I get or I give); carts per booth, trades, shows with a budget, the deal
   history with CSV.
@@ -33,11 +36,14 @@ App Store.
   saved in Photos or uploaded to the account's storage.
 - **Webshop Mode** (hold Scanner → Webshop Mode; appears once a webshop is connected to the account):
   as on Android. **Stock in**: scan or search a card, see its prices and what the shop holds of it
-  (one line per product with price, stock per box and status), pick language, type (N / H / RH /
-  1st), box (1–999, the last one is remembered), selling price (the shop's, else the market value
-  for the condition, never below the minimum selling price) and condition (sky blue: in stock), then
-  **Add to stock** / **Create in the shop**, with Undo. A card without a picture in its language
-  gets **Create Product Image** (a still, cut to the card's edge and straightened). **Sell**: each
+  (one line per product with price, stock per box and status), pick language (the card switches to
+  its version in that language – name, set, picture – when the data has one; other versions and
+  languages as in the Scanner), type (N / H / RH / 1st; held for a second: kept for the next cards),
+  box (1–999, the last one is remembered), selling price (the shop's, else the market value for the
+  condition, never below the minimum selling price) and condition (sky blue: in stock), then
+  **Add to stock** / **Create in the shop**, with Undo. A card without a picture in the product's
+  language gets the English card's, with a red band "Symbolic picture – English print", or
+  **Create Product Image** (a still, cut to the card's edge and straightened) for a photo of its own. **Sell**: each
   card the customer wants goes into the order (🧾, kept on the phone); **Complete sale** takes it out
   of stock in one batch, with Undo. **Settings › Webshop**: host (filled in from the account), key id
   and secret (in the Keychain, never shown again), Save & test, the minimum selling price, the − / +

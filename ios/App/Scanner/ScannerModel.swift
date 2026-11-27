@@ -109,6 +109,8 @@ final class ScannerModel: ObservableObject {
     @Published private(set) var flash = 0
     @Published private(set) var debugLines: [String] = []
     @Published var settings: ScannerSettings { didSet { settingsChanged(oldValue) } }
+    /// held for a second on a printing (Holo, Reverse holo, …): every new card takes it, when it has it – until held again
+    @Published private(set) var printingLock: Printing.Kind?
     /// false in the free version: no price alerts (they would tell the price)
     var alertsAllowed = true
     /// YouTube Mode's pack: every card taken by the camera, in order (photos and looked-up cards only with +1)
@@ -259,8 +261,8 @@ final class ScannerModel: ObservableObject {
         lastText = nil
         let scan = hit.flatMap { engine.cardImage(img, r, $0)?.uiImage }
         serial += 1
-        let first = resolver.build(group: group, version: version, text: nil, confidence: conf, alternatives: alternatives,
-                                   locked: false, fromPhoto: fromPhoto, scan: scan, serial: serial)
+        let first = withLock(resolver.build(group: group, version: version, text: nil, confidence: conf, alternatives: alternatives,
+                                            locked: false, fromPhoto: fromPhoto, scan: scan, serial: serial))
         shown = first
         picks = nil
         gate.set(picking: false)
@@ -288,7 +290,7 @@ final class ScannerModel: ObservableObject {
             let keep = cur.printingByUser && b.priceCard.printings.contains { $0.kind == cur.printing } ? cur.printing : nil
             b.printing = keep ?? b.printing
             b.printingByUser = keep != nil
-            updated = b
+            updated = keep == nil ? withLock(b) : b
         } else {
             updated.text = text
         }
@@ -355,8 +357,8 @@ final class ScannerModel: ObservableObject {
         let version = resolver.resolveVersion(group: c.group, entry: nil, text: lastText) ?? c.info
         let alternatives = ([Candidate(group: s.group, info: s.version, score: 0, reading: "")] + s.alternatives).filter { $0.group != c.group }
         serial += 1
-        var b = resolver.build(group: c.group, version: version, text: lastText, confidence: .sure, alternatives: alternatives,
-                               locked: true, fromPhoto: s.fromPhoto, scan: s.scan, serial: serial)
+        var b = withLock(resolver.build(group: c.group, version: version, text: lastText, confidence: .sure, alternatives: alternatives,
+                                        locked: true, fromPhoto: s.fromPhoto, scan: s.scan, serial: serial))
         b.versionByUser = true
         shown = b
         replaceInSession(b, oldSerial: s.serial)
@@ -373,7 +375,11 @@ final class ScannerModel: ObservableObject {
         b.printingByUser = s.printingByUser
         b.versionByUser = true
         b.fromSearch = s.fromSearch
-        if b.priceCard.printing(s.printing)?.kind != s.printing { b.printing = defaultPrinting(b.priceCard) }
+        if b.priceCard.printing(s.printing)?.kind != s.printing {
+            b.printing = defaultPrinting(b.priceCard)
+            b.printingByUser = false
+            b = withLock(b)
+        }
         tracker.lock(s.group)
         shown = b
         replaceInSession(b)
@@ -388,7 +394,8 @@ final class ScannerModel: ObservableObject {
     }
 
     func choosePrinting(_ kind: Printing.Kind) {
-        guard var s = shown else { return }
+        // the long press that locks a printing ends in a tap as well: nothing new then
+        guard var s = shown, !(s.printing == kind && s.printingByUser && s.locked) else { return }
         s.printing = kind
         s.printingByUser = true
         s.locked = true
@@ -396,6 +403,23 @@ final class ScannerModel: ObservableObject {
         shown = s
         replaceInSession(s)
         logPack(.printing)
+    }
+
+    /// Held for a second on a printing: lock it for every new card (held again, or on another printing: unlocked, or that one).
+    func togglePrintingLock(_ kind: Printing.Kind) {
+        printingLock = printingLock == kind ? nil : kind
+        // YouTube Mode: no vibration (it would shake the tripod)
+        if !settings.youtube { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
+        if printingLock != nil, shown?.priceCard.printings.contains(where: { $0.kind == kind }) == true { choosePrinting(kind) }
+    }
+
+    /// A new card in the locked printing, when it has it.
+    func withLock(_ b: Shown) -> Shown {
+        guard let k = printingLock, b.priceCard.printings.contains(where: { $0.kind == k }) else { return b }
+        var b = b
+        b.printing = k
+        b.printingByUser = true
+        return b
     }
 
     /// A card from the last scans (Trading's tray): shown again and kept.
@@ -444,8 +468,8 @@ final class ScannerModel: ObservableObject {
         rejected = []
         lastText = nil
         serial += 1
-        var b = resolver.build(group: c.group, version: c.info, text: nil, confidence: .sure, alternatives: [], locked: true,
-                               fromPhoto: true, scan: nil, serial: serial)
+        var b = withLock(resolver.build(group: c.group, version: c.info, text: nil, confidence: .sure, alternatives: [], locked: true,
+                                        fromPhoto: true, scan: nil, serial: serial))
         b.versionByUser = true
         b.fromSearch = true
         shown = b
@@ -462,8 +486,8 @@ final class ScannerModel: ObservableObject {
         rejected = rejectedBy(s, c.group)
         let alternatives = ([Candidate(group: s.group, info: s.version, score: 0, reading: "")] + s.alternatives).filter { $0.group != c.group }
         serial += 1
-        var b = resolver.build(group: c.group, version: c.info, text: lastText, confidence: .sure, alternatives: alternatives,
-                               locked: true, fromPhoto: s.fromPhoto, scan: s.scan, serial: serial)
+        var b = withLock(resolver.build(group: c.group, version: c.info, text: lastText, confidence: .sure, alternatives: alternatives,
+                                        locked: true, fromPhoto: s.fromPhoto, scan: s.scan, serial: serial))
         b.versionByUser = true
         b.fromSearch = s.fromSearch
         shown = b

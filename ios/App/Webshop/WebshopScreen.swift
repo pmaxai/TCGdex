@@ -262,11 +262,12 @@ private struct CardAndPrices: View {
         let p = s.pickedPrinting
         let condition = web.form.condition
         HStack(alignment: .top, spacing: 12) {
-            ShownPicture(s: s).frame(width: 76)
+            ShopCardPicture(s: s, language: web.form.language).frame(width: 76)
             VStack(alignment: .leading, spacing: 2) {
                 Text(s.version.name).font(.title3.bold()).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.65)
                 Text(s.version.setLine()).font(.footnote).foregroundStyle(Theme.muted).lineLimit(1).minimumScaleFactor(0.8)
                 if let note = s.printedOnlyNote { Text(note).font(.caption).foregroundStyle(Theme.warn) }
+                if let note = web.pictureNote { Text(note).font(.caption).foregroundStyle(Theme.warn) }
                 if let e = s.english { Text("English: \(e.name)").font(.caption).foregroundStyle(.white).lineLimit(1) }
                 if let market = (p?.eur ?? p?.usdEur).map({ $0 * ShopTerms.share(condition) }) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -284,18 +285,33 @@ private struct CardAndPrices: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(s.priceCard.printings, id: \.kind) { pr in
-                        Chip(text: "\(pr.kind.rawValue) \(pr.priceText)", selected: pr.kind == p?.kind) { scanner.choosePrinting(pr.kind) }
+                        Chip(text: "\(pr.kind.rawValue) \(pr.priceText)", selected: pr.kind == p?.kind, repeats: web.printingLock == pr.kind,
+                             onHold: { web.togglePrintingLock(pr.kind) }) { scanner.choosePrinting(pr.kind) }
                     }
                 }
             }
             .padding(.top, 6)
         }
+        if let k = web.printingLock { PrintingLockNote(kind: k, has: s.priceCard.printings.contains { $0.kind == k }).padding(.top, 2) }
         let parts = [p?.eur.map { "trend \(Money.eur($0))" }, p?.eur30.map { "30-day \(Money.eur($0))" }, p?.eurLow.map { "from \(Money.eur($0))" },
                      p?.usd.map { "TCGplayer \(Money.usd($0))" }].compactMap { $0 }
         if !parts.isEmpty { Text(parts.joined(separator: " · ")).font(.caption).foregroundStyle(.white).padding(.top, 4) }
         // PSA prices are an add-on
         if showPsa, let g = s.graded { PsaLine(g: g, printing: s.priceCard.printings.count > 1 ? p?.kind : nil) }
         if let check = s.priceCard.priceCheck { Text("⚠ \(check.message)").font(.caption).foregroundStyle(Theme.warn) }
+        // the same card in another language or set (as in the Scanner): the product's language follows
+        let others = s.versions.filter { $0.id != s.version.id || $0.lang != s.version.lang }
+        if !others.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    Text("Other version or language?").font(.caption).foregroundStyle(Theme.muted)
+                    ForEach(others, id: \.versionKey) { v in
+                        Chip(text: v.id == s.version.id ? "\(languageNames[v.lang] ?? v.lang): \(v.name)" : v.setLine(), selected: false) { web.chooseVersion(v) }
+                    }
+                }
+            }
+            .padding(.top, 4)
+        }
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 Text("Not this card?").font(.caption).foregroundStyle(Theme.muted)
@@ -306,6 +322,29 @@ private struct CardAndPrices: View {
             }
         }
         .padding(.top, 4)
+    }
+}
+
+/// The card's picture as the shop gets it: in the product's language, else the English card's, marked symbolic.
+private struct ShopCardPicture: View {
+    let s: Shown
+    let language: String
+    var body: some View {
+        if let p = s.shopPicture(language: language) {
+            CardPicture(card: p.card, fallback: s.scan)
+                .overlay {
+                    if p.band != nil {
+                        GeometryReader { g in
+                            Text("Symbolic").font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
+                                .frame(width: g.size.width, height: g.size.height * 0.13)
+                                .background(Color(red: 0xB7 / 255, green: 0x1C / 255, blue: 0x1C / 255).opacity(0.93))
+                                .position(x: g.size.width / 2, y: g.size.height * 0.645)
+                        }
+                    }
+                }
+        } else {
+            ShownPicture(s: s)
+        }
     }
 }
 
@@ -461,14 +500,24 @@ private struct ShopFormBlock: View {
                     ForEach(kinds, id: \.self) { k in
                         let sel = ShopTerms.finishOf(k) == finish
                         let priced = s.priceCard.printings.contains { $0.kind == k }
+                        let repeats = web.printingLock == k
                         Button { web.setFinish(k) } label: {
                             Text(typeShort(k)).font(.system(size: 16, weight: .bold))
                                 .foregroundStyle(sel ? Theme.ink : priced ? .white : Theme.muted)
                                 .frame(minWidth: 44, minHeight: 44)
                                 .background(sel ? Theme.gold : keyGrey, in: RoundedRectangle(cornerRadius: 8))
+                                // held for a second: kept for the next cards
+                                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(repeats ? Theme.gold : .clear, lineWidth: 2))
+                                .overlay(alignment: .topTrailing) {
+                                    if repeats {
+                                        Image(systemName: "repeat").font(.system(size: 10, weight: .bold)).foregroundStyle(sel ? Theme.ink : Theme.gold).padding(3)
+                                    }
+                                }
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel(k.rawValue)
+                        .holdForASecond { web.togglePrintingLock(k) }
+                        .accessibilityLabel(k.rawValue + (repeats ? ", kept for the next cards" : ""))
+                        .accessibilityHint("Hold for a second to keep this type for the next cards")
                         .accessibilityAddTraits(sel ? .isSelected : [])
                     }
                 }

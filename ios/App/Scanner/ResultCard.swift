@@ -37,12 +37,16 @@ struct ResultCard: View {
                     HStack(spacing: 6) {
                         ForEach(s.priceCard.printings, id: \.kind) { p in
                             Chip(text: !priced ? p.kind.rawValue : free ? FreePrice.chip(p) : "\(p.kind.rawValue) \(p.priceText)",
-                                 selected: p.kind == s.selected?.kind) { model.choosePrinting(p.kind) }
+                                 selected: p.kind == s.selected?.kind, repeats: model.printingLock == p.kind,
+                                 onHold: { model.togglePrintingLock(p.kind) }) { model.choosePrinting(p.kind) }
                         }
                     }
                 }
-                if !s.printingByUser, s.priceCard.printings.contains(where: { $0.kind == .reverse || $0.kind == .holo }) {
-                    Text("Check the finish: tap the printing you have").font(.caption).foregroundStyle(Theme.muted)
+                if let k = model.printingLock {
+                    PrintingLockNote(kind: k, has: s.priceCard.printings.contains { $0.kind == k })
+                } else if !s.printingByUser, s.priceCard.printings.contains(where: { $0.kind == .reverse || $0.kind == .holo }) {
+                    Text("Check the finish: tap the printing you have · hold one for a second to keep it for the next cards")
+                        .font(.caption).foregroundStyle(Theme.muted)
                 }
             }
             if let r = s.richerPrinting {
@@ -56,6 +60,9 @@ struct ResultCard: View {
                 let shownText = CardResolver.asian.contains(s.version.lang) ? "its Japanese original (same set and number)"
                     : "the \(s.version.lang.uppercased()) card of the same picture"
                 Text("Printed in \(name) – this print isn't in the card data; shown: \(shownText)").font(.caption).foregroundStyle(Theme.warn)
+            } else if let note = s.symbolicPictureNote {
+                // no picture of this card in its language: another print's stands in
+                Text(note).font(.caption).foregroundStyle(Theme.muted)
             }
 
             if priced && free {
@@ -169,17 +176,45 @@ struct ShownPicture: View {
 struct Chip: View {
     let text: String
     let selected: Bool
+    /// the printing locked for the next cards: the repeat symbol
+    var repeats = false
+    /// held for a second (the printings: lock this one for the next cards)
+    var onHold: (() -> Void)? = nil
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Text(text).font(.caption).lineLimit(1)
-                .padding(.horizontal, 10).padding(.vertical, 6)
-                .foregroundStyle(selected ? Theme.ink : .white)
-                .background(selected ? Theme.gold : Theme.panel, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(selected ? .clear : Theme.muted.opacity(0.4)))
+            HStack(spacing: 4) {
+                if repeats { Image(systemName: "repeat").font(.caption.bold()) }
+                Text(text).font(.caption).lineLimit(1)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .foregroundStyle(selected ? Theme.ink : .white)
+            .background(selected ? Theme.gold : Theme.panel, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(repeats ? Theme.gold : selected ? .clear : Theme.muted.opacity(0.4), lineWidth: repeats ? 2 : 1))
         }
         .buttonStyle(.plain)
+        .holdForASecond(onHold)
+    }
+}
+
+extension View {
+    /// Held for a second: `action` (the button's tap still follows when the finger lifts).
+    @ViewBuilder func holdForASecond(_ action: (() -> Void)?) -> some View {
+        if let action { simultaneousGesture(LongPressGesture(minimumDuration: 1).onEnded { _ in action() }) } else { self }
+    }
+}
+
+/// Under the printings while one is locked: what happens to the next cards.
+struct PrintingLockNote: View {
+    let kind: Printing.Kind
+    /// the shown card has that printing
+    let has: Bool
+    var body: some View {
+        Label(has ? "\(kind.rawValue) kept for the next cards · hold it again to stop"
+              : "\(kind.rawValue) kept for the next cards – this card has no \(kind.rawValue.lowercased())",
+              systemImage: "repeat")
+            .font(.caption).foregroundStyle(has ? Theme.gold : Theme.warn)
     }
 }
 

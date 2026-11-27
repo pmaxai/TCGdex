@@ -165,6 +165,13 @@ enum ShopTerms {
     /// "Deutsch" for DE
     static func languageName(_ code: String) -> String { languages.first { $0.code == code }?.name ?? code }
 
+    /// A language the app knows (its code), in English: for the band across a product picture ("Printed in Korean").
+    static func englishName(_ appLang: String) -> String {
+        ["en": "English", "de": "German", "fr": "French", "it": "Italian", "es": "Spanish", "es-mx": "Spanish", "pt": "Portuguese",
+         "pt-br": "Portuguese", "nl": "Dutch", "pl": "Polish", "ru": "Russian", "ja": "Japanese", "ko": "Korean", "zh-tw": "Chinese",
+         "zh-cn": "Chinese", "th": "Thai", "id": "Indonesian"][appLang.lowercased()] ?? appLang
+    }
+
     /// a product's status in words
     static func statusLabel(_ s: String) -> String {
         switch s {

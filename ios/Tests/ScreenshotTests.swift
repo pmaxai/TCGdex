@@ -139,6 +139,15 @@ final class ScreenshotTests: XCTestCase {
         a.reveal(s.priceCard.id)
         let result = ScrollView { ResultCard(s: s, model: scanner, onSearch: {}).padding(12) }.background(Theme.ink).environmentObject(a)
         try await shot("ios-result", result)
+        // a printing held for a second: kept for the next cards (the repeat symbol)
+        if let kept = s.priceCard.printings.last?.kind, s.priceCard.printings.count > 1 {
+            scanner.show(s)
+            scanner.togglePrintingLock(kept)
+            let locked = try XCTUnwrap(scanner.shown)
+            XCTAssertEqual(locked.printing, kept)
+            try await shot("ios-result-lock", ScrollView { ResultCard(s: locked, model: scanner, onSearch: {}).padding(12) }.background(Theme.ink).environmentObject(a))
+            scanner.togglePrintingLock(kept)
+        }
 
         // Add to cart: the popup that prices the card for a deal, then the cart
         let trading = TradingModel(store: TradingStore(file: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)))
@@ -417,6 +426,13 @@ final class ScreenshotTests: XCTestCase {
         rec.refresh()
         XCTAssertEqual(rec.recordings.count, 3)
         try await shot("ios-recordings", RecordingsSheet(rec: rec, account: a))
+        // a printing held for a second: the repeat symbol on its button
+        if let multi = sc.session.map(\.shown).first(where: { $0.priceCard.printings.count > 1 }), let kept = multi.priceCard.printings.last?.kind {
+            sc.show(multi)
+            sc.togglePrintingLock(kept)
+            try await shot("ios-youtube-lock", YouTubeScreen(model: sc, rec: rec).environmentObject(a))
+            sc.togglePrintingLock(kept)
+        }
         sc.settings.youtube = false
         sc.settings.title = ""
     }
@@ -502,7 +518,24 @@ final class ScreenshotTests: XCTestCase {
         try await shot("ios-webshop-stockin-top", screen(web), scrolledBy: 0)
         try await shot("ios-webshop-stockin", screen(web), scrolledToBottom: true)
         // a language the shop doesn't have yet: a new product
+        // the type held for a second: kept for the next cards
+        let kept = shown.printing ?? .normal
+        web.togglePrintingLock(kept)
+        XCTAssertEqual(web.printingLock, kept)
+        try await shot("ios-webshop-lock", screen(web), scrolledBy: 0)
+        try await shot("ios-webshop-lock-form", screen(web), scrolledToBottom: true)
+        web.togglePrintingLock(kept)
+        XCTAssertNil(web.printingLock)
+        // a language the card data has no version in: the card stays, its picture the English card's, marked symbolic
+        if let other = ShopTerms.languages.map(\.code).first(where: { code in
+            !CardResolver.asian.contains(ShopTerms.appLang(code)) && !shown.versions.contains { $0.lang == ShopTerms.appLang(code) } }) {
+            web.setLanguage(other)
+            XCTAssertEqual(sc.shown?.version.lang, "de")
+            try await shot("ios-webshop-symbolic", screen(web), scrolledBy: 0)
+        }
+        // French: the card switches to its French version (when the data has it); a language the shop doesn't have yet: a new product
         web.setLanguage("FR")
+        if shown.versions.contains(where: { $0.id == ref && $0.lang == "fr" }) { XCTAssertEqual(sc.shown?.version.lang, "fr") }
         XCTAssertNil(web.match)
         try await shot("ios-webshop-new", screen(web), scrolledToBottom: true)
         web.book()

@@ -75,13 +75,40 @@ struct UnknownCard: Identifiable, Equatable {
     var id: String { de + "|" + en }
 }
 
+/// The shop product's picture, and the band across it when it isn't this card as printed in the product's language.
+struct ShopPicture: Equatable {
+    let card: CardInfo
+    let url: String
+    /// "Symbolic picture – English print", "Printed in Korean" (nil: the card itself)
+    let band: String?
+}
+
 extension Shown {
+    /**
+     * The picture a product in this shop language gets: the card's own, when it is printed in that
+     * language; else a symbolic one with a band across it – the English card's (an Asian print: its
+     * Japanese original's, "Printed in Korean"). A photo taken with the camera goes instead of it.
+     */
+    func shopPicture(language shopLang: String) -> ShopPicture? {
+        let target = ShopTerms.appLang(shopLang)
+        if (printedOnly ?? version.lang) == target, hasPictureInItsLanguage, let u = version.highUrl {
+            return ShopPicture(card: version, url: u, band: nil)
+        }
+        if CardResolver.asian.contains(target), CardResolver.asian.contains(version.lang), let c = imageCard, let u = c.highUrl {
+            return ShopPicture(card: c, url: u, band: "Printed in " + ShopTerms.englishName(target))
+        }
+        // the English card: this one's second-source picture (those are English), its English version, another English print
+        let english = ([version, priceCard] + [self.english].compactMap { $0 } + versions.filter { $0.id == version.id } + versions)
+            .first { ($0.lang == "en" && $0.highUrl != nil) || ($0.imageUrl == nil && $0.imageAlt != nil) }
+        if let e = english, let u = e.highUrl { return ShopPicture(card: e, url: u, band: "Symbolic picture – English print") }
+        guard let c = imageCard, let u = c.highUrl else { return nil }
+        return ShopPicture(card: c, url: u, band: "Symbolic picture – \(ShopTerms.englishName(c.imageUrl != nil ? c.lang : "en")) print")
+    }
+
     /// the printing picked (also one the price data doesn't have: then nil)
     var pickedPrinting: Printing? { printing == nil ? selected : priceCard.printings.first { $0.kind == printing } }
     /// a picture of this card as printed in its language (TCGdex's are per language; the second source's are English)
     var hasPictureInItsLanguage: Bool { printedOnly == nil && (version.imageUrl != nil || (version.lang == "en" && version.highUrl != nil)) }
-    /// the large picture of this card in its language, as the app shows it; for the shop (nil: none, a photo is needed)
-    var pictureUrl: String? { hasPictureInItsLanguage ? version.highUrl : nil }
     /// "Printed in Korean – …": the print isn't in the card data, another one is shown
     var printedOnlyNote: String? {
         guard let lang = printedOnly else { return nil }
@@ -115,6 +142,8 @@ final class WebshopModel: ObservableObject {
     // the card in the shop
     /// the scanner's card (kept here, so the panel isn't drawn again with every camera frame)
     @Published private(set) var shown: Shown?
+    /// the scanner's printing locked for the next cards (held for a second)
+    @Published private(set) var printingLock: Printing.Kind?
     @Published private(set) var cardRef: String?
     @Published private(set) var loading = false
     @Published private(set) var products: [ShopProduct]?
@@ -162,7 +191,7 @@ final class WebshopModel: ObservableObject {
     private let orderFile: URL
     private var shopClient: (tag: String, client: ShopClient)?
     /// the booking last sent: a retry sends the same bytes with the same idempotency key
-    private var pendingShop: (write: PendingWrite, label: String, delta: Int, box: String)?
+    private var pendingShop: (write: PendingWrite, label: String, delta: Int, box: String, substitute: (url: String, label: String)?)?
     /// the sale last sent: a retry sends the same batch with the same idempotency key
     private var pendingSale: (write: PendingWrite, lines: [ShopOrderLine])?
     /// the undo last sent, for its sale: pressing Undo again after a failure reuses its key
@@ -181,6 +210,7 @@ final class WebshopModel: ObservableObject {
         loadConnection()
         loadOrder()
         scanner.$shown.assign(to: &$shown)
+        scanner.$printingLock.assign(to: &$printingLock)
         // a new card (or language, printing) in Webshop Mode: look it up in the shop, fill in the form
         Publishers.CombineLatest(scanner.$shown, scanner.$settings.map(\.webshop).removeDuplicates())
             .map { pair -> (key: [String]?, shown: Shown?) in
@@ -366,6 +396,20 @@ final class WebshopModel: ObservableObject {
         scanner.choosePrinting(kind)
     }
 
+    /// Held for a second on a type: every new card takes it (when it has it), until held again.
+    func togglePrintingLock(_ kind: Printing.Kind) { scanner.togglePrintingLock(kind) }
+
+    /// Under the card, when its picture is symbolic (the English card's): that, and what the shop gets.
+    var pictureNote: String? {
+        guard let s = shown, s.printedOnly == nil, let band = s.shopPicture(language: form.language)?.band else { return nil }
+        if photo?.cardRef == s.version.id { return band + " · your photo goes to the shop instead" }
+        let ownPicture = match.map { $0.images.contains { $0.status != "failed" } } ?? false
+        if !configured || selling || catalogPicture == true || ownPicture { return band }
+        // a photo only of a card in front of the camera (not of one looked up)
+        return band + (s.fromPhoto ? " · the shop gets it marked so" : " · the shop gets it marked so – or take a photo")
+    }
+
+    /// The product's language; the card switches to its version in that language (name, set, picture) when the data has one.
     func setLanguage(_ code: String) {
         guard let s = shown else { return }
         scanner.hold()
@@ -373,6 +417,21 @@ final class WebshopModel: ObservableObject {
         f.language = code
         f.languageByUser = true
         form = withSuggestedPrice(f, s, products)
+        if let v = Self.version(of: s, in: code) { scanner.chooseVersion(v) }
+    }
+
+    /// The shown card in this shop language: the same card (set, number) first, else another print of the same picture.
+    static func version(of s: Shown, in shopLang: String) -> CardInfo? {
+        let lang = ShopTerms.appLang(shopLang)
+        if (s.printedOnly ?? s.version.lang) == lang { return nil }
+        return s.versions.first { $0.id == s.version.id && $0.lang == lang } ?? s.versions.first { $0.lang == lang }
+    }
+
+    /// Another version or language of the card (as in the Scanner): the form's language follows it.
+    func chooseVersion(_ v: CardInfo) {
+        scanner.hold()
+        form.languageByUser = false
+        scanner.chooseVersion(v)
     }
 
     func setCondition(_ code: String) {
@@ -418,16 +477,12 @@ final class WebshopModel: ObservableObject {
         let ownPicture = m.map { $0.images.contains { $0.status != "failed" } } ?? false
         // a photo taken with the camera goes up after the booking instead
         let ph = photo?.cardRef == s.version.id ? photo : nil
-        let picture = (ph == nil && catalogPicture != true && !ownPicture) ? s.pictureUrl : nil
+        // the card's picture in the product's language; else a symbolic one (the English card's; an Asian print: its Japanese
+        // original's) goes up after the booking, with a band across it saying so
+        let shopPicture = (ph == nil && catalogPicture != true && !ownPicture) ? s.shopPicture(language: f.language) : nil
+        let picture = shopPicture?.band == nil ? shopPicture?.url : nil
         let activate = picture != nil && m != nil && m?.status == "draft" && (m?.price != nil || price != nil)
-        // an Asian print with no picture of its own (Korean ones never have one): another print's picture goes up,
-        // with a band across it saying in which language this one is printed
-        let printed = s.printedOnly ?? s.version.lang
-        var substitute: (url: String, label: String)?
-        if ph == nil, CardResolver.asian.contains(printed), !s.hasPictureInItsLanguage, catalogPicture != true, !ownPicture,
-           let url = s.imageCard?.highUrl {
-            substitute = (url, "Printed in " + Self.languageName(printed))
-        }
+        let substitute = shopPicture.flatMap { p in p.band.map { (url: p.url, label: $0) } }
         // an Asian print: the shop doesn't know it; its printed name, and the names of the western card of the same picture
         let asian = CardResolver.asian.contains(s.version.lang)
         let west = asian ? s.english : nil
@@ -440,26 +495,16 @@ final class WebshopModel: ObservableObject {
             nameLocal: s.printedOnly != nil ? s.text?.title : (asian ? s.version.name : nil))
         let w = PendingWrite.json("POST", "/stock/intake", body)
         let label = "\(s.version.name) (\(f.language) · \(f.condition) · \(ShopTerms.finishLabel(finish)))"
-        pendingShop = (w, label, f.quantity, ShopClient.box(box))
+        pendingShop = (w, label, f.quantity, ShopClient.box(box), substitute)
         store.lastBox = box
         store.lastCondition = f.condition
         send(w, label: label, delta: f.quantity, box: ShopClient.box(box), substitute: substitute)
     }
 
-    static func languageName(_ code: String) -> String {
-        switch code {
-        case "ja": return "Japanese"
-        case "ko": return "Korean"
-        case "zh-tw", "zh-cn": return "Chinese"
-        case "th": return "Thai"
-        default: return code
-        }
-    }
-
     /// Sends the failed booking again: the same bytes, the same idempotency key (never booked twice).
     func retry() {
         guard let p = pendingShop else { return }
-        send(p.write, label: p.label, delta: p.delta, box: p.box)
+        send(p.write, label: p.label, delta: p.delta, box: p.box, substitute: p.substitute)
     }
 
     /// substitute: another print's picture and the label to put across it, when the product has none
@@ -789,7 +834,7 @@ final class WebshopModel: ObservableObject {
     var photoWanted: Bool {
         guard let s = shown, configured, !selling, !s.fromPhoto else { return false }
         if photoBusy || photo?.cardRef == s.version.id { return true }
-        if s.hasPictureInItsLanguage { return false }
+        if let p = s.shopPicture(language: form.language), p.band == nil { return false }
         return match.map { $0.images.allSatisfy { $0.status == "failed" } } ?? true
     }
 

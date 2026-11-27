@@ -64,6 +64,13 @@ struct Shown {
         priceCard.printings.filter { $0.kind != selected?.kind && ($0.value ?? 0) > (value ?? 0) }.max { ($0.value ?? 0) < ($1.value ?? 0) }
     }
     var pricedFromEnglish: Bool { priceCard.id != version.id || priceCard.lang != version.lang }
+    /// the language of the picture shown (TCGdex's are per language; the second source's are English)
+    var pictureLang: String? { imageCard.map { $0.imageUrl != nil ? $0.lang : "en" } }
+    /// "Symbolic picture – English print": the picture shown isn't this card as printed (an Asian print says so already)
+    var symbolicPictureNote: String? {
+        guard printedOnly == nil, let l = pictureLang, l != version.lang else { return nil }
+        return "Symbolic picture – \(ShopTerms.englishName(l)) print"
+    }
     /// PSA prices of the selected printing (eBay sales are kept apart per printing)
     var graded: Graded? { priceCard.gradedFor(selected?.kind) }
     var population: Population? { priceCard.populationFor(selected?.kind) }
