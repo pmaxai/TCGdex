@@ -135,6 +135,7 @@ struct CardDetail: View {
 
     var body: some View {
         let priced = account.revealed(priceCard.id)
+        let free = account.isFree
         let selected = priceCard.printing(printing)
         let several = priceCard.printings.count > 1
         let graded = priceCard.gradedFor(selected?.kind)
@@ -150,16 +151,20 @@ struct CardDetail: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
                             ForEach(priceCard.printings, id: \.kind) { p in
-                                Chip(text: priced ? "\(p.kind.rawValue) \(p.priceText)" : p.kind.rawValue, selected: p.kind == selected?.kind) { printing = p.kind }
+                                Chip(text: !priced ? p.kind.rawValue : free ? FreePrice.chip(p) : "\(p.kind.rawValue) \(p.priceText)",
+                                     selected: p.kind == selected?.kind) { printing = p.kind }
                             }
                         }
                     }
                 }
-                // the free version: revealed one card at a time
-                if priced {
+                // the free version: a price range; revealed one card at a time, Cardmarket's trend only
+                if priced && free {
+                    FreeTrend(p: selected, card: priceCard, pricedFromEnglish: priceCard.id != card.id || priceCard.lang != card.lang)
+                } else if priced {
                     PriceBlock(p: selected, card: priceCard, pricedFromEnglish: priceCard.id != card.id || priceCard.lang != card.lang)
                     if let h = history { PriceHistoryChart(history: h, printing: selected?.kind, hasNormal: priceCard.printings.contains { $0.kind == .normal }) }
                 } else {
+                    FreePriceRange(p: selected)
                     RevealPrice(account: account, cardId: priceCard.id)
                 }
                 PsaSection(account: account, graded: graded, population: priceCard.populationFor(selected?.kind),

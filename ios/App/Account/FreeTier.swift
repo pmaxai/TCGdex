@@ -183,7 +183,7 @@ extension AccountModel {
 
 /// A feature the free version shows but doesn't include.
 enum LockedFeature: String, Identifiable {
-    case search, trading, missing, photo, alert, collectionFull, values, share, psa, youtube, recording, webshop
+    case search, trading, missing, photo, alert, collectionFull, values, share, psa, youtube, recording, webshop, prices
 
     var id: String { rawValue }
 
@@ -196,6 +196,7 @@ enum LockedFeature: String, Identifiable {
         case .alert: return "Price alerts need a subscription"
         case .collectionFull: return "The free collection is full"
         case .values: return "Collection values need a subscription"
+        case .prices: return "Every price comes with a plan"
         case .share: return "Sharing needs a subscription"
         case .psa: return "PSA prices are an add-on"
         case .youtube: return "YouTube Mode comes with the Creator plan"
@@ -213,6 +214,7 @@ enum LockedFeature: String, Identifiable {
         case .alert: return "The phone vibrates when a scanned card is worth at least your alert price."
         case .collectionFull: return "The free version keeps \(AccountModel.freeMaxCards) different cards on this phone. With a subscription your collection has no limit, is saved in your account, and these cards move into it."
         case .values: return "See what each card and your whole collection is worth."
+        case .prices: return "The free version shows Cardmarket's trend. A plan adds Cardmarket's 30-day average, average sell price and lowest offer, TCGplayer's market, mid and low prices, the price chart and the PSA gem rate – for every card at once."
         case .share: return "Send friends a link to your collection – they see your cards and what they're worth."
         case .psa: return "What PSA 10, 9 and 8 copies of a card sold for on eBay – an add-on for Collector and Creator, monthly or yearly."
         case .youtube: return "Full screen for unboxing and price-check videos: an animated price reveal for every card, a HIT at your alert price, the pack's running value."
@@ -312,14 +314,82 @@ struct RevealPrice: View {
     }
 }
 
+/**
+ * The free version's prices: a price range on every scan ("0–1 €", "1–20 €", "20 €+"); once
+ * revealed, Cardmarket's trend only. Everything else (Cardmarket's other prices, TCGplayer, the
+ * price chart, the gem rate) comes with a plan.
+ */
+enum FreePrice {
+    /// Cardmarket's trend of a printing
+    static func trend(_ p: Printing?) -> Double? { p?.raw(.cmTrend) }
+
+    /// what the range is judged by: Cardmarket's trend, else TCGplayer's market price in euros
+    static func rangeValue(_ p: Printing?) -> Double? { trend(p) ?? p?.eurValue(.tcgMarket) }
+
+    /// below 1 €, 1 to 20 €, 20 € and more
+    static func range(_ v: Double) -> String { v < 1 ? "0–1 €" : v < 20 ? "1–20 €" : "20 €+" }
+
+    /// the printing chip once revealed: "Holo 12.34 €" (Cardmarket's trend) or just "Holo"
+    static func chip(_ p: Printing) -> String { trend(p).map { "\(p.kind.rawValue) \(Money.eur($0))" } ?? p.kind.rawValue }
+}
+
+/// Before a reveal: the price range of the shown printing.
+struct FreePriceRange: View {
+    let p: Printing?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let v = FreePrice.rangeValue(p) {
+                Text(FreePrice.range(v)).font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.gold)
+                Text("price range" + (p.map { " · \($0.kind.rawValue)" } ?? "")).font(.caption).foregroundStyle(Theme.muted)
+            } else {
+                Text("No price for this card.").foregroundStyle(Theme.muted)
+            }
+        }
+        .padding(.top, 4)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Revealed in the free version: Cardmarket's trend only; a locked line for everything else.
+struct FreeTrend: View {
+    let p: Printing?
+    let card: CardInfo
+    var pricedFromEnglish = false
+    @State private var locked: LockedFeature?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let v = FreePrice.trend(p) {
+                HStack(alignment: .lastTextBaseline, spacing: 8) {
+                    Text(Money.eur(v)).font(.system(size: 30, weight: .bold)).foregroundStyle(Theme.gold)
+                    Text("Cardmarket trend" + (p.map { " · \($0.kind.rawValue)" } ?? "")).font(.caption).foregroundStyle(Theme.muted)
+                }
+            } else {
+                Text(p.map { "No Cardmarket trend for the \($0.kind.rawValue.lowercased())." } ?? "No price for this card.").foregroundStyle(Theme.muted)
+            }
+            Button { locked = .prices } label: {
+                Label("30-day average, lowest offer, TCGplayer and the price chart – with a plan", systemImage: "lock.fill")
+                    .font(.footnote).foregroundStyle(Theme.gold).multilineTextAlignment(.leading)
+            }
+            .buttonStyle(.plain)
+            if let check = card.priceCheck { Text("⚠ \(check.message)").font(.caption).foregroundStyle(Theme.warn) }
+            if pricedFromEnglish { Text("Price of the English version (none for this language)").font(.caption2).foregroundStyle(Theme.muted) }
+            if let d = card.prices?.updated { Text("Prices from \(String(d.prefix(10)))").font(.caption2).foregroundStyle(Theme.muted) }
+        }
+        .padding(.top, 4)
+        .lockedAlert($locked)
+    }
+}
+
 /// Settings › Account in the free version, above the sign-in or the plans: what Free includes and what a plan adds.
 struct FreeNote: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Free version").font(.headline).foregroundStyle(Theme.gold)
-            Label("Scanner: scan as many cards as you like; \(AccountModel.freeBurst) free price reveals, then one more every \(Int(AccountModel.freeRefill)) seconds", systemImage: "checkmark")
+            Label("Scanner: scan as many cards as you like and see each one's price range; \(AccountModel.freeBurst) free reveals of Cardmarket's trend, then one more every \(Int(AccountModel.freeRefill)) seconds", systemImage: "checkmark")
             Label("A collection of \(AccountModel.freeMaxCards) cards on this phone", systemImage: "checkmark")
-            Label("Search, carts and deals, missing cards, photo scans, price alerts and collection values come with a plan; PSA prices as an add-on", systemImage: "lock")
+            Label("Every price source, price charts, search, carts and deals, missing cards, photo scans, price alerts and collection values come with a plan; PSA prices as an add-on", systemImage: "lock")
             Text("Sign in and choose a plan for everything; your cards move into your account's collection.")
                 .font(.caption).foregroundStyle(Theme.muted).padding(.top, 2)
         }

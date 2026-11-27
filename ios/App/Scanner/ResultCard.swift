@@ -14,8 +14,9 @@ struct ResultCard: View {
 
     var body: some View {
         let c = s.version
-        // the free version: the prices only once revealed (10 cards in any 60 minutes)
+        // the free version: a price range, and Cardmarket's trend only once revealed
         let priced = account.revealed(s.priceCard.id)
+        let free = account.isFree
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 12) {
                 ShownPicture(s: s)
@@ -35,7 +36,8 @@ struct ResultCard: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(s.priceCard.printings, id: \.kind) { p in
-                            Chip(text: priced ? "\(p.kind.rawValue) \(p.priceText)" : p.kind.rawValue, selected: p.kind == s.selected?.kind) { model.choosePrinting(p.kind) }
+                            Chip(text: !priced ? p.kind.rawValue : free ? FreePrice.chip(p) : "\(p.kind.rawValue) \(p.priceText)",
+                                 selected: p.kind == s.selected?.kind) { model.choosePrinting(p.kind) }
                         }
                     }
                 }
@@ -44,7 +46,8 @@ struct ResultCard: View {
                 }
             }
             if let r = s.richerPrinting {
-                Text(priced ? "⚠ The \(r.kind.rawValue.lowercased()) of this card is worth \(r.priceText) – check the finish!"
+                let worth: String? = free ? FreePrice.trend(r).map { Money.eur($0) } : r.priceText
+                Text(priced && worth != nil ? "⚠ The \(r.kind.rawValue.lowercased()) of this card is worth \(worth ?? "") – check the finish!"
                      : "⚠ The \(r.kind.rawValue.lowercased()) of this card is worth more – check the finish!")
                     .font(.footnote.bold()).foregroundStyle(Theme.warn)
             }
@@ -55,13 +58,16 @@ struct ResultCard: View {
                 Text("Printed in \(name) – this print isn't in the card data; shown: \(shownText)").font(.caption).foregroundStyle(Theme.warn)
             }
 
-            if priced {
+            if priced && free {
+                FreeTrend(p: s.selected, card: s.priceCard, pricedFromEnglish: s.pricedFromEnglish)
+            } else if priced {
                 PriceBlock(p: s.selected, card: s.priceCard, pricedFromEnglish: s.pricedFromEnglish)
             } else {
+                FreePriceRange(p: s.selected)
                 RevealPrice(account: account, cardId: s.priceCard.id)
             }
             CollectionBar(account: account, s: s)
-            if priced, let h = s.history { PriceHistoryChart(history: h, printing: s.selected?.kind, hasNormal: s.priceCard.printings.contains { $0.kind == .normal }) }
+            if priced, !free, let h = s.history { PriceHistoryChart(history: h, printing: s.selected?.kind, hasNormal: s.priceCard.printings.contains { $0.kind == .normal }) }
             PsaSection(account: account, graded: s.graded, population: s.population,
                        printing: s.priceCard.printings.count > 1 ? s.selected?.kind : nil, onlyOtherPrintings: s.gradedOnlyOtherPrintings)
 

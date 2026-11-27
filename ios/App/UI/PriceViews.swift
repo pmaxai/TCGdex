@@ -117,7 +117,8 @@ struct PsaSection: View {
                     .buttonStyle(.plain)
                     .padding(.top, 6)
                 }
-                if let p = population { GemLine(p: p) }
+                // the gem rate comes with a plan (the free version's prices are Cardmarket's trend only)
+                if let p = population, !account.isFree { GemLine(p: p) }
             }
             .lockedAlert($locked)
         }

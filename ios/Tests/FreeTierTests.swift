@@ -88,6 +88,25 @@ final class FreeTierTests: XCTestCase {
         XCTAssertEqual(AccountModel.countdown(0.2), "0:01")
     }
 
+    /// Before a reveal a price range; revealed, Cardmarket's trend only (the range falls back to TCGplayer in euros).
+    func testThePriceRangeAndTheTrend() {
+        XCTAssertEqual(FreePrice.range(0), "0–1 €")
+        XCTAssertEqual(FreePrice.range(0.99), "0–1 €")
+        XCTAssertEqual(FreePrice.range(1), "1–20 €")
+        XCTAssertEqual(FreePrice.range(19.99), "1–20 €")
+        XCTAssertEqual(FreePrice.range(20), "20 €+")
+        XCTAssertEqual(FreePrice.range(2500), "20 €+")
+        let p = Printing(kind: .holo, eur: 12.5, eur30: 11, eurLow: 9, usd: 30, usdEur: 27.5)
+        XCTAssertEqual(FreePrice.trend(p), 12.5)
+        XCTAssertEqual(FreePrice.rangeValue(p), 12.5)
+        XCTAssertEqual(FreePrice.chip(p), "Holo " + Money.eur(12.5))
+        let onlyUS = Printing(kind: .reverse, eur: nil, eur30: nil, eurLow: nil, usd: 30, cmTrend: nil, tcgMarket: 30, usdPerEur: 1.2, sourced: true)
+        XCTAssertNil(FreePrice.trend(onlyUS), "no Cardmarket trend: none shown")
+        XCTAssertEqual(FreePrice.rangeValue(onlyUS), 25, "the range from TCGplayer in euros")
+        XCTAssertEqual(FreePrice.chip(onlyUS), "Reverse holo")
+        XCTAssertNil(FreePrice.rangeValue(nil))
+    }
+
     func testTheLocalCollectionHoldsFiftyDifferentCards() {
         let st = store()
         let a = account(st)
