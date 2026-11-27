@@ -279,8 +279,10 @@ final class AccountModel: ObservableObject {
     /// the free version (no running subscription): the prices revealed lately, and the collection on this phone
     /// (set by FreeTier.swift's extension only)
     @Published var reveals: [FreeReveal] = []
+    /// the reveals left and the refill's clock (nil: all 15 left)
+    @Published var freeBucket: FreeBucket?
     @Published var localItems: [LocalItem] = []
-    /// the clock of the free version's hour (tests set their own)
+    /// the clock of the free version's reveals (tests set their own)
     var now: () -> Date = Date.init
 
     let store: AccountStore
@@ -318,6 +320,7 @@ final class AccountModel: ObservableObject {
         self.store = store
         self.home = home.hasSuffix("/") ? String(home.dropLast()) : home
         reveals = store.freeReveals()
+        freeBucket = store.freeBucket()
         localItems = store.localCollection()
     }
 

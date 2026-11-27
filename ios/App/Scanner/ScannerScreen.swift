@@ -38,7 +38,7 @@ struct ScannerScreen: View {
                     if let s = model.shown {
                         ResultCard(s: s, model: model, onSearch: { replacing = true }, onAddToCart: { openDeal(s) })
                     } else if account.isFree {
-                        Text("Hold a card inside the frame. Its name appears here – reveal its price with a tap (\(AccountModel.freeRevealsPerHour) per hour in the free version). Not recognised? Double-tap the picture to take it anyway. Pinch to zoom.")
+                        Text("Hold a card inside the frame. Its name appears here – reveal its price with a tap (in the free version \(AccountModel.freeBurst) at once, then one more every \(Int(AccountModel.freeRefill)) seconds). Not recognised? Double-tap the picture to take it anyway. Pinch to zoom.")
                             .foregroundStyle(Theme.muted)
                     } else {
                         Text("Hold a card inside the frame. Its name and prices appear here – Add to cart prices it for a deal. The phone vibrates when a card is worth at least your alert price (Settings). Not recognised? Double-tap the picture to take it anyway. Pinch to zoom.")

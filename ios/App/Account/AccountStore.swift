@@ -129,6 +129,16 @@ final class AccountStore: @unchecked Sendable {
         if let d = try? JSONEncoder().encode(r) { defaults.set(d, forKey: "free.reveals") }
     }
 
+    /// the reveals left and the refill's clock (nil: full)
+    func freeBucket() -> FreeBucket? {
+        guard let d = defaults.data(forKey: "free.bucket") else { return nil }
+        return try? JSONDecoder().decode(FreeBucket.self, from: d)
+    }
+
+    func saveFreeBucket(_ b: FreeBucket?) {
+        if let b, let d = try? JSONEncoder().encode(b) { defaults.set(d, forKey: "free.bucket") } else { defaults.removeObject(forKey: "free.bucket") }
+    }
+
     /// the collection kept on this phone (the free version's); it stays when the account goes
     func localCollection() -> [LocalItem] {
         lock.lock(); defer { lock.unlock() }

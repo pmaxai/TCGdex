@@ -1,7 +1,7 @@
 import XCTest
 @testable import OverpricedCardboard
 
-/// The free version: 10 prices in any 60 minutes, a collection of 50 different cards on the phone,
+/// The free version: 15 reveals at once, then one every 15 seconds; a collection of 50 different cards on the phone,
 /// moved into the account's collection once a plan with a collection runs, and back to Free on sign-out.
 @MainActor
 final class FreeTierTests: XCTestCase {
@@ -27,23 +27,29 @@ final class FreeTierTests: XCTestCase {
         throw NSError(domain: "FreeTierTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "timed out waiting for: \(what)"])
     }
 
-    func testTenPricesInAnySixtyMinutes() {
+    /// 15 reveals at once, then one more every 15 seconds (up to 15 again); a card revealed stays revealed for an hour.
+    func testABurstOfFifteenThenOneEveryFifteenSeconds() {
         let st = store()
         let a = account(st)
         XCTAssertTrue(a.isFree, "no account: the free version")
         let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         var t = t0
         a.now = { t }
-        for i in 0..<10 {
-            XCTAssertTrue(a.reveal("card-\(i)"), "reveal \(i + 1)")
-            t = t.addingTimeInterval(60)
-        }
+        XCTAssertEqual(a.revealsLeft, 15)
+        XCTAssertNil(a.nextRevealAt, "all there: nothing to wait for")
+        XCTAssertEqual(a.revealsText, "15 free reveals left")
+        for i in 0..<7 { XCTAssertTrue(a.reveal("card-\(i)"), "reveal \(i + 1)") }
+        t = t0.addingTimeInterval(3)
+        XCTAssertEqual(a.revealsLeft, 8)
+        XCTAssertEqual(a.nextRevealAt, t0.addingTimeInterval(15), "the refill counts from the first one")
+        XCTAssertEqual(a.revealsText, "8 free reveals left · next in 0:12")
+        for i in 7..<15 { XCTAssertTrue(a.reveal("card-\(i)"), "reveal \(i + 1)") }
         XCTAssertEqual(a.revealsLeft, 0)
-        XCTAssertFalse(a.reveal("card-10"), "the 11th within the hour")
-        XCTAssertFalse(a.revealed("card-10"))
-        XCTAssertTrue(a.reveal("card-3"), "a card revealed this hour stays revealed")
-        XCTAssertEqual(a.nextRevealAt, t0.addingTimeInterval(3600), "the next one when the first is an hour old")
-        log("after 10: left \(a.revealsLeft), next at \(String(describing: a.nextRevealAt))")
+        XCTAssertFalse(a.reveal("card-15"), "the 16th right away")
+        XCTAssertFalse(a.revealed("card-15"))
+        XCTAssertTrue(a.reveal("card-3"), "a card revealed stays revealed (free)")
+        XCTAssertEqual(a.revealsText, "No free reveals left · next in 0:12")
+        log("after 15: \(a.revealsText)")
 
         // kept on the phone: the same after a restart
         let again = account(st)
@@ -51,12 +57,35 @@ final class FreeTierTests: XCTestCase {
         XCTAssertEqual(again.revealsLeft, 0)
         XCTAssertTrue(again.revealed("card-0"))
 
-        // rolling: an hour after the first, one is free again (and the first card is hidden again)
-        t = t0.addingTimeInterval(3601)
-        XCTAssertEqual(a.revealsLeft, 1)
-        XCTAssertFalse(a.revealed("card-0"))
-        XCTAssertTrue(a.reveal("card-10"))
+        // one every 15 seconds; a reveal keeps the refill's clock where it is
+        t = t0.addingTimeInterval(14.5)
         XCTAssertEqual(a.revealsLeft, 0)
+        XCTAssertEqual(a.revealsText, "No free reveals left · next in 0:01")
+        t = t0.addingTimeInterval(15)
+        XCTAssertEqual(a.revealsLeft, 1)
+        XCTAssertEqual(a.revealsText, "1 free reveal left · next in 0:15")
+        t = t0.addingTimeInterval(20)
+        XCTAssertTrue(a.reveal("card-15"))
+        XCTAssertEqual(a.revealsLeft, 0)
+        XCTAssertEqual(a.nextRevealAt, t0.addingTimeInterval(30), "not 15 seconds after this reveal")
+        t = t0.addingTimeInterval(61)
+        XCTAssertEqual(a.revealsLeft, 3)
+
+        // all 15 back after enough time, no more than 15
+        t = t0.addingTimeInterval(15 + 15 * 20)
+        XCTAssertEqual(a.revealsLeft, 15)
+        XCTAssertNil(a.nextRevealAt)
+        // the clock set back: nothing is lost, nothing gained
+        XCTAssertTrue(a.reveal("card-16"))
+        t = t.addingTimeInterval(-600)
+        XCTAssertEqual(a.revealsLeft, 14)
+        XCTAssertEqual(a.nextRevealAt, t.addingTimeInterval(15))
+
+        // a card revealed stays revealed for an hour
+        t = t0.addingTimeInterval(3601)
+        XCTAssertFalse(a.revealed("card-0"))
+        XCTAssertEqual(AccountModel.countdown(75), "1:15")
+        XCTAssertEqual(AccountModel.countdown(0.2), "0:01")
     }
 
     func testTheLocalCollectionHoldsFiftyDifferentCards() {

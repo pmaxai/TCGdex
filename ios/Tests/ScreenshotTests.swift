@@ -208,7 +208,7 @@ final class ScreenshotTests: XCTestCase {
         try await shot("review-psa", page, width: 400, height: 575)
     }
 
-    /// The free version: a scanned card with its price to reveal, revealed, the hour's limit, the locked Search
+    /// The free version: a scanned card with its price to reveal, revealed, no reveals left (with the upgrade), the locked Search
     /// page, the collection on the phone with the locked Missing tab, and the Account tab.
     func testFreeVersion() async throws {
         guard let pack = ParityTests.pack ?? Pack.bundledDir.flatMap({ try? Pack(dir: $0) }) else { throw XCTSkip("no data pack") }
@@ -222,17 +222,23 @@ final class ScreenshotTests: XCTestCase {
         StandIn.reset()
         let a = account()
         XCTAssertTrue(a.isFree, "no account: the free version")
+        // the reveals' clock stands still for the pictures: 3 seconds after the first reveal
+        var clock = Date(timeIntervalSince1970: 1_800_000_000)
+        a.now = { clock }
         let scanner = ScannerModel(engine: try ScannerEngine(pack: pack), catalog: cat)
         func result(_ s: Shown) -> AnyView {
             AnyView(ScrollView { ResultCard(s: s, model: scanner, onSearch: {}).padding(12) }.background(Theme.ink).environmentObject(a))
         }
         let s = try shown("sv08-059", "de")
         for i in 0..<3 { a.reveal("other-\(i)") }
+        clock = clock.addingTimeInterval(3)
+        XCTAssertEqual(a.revealsText, "12 free reveals left · next in 0:12")
         try await shot("ios-free-result", result(s))
         XCTAssertTrue(a.reveal(s.priceCard.id))
         try await shot("ios-free-revealed", result(s))
-        for i in 3..<9 { a.reveal("other-\(i)") }
+        for i in 3..<14 { a.reveal("other-\(i)") }
         XCTAssertEqual(a.revealsLeft, 0)
+        XCTAssertEqual(a.revealsText, "No free reveals left · next in 0:12")
         try await shot("ios-free-limit", result(try shown("base1-4", "en")))
         try await shot("ios-free-search", LockedPage(feature: .search, icon: "magnifyingglass"))
         a.addLocally(cardId: "sv08-059", language: "DE", finish: "normal", condition: "NM", quantity: 2, label: "Pikachu-ex")

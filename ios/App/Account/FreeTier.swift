@@ -1,10 +1,16 @@
 import Foundation
 import SwiftUI
 
-/// A price revealed in the free version: which card, and when (10 in any 60 minutes).
+/// A price revealed in the free version: which card, and when (it stays revealed for an hour).
 struct FreeReveal: Codable, Equatable {
     let cardId: String
     let at: Date
+}
+
+/// The free version's reveals: how many were left at `stamp`, the moment the refill counts from (nil: all 15 left).
+struct FreeBucket: Codable, Equatable {
+    var left: Int
+    var stamp: Date
 }
 
 /// A copy (or several) in the free version's collection, kept on this phone.
@@ -31,12 +37,16 @@ struct LocalItem: Codable, Equatable, Identifiable {
 
 /**
  * The free version: no account or no running subscription (never subscribed, ended, signed out,
- * or the saved answer ran out offline). The Scanner only; 10 prices revealed in any 60 minutes (a
- * card revealed stays revealed for that hour); a collection of 50 different cards on this phone,
- * moved into the account's collection as soon as a plan with a collection is running.
+ * or the saved answer ran out offline). The Scanner only; prices are revealed one card at a tap:
+ * a burst of 15, then one more every 15 seconds, up to 15 again (a card revealed stays revealed
+ * for an hour, free); a collection of 50 different cards on this phone, moved into the account's
+ * collection as soon as a plan with a collection is running.
  */
 extension AccountModel {
-    static let freeRevealsPerHour = 10
+    /// reveals in one go
+    static let freeBurst = 15
+    /// one more reveal every … seconds, up to the burst again
+    static let freeRefill: TimeInterval = 15
     static let freeMaxCards = 50
 
     /// no running subscription: the free version's limits apply
@@ -50,20 +60,48 @@ extension AccountModel {
     /// this card's price may be shown (always with a subscription)
     func revealed(_ cardId: String) -> Bool { !isFree || recentReveals.contains { $0.cardId == cardId } }
 
-    /// prices that may still be revealed in this hour
-    var revealsLeft: Int { max(0, Self.freeRevealsPerHour - recentReveals.count) }
+    /// The reveals left now and when the next one comes (nil: all 15 are there).
+    private var bucketNow: (left: Int, next: Date?) {
+        let t = now()
+        guard let b = freeBucket, b.left < Self.freeBurst else { return (Self.freeBurst, nil) }
+        let stamp = min(b.stamp, t)                       // the clock went back: count from now
+        let gained = Int(t.timeIntervalSince(stamp) / Self.freeRefill)
+        let left = min(Self.freeBurst, b.left + gained)
+        if left >= Self.freeBurst { return (Self.freeBurst, nil) }
+        return (left, stamp.addingTimeInterval(Double(gained + 1) * Self.freeRefill))
+    }
 
-    /// all used up: when the next one may be revealed
-    var nextRevealAt: Date? { revealsLeft > 0 ? nil : recentReveals.map(\.at).min().map { $0.addingTimeInterval(3600) } }
+    /// prices that may be revealed now
+    var revealsLeft: Int { bucketNow.left }
 
-    /// Shows this card's price; false: the hour's 10 are used up.
+    /// when the next reveal comes back (nil: all 15 are there)
+    var nextRevealAt: Date? { bucketNow.next }
+
+    /// Shows this card's price; false: none left right now (the next one comes within 15 seconds).
     @discardableResult
     func reveal(_ cardId: String) -> Bool {
         if revealed(cardId) { return true }
-        guard revealsLeft > 0 else { return false }
+        let (left, next) = bucketNow
+        guard left > 0 else { return false }
+        // the refill keeps counting where it is; with all 15 there it starts now
+        freeBucket = FreeBucket(left: left - 1, stamp: next.map { $0.addingTimeInterval(-Self.freeRefill) } ?? now())
+        store.saveFreeBucket(freeBucket)
         reveals = recentReveals + [FreeReveal(cardId: cardId, at: now())]
         store.saveFreeReveals(reveals)
         return true
+    }
+
+    /// "8 free reveals left · next in 0:12", "15 free reveals left", "No free reveals left · next in 0:04"
+    var revealsText: String {
+        let (left, next) = bucketNow
+        let head = left == 0 ? "No free reveals left" : left == 1 ? "1 free reveal left" : "\(left) free reveals left"
+        return head + (next.map { " · next in " + Self.countdown($0.timeIntervalSince(now())) } ?? "")
+    }
+
+    /// 12 s → "0:12", 75 s → "1:15" (whole seconds, rounded up)
+    static func countdown(_ seconds: TimeInterval) -> String {
+        let s = max(0, Int(seconds.rounded(.up)))
+        return String(format: "%d:%02d", s / 60, s % 60)
     }
 
     // ---------------------------------------------------------------- the collection on this phone
@@ -235,32 +273,40 @@ struct LockedPage: View {
     }
 }
 
-/// In the free version, instead of a card's prices: reveal them (10 in any 60 minutes).
+/**
+ * In the free version, instead of a card's prices: reveal them (a burst of 15, then one every 15
+ * seconds). The count and the countdown run live; when none are left, the upgrade is right there.
+ */
 struct RevealPrice: View {
     @ObservedObject var account: AccountModel
     let cardId: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if account.revealsLeft > 0 {
-                Button { account.reveal(cardId) } label: {
-                    Label("Reveal the price", systemImage: "eye")
-                        .font(.headline).foregroundStyle(Theme.ink)
-                        .padding(.horizontal, 16).padding(.vertical, 10)
-                        .background(Theme.gold, in: Capsule())
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            let left = account.revealsLeft
+            VStack(alignment: .leading, spacing: 6) {
+                if left > 0 {
+                    Button { account.reveal(cardId) } label: {
+                        Label("Reveal the price", systemImage: "eye")
+                            .font(.headline).foregroundStyle(Theme.ink)
+                            .padding(.horizontal, 16).padding(.vertical, 10)
+                            .background(Theme.gold, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    Text(account.revealsText).font(.caption.monospacedDigit()).foregroundStyle(Theme.muted)
+                } else {
+                    Text(account.revealsText).font(.subheadline.bold().monospacedDigit()).foregroundStyle(.white)
+                    Button { NotificationCenter.default.post(name: .showPlans, object: nil) } label: {
+                        Label("Upgrade – every price at once", systemImage: "sparkles")
+                            .font(.headline).foregroundStyle(Theme.ink)
+                            .padding(.horizontal, 16).padding(.vertical, 10)
+                            .background(Theme.gold, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("upgrade")
                 }
-                .buttonStyle(.plain)
-                Text("\(account.revealsLeft) of \(AccountModel.freeRevealsPerHour) left this hour in the free version")
-                    .font(.caption).foregroundStyle(Theme.muted)
-            } else {
-                Text("You've seen \(AccountModel.freeRevealsPerHour) prices this hour.").font(.subheadline.bold()).foregroundStyle(.white)
-                if let next = account.nextRevealAt {
-                    Text("The next one at \(next.formatted(date: .omitted, time: .shortened)) – or every price at once with a subscription.")
-                        .font(.caption).foregroundStyle(Theme.muted)
-                }
-                Button("See the plans") { NotificationCenter.default.post(name: .showPlans, object: nil) }
-                    .font(.subheadline.bold())
             }
+            .animation(nil, value: left)
         }
         .padding(.top, 4)
     }
@@ -271,7 +317,7 @@ struct FreeNote: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Free version").font(.headline).foregroundStyle(Theme.gold)
-            Label("Scanner: scan as many cards as you like, \(AccountModel.freeRevealsPerHour) prices per hour", systemImage: "checkmark")
+            Label("Scanner: scan as many cards as you like; \(AccountModel.freeBurst) free price reveals, then one more every \(Int(AccountModel.freeRefill)) seconds", systemImage: "checkmark")
             Label("A collection of \(AccountModel.freeMaxCards) cards on this phone", systemImage: "checkmark")
             Label("Search, carts and deals, missing cards, photo scans, price alerts and collection values come with a plan; PSA prices as an add-on", systemImage: "lock")
             Text("Sign in and choose a plan for everything; your cards move into your account's collection.")
